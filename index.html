@@ -697,6 +697,7 @@ function rowHtml(it, act = 'select') {
   return `<button class="row ${it.urgency} ${state.view === 'attention' && it.id === state.sel ? 'sel' : ''} ${it.id === freshId ? 'fresh' : ''}" data-act="${act}" data-id="${it.id}" style="${kindColor(it.kind)}">
     ${title(it, 't')}
     <span class="m">${meta}<span>${ago(ageOf(it))}</span>${it.urgency === 'whenever' ? '' : `<span class="tag ${it.urgency}">${it.urgency}</span>`}</span>
+    ${it.live && it.session?.model ? `<span class="m"><span>${runsOn(it.session)}</span>${contextUse(it.session, true)}</span>` : ''}
   </button>`;
 }
 
@@ -842,12 +843,12 @@ const tokens = n => n >= 999500 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${Ma
 function runsOn(s) {
   return [s.model && esc(modelName(s.model)), s.reasoning && `<span title="Reasoning effort">${esc(s.reasoning)}</span>`].filter(Boolean).join(' · ');
 }
-function contextUse(s) {
+function contextUse(s, brief) {
   if (!s.contextTokens) return '';
   const about = 'How much the last response was answered over';
   if (!s.contextWindow) return `<span class="ctx" title="${about}. This session has not said how much its model can take.">${tokens(s.contextTokens)} tokens</span>`;
   const pct = Math.round(100 * s.contextTokens / s.contextWindow);
-  return `<span class="ctx ${pct >= 90 ? 'full' : pct >= 75 ? 'high' : ''}" title="${about}, of what the model can take"><span class="meter"><i style="width:${Math.min(100, pct)}%"></i></span>${tokens(s.contextTokens)} / ${tokens(s.contextWindow)} (${pct}%)</span>`;
+  return `<span class="ctx ${pct >= 90 ? 'full' : pct >= 75 ? 'high' : ''}" title="${about}, of what the model can take: ${tokens(s.contextTokens)} of ${tokens(s.contextWindow)}"><span class="meter"><i style="width:${Math.min(100, pct)}%"></i></span>${brief ? `${pct}%` : `${tokens(s.contextTokens)} / ${tokens(s.contextWindow)} (${pct}%)`}</span>`;
 }
 
 /* A session's role: the kind of session it is, as the user named the kinds. */
