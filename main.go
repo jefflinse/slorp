@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"log"
 	"net"
@@ -18,7 +19,31 @@ import (
 	"github.com/jefflinse/slorp/internal/hub"
 	"github.com/jefflinse/slorp/internal/kb"
 	"github.com/jefflinse/slorp/internal/server"
+	"github.com/jefflinse/slorp/internal/store"
 )
+
+// importJSON carries a knowledge base from the JSON file earlier versions
+// wrote into the database, once, leaving the file in place.
+func importJSON(st *store.Store, path string) {
+	var existing json.RawMessage
+	if found, err := st.Get("kb", "main", &existing); found || err != nil {
+		return
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var doc json.RawMessage
+	if json.Unmarshal(b, &doc) != nil {
+		log.Printf("knowledge base: %s is not valid JSON, not imported", path)
+		return
+	}
+	if err := st.Put("kb", "main", doc); err != nil {
+		log.Printf("knowledge base: import failed: %v", err)
+		return
+	}
+	log.Printf("knowledge base: imported %s", path)
+}
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:4747", "loopback address to listen on")
@@ -26,7 +51,7 @@ func main() {
 	claudeBin := flag.String("claude", "claude", "Claude Code executable")
 	llm := flag.String("llm", "http://localhost:1234", "OpenAI-compatible local model server; empty disables summaries")
 	model := flag.String("model", "", "model to summarize with (default: whichever one is loaded)")
-	data := flag.String("data", "", "directory for the knowledge base (default: ~/.slorp)")
+	data := flag.String("data", "", "directory for Slorp's database (default: ~/.slorp)")
 	flag.Parse()
 
 	host, _, err := net.SplitHostPort(*addr)
@@ -44,12 +69,18 @@ func main() {
 	if *data == "" {
 		*data = filepath.Join(home, ".slorp")
 	}
-	k, err := kb.Open(filepath.Join(*data, "kb.json"))
+	st, err := store.Open(filepath.Join(*data, "slorp.db"))
+	if err != nil {
+		log.Fatalf("database: %v", err)
+	}
+	defer st.Close()
+	importJSON(st, filepath.Join(*data, "kb.json"))
+	k, err := kb.Open(st)
 	if err != nil {
 		log.Fatalf("knowledge base: %v", err)
 	}
 
-	h := hub.New(k)
+	h := hub.New(k, st)
 	go (&claude.Adapter{Hub: h, Bin: *claudeBin, Home: home, Interval: 2 * time.Second}).Run(ctx)
 	if *llm != "" {
 		go (&enrich.Enricher{Hub: h, BaseURL: *llm, Model: *model}).Run(ctx)

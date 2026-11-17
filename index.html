@@ -821,7 +821,7 @@ function viewActivity() {
    Present only when the page is served by the slorp service. `live` is the
    service's session list; everything outside Activity is still mock data. */
 
-let live = null, liveItems = [], liveEfforts = [], summarizer = {}, isOffline = false;
+let live = null, liveItems = [], liveEfforts = [], summarizer = {}, settings = {}, isOffline = false;
 const LIVE_STATUS = { waiting: ['waiting', 'waiting on you'], failed: ['error', 'failed'], working: ['running', 'working'], idle: ['idle', 'idle'], done: ['done', 'finished'] };
 const minsSince = iso => Math.max(0, (Date.now() - new Date(iso).getTime()) / 60000);
 const tilde = p => p.replace(/^\/Users\/[^/]+/, '~');
@@ -837,6 +837,7 @@ async function refresh(force) {
     liveEfforts = (data.efforts || []).map(e => ({ ...e, raw: e.dirs.length ? e.dirs.map(tilde).join(', ') : `effort ${e.id}` }));
     liveItems = toItems(data);
     summarizer = data.summarizer || {};
+    settings = data.settings || {};
     isOffline = false;
   } catch (e) { isOffline = live !== null; }
   if (force || state.view !== 'knowledge') render();
@@ -874,8 +875,7 @@ function liveItemDetail(it) {
   if (s.lastReply) lines.push([s.agent, s.lastReply]);
   let answer;
   if (s.pending) {
-    answer = `<div class="rawblock" style="margin-bottom:10px">${esc(s.pending.tool)}: ${esc(s.pending.summary)}</div>
-      <div class="none">Answer this one in its terminal. Slorp can see permission prompts but can't approve them yet.</div>`;
+    answer = pendingBox(s);
   } else if (s.canReply) {
     const quick = it.replies.map(r => `<button class="btn" data-act="liveSuggest" data-id="${it.id}" data-text="${esc(r)}">${esc(r)}</button>`).join('');
     answer = `${quick ? `<div class="replies">${quick}</div>` : ''}
@@ -915,10 +915,19 @@ function connect() {
   events.onerror = () => { if (live && !isOffline) { isOffline = true; render(); } };
 }
 
+function pendingBox(s) {
+  const p = s.pending;
+  const what = `<div class="rawblock" style="margin-bottom:10px;max-height:280px;overflow:auto"><div class="who" style="margin-bottom:4px">${esc(p.tool)}</div><div class="tx">${esc(p.input || p.summary)}</div></div>`;
+  if (!p.answerable) return `${what}<div class="none">Answer this one in the session's terminal.</div>`;
+  return `${what}<div class="replies">
+      <button class="btn go" data-act="livePermit" data-id="${p.id}" data-behavior="allow">Allow once</button>
+      <button class="btn" data-act="livePermit" data-id="${p.id}" data-behavior="deny">Deny</button>
+      <span class="none" style="align-self:center">The terminal is asking too; whichever you answer first decides.</span></div>
+    <textarea data-keep="deny-${p.id}" placeholder="If you deny, you can tell it why…" style="display:block;width:100%;min-height:44px;margin-top:10px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);resize:vertical"></textarea>`;
+}
+
 function liveDetail(s) {
-  const pending = s.pending ? `<div class="pend"><div class="label">Waiting for your permission · ${esc(s.pending.tool)}</div>
-    <div class="mono" style="margin-top:6px;word-break:break-word">${esc(s.pending.summary)}</div>
-    <div class="none" style="padding-top:6px">Answer this one in its terminal. Slorp can see it but can't approve it yet.</div></div>` : '';
+  const pending = s.pending ? `<div class="pend"><div class="label" style="margin-bottom:8px">Waiting for your permission</div>${pendingBox(s)}</div>` : '';
   const lines = [];
   if (s.lastPrompt) lines.push(['you', s.lastPrompt]);
   if (s.lastReply) lines.push([s.agent, s.lastReply]);
@@ -1016,6 +1025,7 @@ function render() {
     <button class="icon" data-act="theme" title="Light or dark" aria-label="Toggle theme">◐</button>
     <details class="menu" id="menu" ${menuOpen ? 'open' : ''}><summary class="icon" title="Prototype controls" aria-label="Prototype controls">⋯</summary>
       <div class="pop"><p>Prototype controls</p>
+        ${live ? `<button data-act="toggleHold">Permission prompts: ${settings.answerPermissions ? 'Slorp or terminal' : 'terminal only'}</button>` : ''}
         <button data-act="simulate">Simulate an incoming item</button>
         <button data-act="reset">Reset the demo</button>
         <p>Keys: j/k move · e dismiss · s snooze · r fluent/raw · 1–4 views</p></div></details>`;
@@ -1083,6 +1093,18 @@ const actions = {
     const list = state.kb[d.sec], i = list.findIndex(x => x.id === d.id), gone = list.splice(i, 1)[0];
     toast('Removed', () => { state.kb[d.sec].splice(i, 0, gone); });
   },
+  livePermit: d => {
+    const note = document.querySelector(`textarea[data-keep="deny-${d.id}"]`);
+    fetch(`/api/permissions/${d.id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ behavior: d.behavior, message: d.behavior === 'deny' && note ? note.value.trim() : '' }) })
+      .then(res => {
+        toast(res.status === 409 ? 'That request is no longer waiting here' : !res.ok ? 'Slorp refused that' : { allow: 'Allowed', deny: 'Denied' }[d.behavior]);
+        refresh(true);
+      })
+      .catch(() => toast('Could not reach the Slorp service'));
+    return false;
+  },
+  toggleHold: () => { api('POST', '/api/settings', { answerPermissions: !settings.answerPermissions }); return false; },
   effortDelete: d => {
     toast(`Delete "${effortById(d.id).name}" and its filings?`, () => { api('DELETE', `/api/efforts/${d.id}`); }, 'Delete');
     return false;

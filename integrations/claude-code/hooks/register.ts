@@ -3,6 +3,12 @@ import type { EngineInterface, Register } from 'claude-code'
 const DEFAULT_URL = 'http://127.0.0.1:4747'
 const POLL_MS = 2000
 const SUMMARY_LIMIT = 400
+/** Inputs longer than this are too much to judge in Slorp; the terminal asks. */
+const INPUT_LIMIT = 8000
+/** How long Slorp may answer a prompt before only the terminal can. */
+const ANSWER_MAX_MS = 60 * 60_000
+/** Tools whose prompt is a question for the user, which an allow cannot answer. */
+const NEEDS_PERSON = new Set(['AskUserQuestion', 'ExitPlanMode'])
 
 type Reply = { id: string; text: string }
 
@@ -49,10 +55,42 @@ async function poll($: EngineInterface) {
 }
 
 /**
+ * Offers a permission prompt to Slorp while the session's own dialog is also
+ * asking, and resolves to the user's `allow` or `deny` from Slorp. Resolves to
+ * `terminal` when the answer will not come from Slorp: the dialog was
+ * answered or the turn interrupted, the tool needs the person, the input is
+ * too long to judge there, or Slorp is not running.
+ */
+async function askSlorp($: EngineInterface, tool: string, input: unknown, abandoned: AbortSignal) {
+  const command = (input as { command?: unknown } | null)?.command
+  const full = typeof command === 'string' ? command : JSON.stringify(input, null, 2)
+  const asked = await post($, '/api/bridge/permission', {
+    sessionId: await $.session.id(),
+    tool,
+    summary: full.slice(0, SUMMARY_LIMIT),
+    input: full.slice(0, INPUT_LIMIT),
+    canAnswer: !NEEDS_PERSON.has(tool) && full.length <= INPUT_LIMIT,
+  })
+  if (!asked?.answerable) return { state: 'terminal' }
+
+  // Answering in the terminal abandons this hook; tell Slorp at once so it
+  // stops offering a request that is already decided.
+  const settled = () => void post($, '/api/bridge/permission/done', { id: asked.id }).catch(() => {})
+  abandoned.addEventListener('abort', settled)
+  for (const deadline = Date.now() + ANSWER_MAX_MS; !abandoned.aborted && Date.now() < deadline; ) {
+    const answer = await post($, '/api/bridge/permission/wait', { id: asked.id })
+    if (answer?.state !== 'waiting') return answer ?? { state: 'terminal' }
+  }
+  settled()
+  return { state: 'terminal' }
+}
+
+/**
  * Bridges one Claude Code session to the Slorp service. Every POLL_MS it
  * claims replies queued for this session and submits each as the user's own
- * prompt; alongside, it reports turn and permission events. Nothing here
- * decides anything: every hook passes its event on unchanged.
+ * prompt; alongside, it reports turn events. A permission prompt is offered
+ * to Slorp as well as the terminal's own dialog, and whichever the user
+ * answers first decides it.
  */
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -72,12 +110,15 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('classic.PermissionRequest', ($, e, next) => {
-    const input = e.tool_input as { command?: unknown }
-    const summary = typeof input?.command === 'string' ? input.command : JSON.stringify(e.tool_input)
-    report($, 'permission', { tool: e.tool_name, summary: summary.slice(0, SUMMARY_LIMIT) })
+  on('classic.PermissionRequest', async ($, e, next) => {
+    const answer = await askSlorp($, e.tool_name, e.tool_input, next.signal).catch(() => ({ state: 'terminal' }))
+    if (answer.state === 'allow') return { decision: { behavior: 'allow' as const } }
+    if (answer.state === 'deny') {
+      const why = answer.message ? `The user denied this in Slorp and said: ${answer.message}` : 'The user denied this in Slorp.'
+      return { decision: { behavior: 'deny' as const, message: why } }
+    }
     return next(e)
-  })
+  }).catch(($, e, next) => next(e))
 
   on('classic.PostToolUse', ($, e, next) => {
     report($, 'tool.done')
@@ -85,6 +126,11 @@ export const register: Register = on => {
   })
 
   on('classic.PostToolUseFailure', ($, e, next) => {
+    report($, 'tool.done')
+    return next(e)
+  })
+
+  on('classic.PermissionDenied', ($, e, next) => {
     report($, 'tool.done')
     return next(e)
   })

@@ -1,12 +1,9 @@
 // Package kb is the user's knowledge base: the work efforts they have
-// declared and how sessions are filed under them. It is one JSON file meant
-// to be readable and editable by hand.
+// declared and how sessions are filed under them.
 package kb
 
 import (
-	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -29,31 +26,33 @@ const (
 	ViaDir  = "rule"
 )
 
+// Persistence is where the knowledge base is kept between runs.
+type Persistence interface {
+	Get(kind, id string, v any) (bool, error)
+	Put(kind, id string, v any) error
+}
+
+const docKind, docID = "kb", "main"
+
 type file struct {
 	Efforts []Effort `json:"efforts"`
+	// Revision counts changes to the set of efforts or their descriptions.
+	Revision int `json:"revision"`
 	// Assignments maps a session ID to the effort the user filed it under;
 	// an empty effort means the user chose to leave it unsorted.
 	Assignments map[string]string `json:"assignments"`
 }
 
 type Store struct {
-	mu       sync.Mutex
-	path     string
-	f        file
-	revision int
+	mu sync.Mutex
+	p  Persistence
+	f  file
 }
 
-// Open reads the knowledge base at path, starting empty if there is none.
-func Open(path string) (*Store, error) {
-	s := &Store{path: path, f: file{Assignments: map[string]string{}}}
-	b, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return s, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if err := json.Unmarshal(b, &s.f); err != nil {
+// Open reads the knowledge base from p, starting empty if there is none.
+func Open(p Persistence) (*Store, error) {
+	s := &Store{p: p}
+	if _, err := p.Get(docKind, docID, &s.f); err != nil {
 		return nil, err
 	}
 	if s.f.Assignments == nil {
@@ -77,7 +76,7 @@ func (s *Store) Efforts() []Effort {
 func (s *Store) Revision() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.revision
+	return s.f.Revision
 }
 
 var nonSlug = regexp.MustCompile(`[^a-z0-9]+`)
@@ -95,7 +94,7 @@ func (s *Store) Create(name, about string) (Effort, error) {
 	}
 	e := Effort{ID: id, Name: strings.TrimSpace(name), About: strings.TrimSpace(about), Dirs: []string{}}
 	s.f.Efforts = append(s.f.Efforts, e)
-	s.revision++
+	s.f.Revision++
 	return e, s.save()
 }
 
@@ -113,7 +112,7 @@ func (s *Store) Delete(id string) error {
 			delete(s.f.Assignments, session)
 		}
 	}
-	s.revision++
+	s.f.Revision++
 	return s.save()
 }
 
@@ -187,16 +186,5 @@ func (s *Store) index(id string) int {
 }
 
 func (s *Store) save() error {
-	b, err := json.MarshalIndent(s.f, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
-		return err
-	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, append(b, '\n'), 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return s.p.Put(docKind, docID, s.f)
 }

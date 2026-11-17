@@ -25,8 +25,7 @@ func New(h *hub.Hub, k *kb.Store, uiPath string) http.Handler {
 	})
 
 	mux.HandleFunc("GET /api/sessions", func(w http.ResponseWriter, r *http.Request) {
-		sessions, items, efforts, summarizer := h.State()
-		writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions, "items": items, "efforts": efforts, "summarizer": summarizer})
+		writeJSON(w, http.StatusOK, h.State())
 	})
 
 	mux.HandleFunc("GET /api/events", func(w http.ResponseWriter, r *http.Request) {
@@ -141,8 +140,6 @@ func New(h *hub.Hub, k *kb.Store, uiPath string) http.Handler {
 			SessionID string `json:"sessionId"`
 			Type      string `json:"type"`
 			Text      string `json:"text"`
-			Tool      string `json:"tool"`
-			Summary   string `json:"summary"`
 		}
 		if !readJSON(w, r, &in) || in.SessionID == "" {
 			return
@@ -160,15 +157,83 @@ func New(h *hub.Hub, k *kb.Store, uiPath string) http.Handler {
 				if in.Text != "" {
 					s.LastReply = claude.Tail(in.Text, claude.ReplyLimit)
 				}
-			case "permission":
-				s.Status, s.WaitingFor, s.ActiveAt = hub.Waiting, "permission prompt", now
-				s.Pending = &hub.Pending{Tool: in.Tool, Summary: in.Summary, At: now}
 			case "tool.done":
 				if s.Pending != nil {
 					s.Status, s.WaitingFor, s.Pending = hub.Working, "", nil
 				}
 			}
 		})
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// A bridge reports a permission prompt and learns whether Slorp may answer it.
+	mux.HandleFunc("POST /api/bridge/permission", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			SessionID string `json:"sessionId"`
+			Tool      string `json:"tool"`
+			Summary   string `json:"summary"`
+			Input     string `json:"input"`
+			CanAnswer bool   `json:"canAnswer"`
+		}
+		if !readJSON(w, r, &in) || in.SessionID == "" {
+			return
+		}
+		p := h.Ask(claude.Agent, in.SessionID, hub.Pending{Tool: in.Tool, Summary: in.Summary, Input: in.Input}, in.CanAnswer)
+		writeJSON(w, http.StatusOK, map[string]any{"id": p.ID, "answerable": p.Answerable})
+	})
+
+	// A bridge long-polls here for the user's decision in Slorp.
+	mux.HandleFunc("POST /api/bridge/permission/wait", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			ID string `json:"id"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		dec, ok := h.Await(r.Context(), in.ID, 20*time.Second)
+		if !ok {
+			dec.Behavior = "waiting"
+		}
+		writeJSON(w, http.StatusOK, dec)
+	})
+
+	// A bridge reports that a prompt was settled without Slorp.
+	mux.HandleFunc("POST /api/bridge/permission/done", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			ID string `json:"id"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		h.Done(in.ID)
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("POST /api/permissions/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Behavior string `json:"behavior"`
+			Message  string `json:"message"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		if in.Behavior != hub.Allow && in.Behavior != hub.Deny {
+			http.Error(w, "behavior must be allow or deny", http.StatusBadRequest)
+			return
+		}
+		if !h.Decide(r.PathValue("id"), hub.Decision{Behavior: in.Behavior, Message: in.Message}) {
+			http.Error(w, "that request is no longer waiting for an answer here", http.StatusConflict)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("POST /api/settings", func(w http.ResponseWriter, r *http.Request) {
+		in := h.Settings()
+		if !readJSON(w, r, &in) {
+			return
+		}
+		h.SetSettings(in)
 		w.WriteHeader(http.StatusNoContent)
 	})
 

@@ -3,10 +3,12 @@
 package hub
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"log"
 	"sort"
 	"strconv"
 	"sync"
@@ -28,8 +30,10 @@ const (
 const (
 	// bridgeTTL is how long after its last poll a session's bridge still counts as connected.
 	bridgeTTL = 10 * time.Second
-	// settle is how long a session's content must hold still before it is worth describing.
-	settle = 3 * time.Second
+	// quiet is how long a session's content must hold still before it is worth describing.
+	quiet = 3 * time.Second
+	// pendingGrace is how long a new permission request is trusted before the roster confirms it.
+	pendingGrace = 3 * time.Second
 )
 
 // Session is one agent conversation, normalized across agents.
@@ -138,9 +142,51 @@ type Undescribed struct {
 
 // Pending is a permission request a session is blocked on.
 type Pending struct {
-	Tool    string    `json:"tool"`
-	Summary string    `json:"summary"`
-	At      time.Time `json:"at"`
+	ID      string `json:"id"`
+	Tool    string `json:"tool"`
+	Summary string `json:"summary"`
+	// Input is the tool's full input, shown to the user before they decide.
+	Input string `json:"input"`
+	// Answerable is true while Slorp may answer the request as well as the
+	// session's own terminal, whose dialog is asking at the same time.
+	Answerable bool      `json:"answerable"`
+	At         time.Time `json:"at"`
+}
+
+// Decision is the user's answer, given in Slorp, to a permission request.
+type Decision struct {
+	Behavior string `json:"state"`
+	Message  string `json:"message,omitempty"`
+}
+
+// Decision behaviors. Terminal means Slorp will not answer: the session's
+// own dialog decides.
+const (
+	Allow    = "allow"
+	Deny     = "deny"
+	Terminal = "terminal"
+)
+
+// Settings are the user's preferences for how Slorp behaves.
+type Settings struct {
+	// AnswerPermissions lets permission prompts be answered in Slorp as well
+	// as in the session's terminal.
+	AnswerPermissions bool `json:"answerPermissions"`
+}
+
+// Cache is where the hub keeps what should outlive a restart.
+type Cache interface {
+	Get(kind, id string, v any) (bool, error)
+	Put(kind, id string, v any) error
+	Each(kind string, fn func(id string, body []byte)) error
+}
+
+// What the model wrote about one session, kept so a restart need not ask again.
+type sessionDoc struct {
+	Insight    *Insight `json:"insight"`
+	InsightKey string   `json:"insightKey"`
+	Guess      string   `json:"guess"`
+	GuessKey   string   `json:"guessKey"`
 }
 
 type ReplyState string
@@ -170,15 +216,55 @@ type Hub struct {
 	summ     Summarizer
 	kb       *kb.Store
 	notes    map[string]note
+	cache    Cache
+	settings Settings
+	waiters  map[string]chan Decision
 }
 
 type note struct {
-	key string
+	Key string `json:"key"`
 	Note
 }
 
-func New(k *kb.Store) *Hub {
-	return &Hub{sessions: map[string]*Session{}, subs: map[chan struct{}]struct{}{}, kb: k, notes: map[string]note{}}
+// New returns a hub restored from what c holds.
+func New(k *kb.Store, c Cache) *Hub {
+	h := &Hub{sessions: map[string]*Session{}, subs: map[chan struct{}]struct{}{}, kb: k, notes: map[string]note{},
+		cache: c, settings: Settings{AnswerPermissions: true}, waiters: map[string]chan Decision{}}
+	h.warn(c.Each("note", func(id string, body []byte) {
+		var n note
+		if json.Unmarshal(body, &n) == nil {
+			h.notes[id] = n
+		}
+	}))
+	h.warn(c.Each("reply", func(id string, body []byte) {
+		var r Reply
+		if json.Unmarshal(body, &r) == nil {
+			h.replies = append(h.replies, &r)
+		}
+	}))
+	_, err := c.Get("setting", "main", &h.settings)
+	h.warn(err)
+	return h
+}
+
+func (h *Hub) warn(err error) {
+	if err != nil {
+		log.Printf("hub: store: %v", err)
+	}
+}
+
+// restore gives a session seen for the first time what the model last wrote about it.
+func (h *Hub) restore(s *Session) {
+	var d sessionDoc
+	if ok, err := h.cache.Get("session", s.ID, &d); err != nil || !ok {
+		h.warn(err)
+		return
+	}
+	s.Insight, s.insightKey, s.guess, s.guessKey = d.Insight, d.InsightKey, d.Guess, d.GuessKey
+}
+
+func (h *Hub) remember(s *Session) {
+	h.warn(h.cache.Put("session", s.ID, sessionDoc{Insight: s.Insight, InsightKey: s.insightKey, Guess: s.guess, GuessKey: s.guessKey}))
 }
 
 // SetRoster replaces the known sessions of one agent with the live set an
@@ -194,11 +280,12 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 			s.bridgeSeen = old.bridgeSeen
 			s.key, s.keySince, s.insightKey, s.Insight = old.key, old.keySince, old.insightKey, old.Insight
 			s.guess, s.guessKey = old.guess, old.guessKey
-			if s.Status != Idle {
-				s.Pending = old.Pending
-			}
-			if s.Pending != nil && s.Status == Working {
-				s.Status, s.WaitingFor = Waiting, "permission prompt"
+			// The roster stops saying "waiting" once the terminal's dialog is
+			// answered. A request it has not caught up with yet is kept.
+			if p := old.Pending; p != nil && (s.Status == Waiting || time.Since(p.At) < pendingGrace) {
+				s.Pending, s.Status, s.WaitingFor = p, Waiting, "permission prompt"
+			} else if p != nil {
+				h.settle(p.ID)
 			}
 			if s.LastReply == "" {
 				s.LastReply = old.LastReply
@@ -206,6 +293,8 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 			if s.LastPrompt == "" {
 				s.LastPrompt = old.LastPrompt
 			}
+		} else {
+			h.restore(&s)
 		}
 		h.sessions[s.ID] = &s
 	}
@@ -226,6 +315,7 @@ func (h *Hub) Apply(agent, id string, fn func(*Session)) {
 	if !ok {
 		now := time.Now()
 		s = &Session{ID: id, Agent: agent, Kind: "interactive", Status: Idle, StartedAt: now, ActiveAt: now}
+		h.restore(s)
 		h.sessions[id] = s
 	}
 	s.bridgeSeen = time.Now()
@@ -235,6 +325,122 @@ func (h *Hub) Apply(agent, id string, fn func(*Session)) {
 	h.changed()
 }
 
+// Ask records that a session wants permission for a tool call. Slorp may
+// answer it when the bridge says it can and the user has that turned on;
+// the session's terminal is asking either way.
+func (h *Hub) Ask(agent, sessionID string, p Pending, canAnswer bool) Pending {
+	p.ID, p.At = newID(), time.Now()
+	h.Apply(agent, sessionID, func(s *Session) {
+		p.Answerable = canAnswer && h.settings.AnswerPermissions
+		s.Pending, s.Status, s.WaitingFor, s.ActiveAt = &p, Waiting, "permission prompt", p.At
+		if p.Answerable {
+			h.waiters[p.ID] = make(chan Decision, 1)
+		}
+	})
+	return p
+}
+
+// Await waits up to d for the user's decision in Slorp. ok is false when the
+// wait ran out with the request still undecided. A request Slorp is not
+// answering, or that the session has moved past, resolves at once to Terminal.
+func (h *Hub) Await(ctx context.Context, requestID string, d time.Duration) (dec Decision, ok bool) {
+	h.mu.Lock()
+	ch, held := h.waiters[requestID]
+	if held && len(ch) == 0 && !h.asking(requestID) {
+		// The terminal answered, or the turn ended; nothing is waiting any more.
+		delete(h.waiters, requestID)
+		held = false
+	}
+	h.mu.Unlock()
+	if !held {
+		return Decision{Behavior: Terminal}, true
+	}
+	select {
+	case dec = <-ch:
+		h.mu.Lock()
+		delete(h.waiters, requestID)
+		h.mu.Unlock()
+		return dec, true
+	case <-time.After(d):
+	case <-ctx.Done():
+	}
+	return Decision{}, false
+}
+
+// settle tells whoever is waiting on a request that Slorp will not answer it.
+func (h *Hub) settle(requestID string) {
+	if ch, ok := h.waiters[requestID]; ok {
+		select {
+		case ch <- Decision{Behavior: Terminal}:
+		default:
+		}
+	}
+}
+
+func (h *Hub) asking(requestID string) bool {
+	for _, s := range h.sessions {
+		if s.Pending != nil && s.Pending.ID == requestID {
+			return true
+		}
+	}
+	return false
+}
+
+// Decide answers a request from Slorp, and reports whether it was still
+// waiting for an answer.
+func (h *Hub) Decide(requestID string, dec Decision) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, s := range h.sessions {
+		if s.Pending == nil || s.Pending.ID != requestID || !s.Pending.Answerable {
+			continue
+		}
+		select {
+		case h.waiters[requestID] <- dec:
+		default:
+			return false
+		}
+		s.Pending, s.Status, s.WaitingFor = nil, Working, ""
+		h.changed()
+		return true
+	}
+	return false
+}
+
+// Done records that a request was settled outside Slorp.
+func (h *Hub) Done(requestID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.settle(requestID)
+	for _, s := range h.sessions {
+		if s.Pending != nil && s.Pending.ID == requestID {
+			s.Pending, s.Status, s.WaitingFor = nil, Working, ""
+			h.changed()
+		}
+	}
+}
+
+func (h *Hub) Settings() Settings {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.settings
+}
+
+func (h *Hub) SetSettings(s Settings) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.settings = s
+	h.warn(h.cache.Put("setting", "main", s))
+	h.last = ""
+	h.changed()
+}
+
+func newID() string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
 // Sessions returns a snapshot ordered by how much each needs the user.
 func (h *Hub) Sessions() []Session {
 	h.mu.Lock()
@@ -242,13 +448,20 @@ func (h *Hub) Sessions() []Session {
 	return h.snapshot()
 }
 
-// State returns the sessions, the items derived from them, the declared
-// efforts, and the summarizer.
-func (h *Hub) State() ([]Session, []Item, []Effort, Summarizer) {
+// State is everything the web UI draws.
+type State struct {
+	Sessions   []Session  `json:"sessions"`
+	Items      []Item     `json:"items"`
+	Efforts    []Effort   `json:"efforts"`
+	Summarizer Summarizer `json:"summarizer"`
+	Settings   Settings   `json:"settings"`
+}
+
+func (h *Hub) State() State {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	sessions := h.snapshot()
-	return sessions, items(sessions), h.efforts(sessions), h.summ
+	return State{sessions, items(sessions), h.efforts(sessions), h.summ, h.settings}
 }
 
 func (h *Hub) efforts(sessions []Session) []Effort {
@@ -305,6 +518,7 @@ func (h *Hub) SetGuess(sessionID, key, effortID string) {
 	defer h.mu.Unlock()
 	if s, ok := h.sessions[sessionID]; ok {
 		s.guess, s.guessKey = effortID, key
+		h.remember(s)
 		h.changed()
 	}
 }
@@ -325,7 +539,7 @@ func (h *Hub) Unnoted() []Unnoted {
 			}
 		}
 		sum := sha1.Sum([]byte(key))
-		if k := hex.EncodeToString(sum[:]); len(members) > 0 && h.notes[e.ID].key != k {
+		if k := hex.EncodeToString(sum[:]); len(members) > 0 && h.notes[e.ID].Key != k {
 			out = append(out, Unnoted{Effort: e, Members: members, Key: k})
 		}
 	}
@@ -335,7 +549,8 @@ func (h *Hub) Unnoted() []Unnoted {
 func (h *Hub) SetNote(effortID, key string, n Note) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.notes[effortID] = note{key: key, Note: n}
+	h.notes[effortID] = note{Key: key, Note: n}
+	h.warn(h.cache.Put("note", effortID, h.notes[effortID]))
 	h.last = ""
 	h.changed()
 }
@@ -348,7 +563,7 @@ func (h *Hub) Undescribed() []Undescribed {
 	var out []Undescribed
 	for _, s := range h.sessions {
 		hasContent := s.LastReply != "" || s.Pending != nil
-		if hasContent && s.key != s.insightKey && time.Since(s.keySince) >= settle && (s.Status != Working || s.Pending != nil) {
+		if hasContent && s.key != s.insightKey && time.Since(s.keySince) >= quiet && (s.Status != Working || s.Pending != nil) {
 			out = append(out, Undescribed{Session: *s, Key: s.key})
 		}
 	}
@@ -362,6 +577,7 @@ func (h *Hub) SetInsight(sessionID, key string, in Insight) {
 	defer h.mu.Unlock()
 	if s, ok := h.sessions[sessionID]; ok {
 		s.Insight, s.insightKey = &in, key
+		h.remember(s)
 		h.changed()
 	}
 }
@@ -479,10 +695,9 @@ func (h *Hub) Enqueue(sessionID, text string) (Reply, bool) {
 	if _, ok := h.sessions[sessionID]; !ok {
 		return Reply{}, false
 	}
-	b := make([]byte, 8)
-	rand.Read(b)
-	r := &Reply{ID: hex.EncodeToString(b), SessionID: sessionID, Text: text, State: Queued, CreatedAt: time.Now()}
+	r := &Reply{ID: newID(), SessionID: sessionID, Text: text, State: Queued, CreatedAt: time.Now()}
 	h.replies = append(h.replies, r)
+	h.warn(h.cache.Put("reply", r.ID, r))
 	h.changed()
 	return *r, true
 }
@@ -495,6 +710,7 @@ func (h *Hub) Claim(sessionID string) []Reply {
 	for _, r := range h.replies {
 		if r.SessionID == sessionID && r.State == Queued {
 			r.State = Claimed
+			h.warn(h.cache.Put("reply", r.ID, r))
 			out = append(out, *r)
 		}
 	}
@@ -511,6 +727,7 @@ func (h *Hub) Ack(replyID string, state ReplyState) {
 	for _, r := range h.replies {
 		if r.ID == replyID && r.State == Claimed {
 			r.State = state
+			h.warn(h.cache.Put("reply", r.ID, r))
 			h.changed()
 		}
 	}
