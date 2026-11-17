@@ -201,6 +201,7 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
       summary: full.slice(0, SUMMARY_LIMIT),
       input: full.slice(0, INPUT_LIMIT),
       canAnswer: canAnswer && full.length <= INPUT_LIMIT,
+      question: tool === 'question',
     })
     if (!asked) return
     if (ask.settled.signal.aborted) {

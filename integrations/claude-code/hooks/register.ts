@@ -62,15 +62,17 @@ async function poll($: EngineInterface) {
  * too long to judge there, or Slorp is not running.
  */
 async function askSlorp($: EngineInterface, tool: string, input: unknown, abandoned: AbortSignal) {
-  const command = (input as { command?: unknown } | null)?.command
+  const { command, questions } = (input ?? {}) as { command?: unknown; questions?: unknown }
   const full = typeof command === 'string' ? command : JSON.stringify(input, null, 2)
+  const asks = tool === 'AskUserQuestion' && Array.isArray(questions) ? questions.map(q => String(q?.question ?? '')).join(' ') : full
   const asked = await post($, '/api/bridge/permission', {
     agent: AGENT,
     sessionId: await $.session.id(),
     tool,
-    summary: full.slice(0, SUMMARY_LIMIT),
+    summary: asks.slice(0, SUMMARY_LIMIT),
     input: full.slice(0, INPUT_LIMIT),
     canAnswer: !NEEDS_PERSON.has(tool) && full.length <= INPUT_LIMIT,
+    question: tool === 'AskUserQuestion',
   })
   if (!asked?.answerable) return { state: 'terminal' }
 

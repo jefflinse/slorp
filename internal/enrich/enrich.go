@@ -332,7 +332,9 @@ func (e *Enricher) describe(ctx context.Context, model string, w hub.Undescribed
 	s := w.Session
 	var b strings.Builder
 	fmt.Fprintf(&b, "Status: %s\nProject directory: %s\nGit branch: %s\n", status(s), filepath.Base(s.Cwd), orNone(s.Branch))
-	if s.Pending != nil {
+	if s.Pending != nil && s.Pending.Question {
+		fmt.Fprintf(&b, "Blocked on a question it put to the developer: %s\n", s.Pending.Summary)
+	} else if s.Pending != nil {
 		fmt.Fprintf(&b, "Blocked on a permission prompt for %s: %s\n", s.Pending.Tool, s.Pending.Summary)
 	}
 	fmt.Fprintf(&b, "\nThe developer's last message:\n<<<\n%s\n>>>\n\nThe agent's last message:\n<<<\n%s\n>>>", orNone(s.LastPrompt), orNone(s.LastReply))

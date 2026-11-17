@@ -292,6 +292,21 @@ func TestBridgeNamesItsAgent(t *testing.T) {
 	}
 }
 
+func TestAQuestionOverHTTP(t *testing.T) {
+	f := newFixture(t)
+	_, body := f.do("POST", "/api/bridge/permission", `{"sessionId":"s1","tool":"AskUserQuestion","summary":"Which one?","input":"{}","canAnswer":true,"question":true}`, nil)
+	if !strings.Contains(body, `"answerable":false`) {
+		t.Errorf("permission = %s, want a question refused for answering in Slorp", body)
+	}
+	st := f.state()
+	if p := st.Sessions[0].Pending; p == nil || !p.Question || len(st.Items) != 1 || st.Items[0].Kind != hub.KindQuestion || st.Items[0].Ask != "Which one?" {
+		t.Errorf("pending = %+v, items = %+v; want a question awaiting the user", p, st.Items)
+	}
+	if _, body := f.do("GET", "/api/sessions", "", nil); !strings.Contains(body, `"question":true`) {
+		t.Errorf("state lacks the question mark the page reads: %s", body)
+	}
+}
+
 func TestPermissionAnsweredFromTheUI(t *testing.T) {
 	f := newFixture(t)
 	ask := func(canAnswer string) (id string, answerable bool) {

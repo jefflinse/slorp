@@ -128,6 +128,17 @@ func TestDescribe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !strings.Contains(llm.user(), "Blocked on a permission prompt for Bash: make test") {
+		t.Errorf("prompt does not say what the session is blocked on: %s", llm.user())
+	}
+	asked := &fakeLLM{content: llm.content}
+	if _, err := asked.enricher(t).describe(ctx, "m", hub.Undescribed{Session: hub.Session{Status: hub.Waiting,
+		Pending: &hub.Pending{Tool: "AskUserQuestion", Summary: "Which sandwich?", Question: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	if u := asked.user(); !strings.Contains(u, "Blocked on a question it put to the developer: Which sandwich?") || strings.Contains(u, "permission prompt") {
+		t.Errorf("prompt for a question = %s", u)
+	}
 	if in.Title != "Choose a retention policy" || in.Kind != hub.KindQuestion || in.Summary != "Pruning is blocked." || in.Ask != "Pick one." {
 		t.Errorf("insight = %+v", in)
 	}

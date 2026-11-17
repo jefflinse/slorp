@@ -273,6 +273,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, uiPath s
 			Summary   string `json:"summary"`
 			Input     string `json:"input"`
 			CanAnswer bool   `json:"canAnswer"`
+			Question  bool   `json:"question"`
 		}
 		if !readJSON(w, r, &in) || in.SessionID == "" {
 			return
@@ -281,7 +282,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, uiPath s
 		if !ok {
 			return
 		}
-		p := h.Ask(agent, in.SessionID, hub.Pending{Tool: in.Tool, Summary: in.Summary, Input: in.Input}, in.CanAnswer)
+		p := h.Ask(agent, in.SessionID, hub.Pending{Tool: in.Tool, Summary: in.Summary, Input: in.Input, Question: in.Question}, in.CanAnswer)
 		writeJSON(w, http.StatusOK, map[string]any{"id": p.ID, "answerable": p.Answerable})
 	})
 

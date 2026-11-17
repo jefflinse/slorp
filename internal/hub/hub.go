@@ -3,6 +3,7 @@
 package hub
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha1"
@@ -218,11 +219,15 @@ type Undescribed struct {
 	Context []string
 }
 
-// Pending is a permission request a session is blocked on.
+// Pending is a request a session is blocked on: for permission to act, or
+// for an answer to a question it put to the user.
 type Pending struct {
 	ID      string `json:"id"`
 	Tool    string `json:"tool"`
 	Summary string `json:"summary"`
+	// Question is true when the session asked the user something, which no
+	// allow or deny can answer.
+	Question bool `json:"question"`
 	// Input is the tool's full input, shown to the user before they decide.
 	Input string `json:"input"`
 	// Answerable is true while Slorp may answer the request as well as the
@@ -440,7 +445,7 @@ func (h *Hub) Retire(agent string, silence time.Duration) {
 func (h *Hub) Ask(agent, sessionID string, p Pending, canAnswer bool) Pending {
 	p.ID, p.At = newID(), time.Now()
 	h.Apply(agent, sessionID, func(s *Session) {
-		p.Answerable = canAnswer && h.settings.AnswerPermissions
+		p.Answerable = canAnswer && !p.Question && h.settings.AnswerPermissions
 		s.Pending, s.Status, s.WaitingFor, s.ActiveAt = &p, Waiting, "permission prompt", p.At
 		if p.Answerable {
 			h.waiters[p.ID] = make(chan Decision, 1)
@@ -957,6 +962,11 @@ func items(sessions []Session) []Item {
 			it.Title, it.Summary, it.Ask = s.Insight.Title, s.Insight.Summary, s.Insight.Ask
 		}
 		switch {
+		case s.Pending != nil && s.Pending.Question:
+			it.Kind, it.Urgency = KindQuestion, "awaiting"
+			if it.Ask == "" {
+				it.Ask = cmp.Or(s.Pending.Summary, "This session asked you something. Answer it in its terminal.")
+			}
 		case s.Pending != nil:
 			it.Kind, it.Urgency = KindPermission, "awaiting"
 			if it.Ask == "" {

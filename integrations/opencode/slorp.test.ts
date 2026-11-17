@@ -268,7 +268,7 @@ test('polling survives Slorp being down, and stops with the plugin', async t => 
 test('a permission prompt allowed in Slorp is allowed for that one call', async t => {
   const { w } = await asked(t, [{ state: 'waiting' }, { state: 'allow' }])
   assert.deepEqual(w.to('/api/bridge/permission'), [
-    { agent: 'opencode', sessionId: SID, tool: 'bash', summary: 'rm -rf build', input: 'rm -rf build', canAnswer: true },
+    { agent: 'opencode', sessionId: SID, tool: 'bash', summary: 'rm -rf build', input: 'rm -rf build', canAnswer: true, question: false },
   ])
   assert.deepEqual(w.to('/api/bridge/permission/wait'), [{ id: 'slorp-1' }, { id: 'slorp-1' }])
   assert.deepEqual(w.answered, [
@@ -415,7 +415,7 @@ test('a question is shown in Slorp but can only be answered in OpenCode', async 
   o.w.answers['/api/bridge/permission'] = () => ({ id: 'slorp-1', answerable: false })
   await o.emit('question.asked', { id: 'que_1', sessionID: SID, questions: [{ question: 'Which database?' }, { question: 'Which region?' }] })
   assert.deepEqual(o.w.to('/api/bridge/permission'), [
-    { agent: 'opencode', sessionId: SID, tool: 'question', summary: 'Which database?\nWhich region?', input: 'Which database?\nWhich region?', canAnswer: false },
+    { agent: 'opencode', sessionId: SID, tool: 'question', summary: 'Which database?\nWhich region?', input: 'Which database?\nWhich region?', canAnswer: false, question: true },
   ])
   await o.emit('question.replied', { sessionID: SID, requestID: 'que_1', answers: [['Postgres']] })
   assert.deepEqual(o.w.to('/api/bridge/permission/done'), [{ id: 'slorp-1' }])

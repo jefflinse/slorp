@@ -96,6 +96,12 @@ func TestItems(t *testing.T) {
 			s.Pending, s.Insight = &Pending{Tool: "Bash", Summary: "rm x"}, insight(KindReview)
 		}), KindPermission, "awaiting", "model title"},
 		{"blocked with no insight", with(func(s *Session) { s.Status = Waiting }), KindQuestion, "awaiting", "raw-name"},
+		{"blocked on a question it asked", with(func(s *Session) {
+			s.Pending, s.Status = &Pending{Tool: "AskUserQuestion", Summary: "Which one?", Question: true}, Waiting
+		}), KindQuestion, "awaiting", "raw-name"},
+		{"blocked on a question, whatever the model made of it", with(func(s *Session) {
+			s.Pending, s.Insight = &Pending{Tool: "AskUserQuestion", Summary: "Which one?", Question: true}, insight(KindPermission)
+		}), KindQuestion, "awaiting", "model title"},
 		{"failed", with(func(s *Session) { s.Status = Failed }), KindFailed, "awaiting", "raw-name"},
 	}
 	for _, tt := range tests {
@@ -124,6 +130,14 @@ func TestItems(t *testing.T) {
 		it := items([]Session{with(func(s *Session) { s.Pending = &Pending{Tool: "Bash", Summary: "rm x"} })})[0]
 		if !strings.Contains(it.Ask, "Bash") || !strings.Contains(it.Ask, "rm x") {
 			t.Errorf("ask = %q", it.Ask)
+		}
+	})
+
+	t.Run("a question's ask is the question", func(t *testing.T) {
+		asked := items([]Session{with(func(s *Session) { s.Pending = &Pending{Tool: "AskUserQuestion", Summary: "Which one?", Question: true} })})[0]
+		unsaid := items([]Session{with(func(s *Session) { s.Pending = &Pending{Tool: "question", Question: true} })})[0]
+		if asked.Ask != "Which one?" || !strings.Contains(unsaid.Ask, "asked you something") {
+			t.Errorf("asks = %q and %q", asked.Ask, unsaid.Ask)
 		}
 	})
 
@@ -492,6 +506,18 @@ func TestRecentLookupsAreKept(t *testing.T) {
 	got := h.State().Lookups
 	if len(got) != keptLookups || len(got[len(got)-1].What) != keptLookups+5 || len(got[0].What) != 6 {
 		t.Errorf("kept %d lookups, first of length %d, last of length %d; want the newest %d, oldest first", len(got), len(got[0].What), len(got[len(got)-1].What), keptLookups)
+	}
+}
+
+func TestAQuestionIsNeverAnswerableInSlorp(t *testing.T) {
+	h, _, _ := newHub(t)
+	h.SetRoster(agent, []Session{{ID: "s1", Agent: agent, Status: Working}})
+	p := h.Ask(agent, "s1", Pending{Tool: "AskUserQuestion", Summary: "Which one?", Question: true}, true)
+	if p.Answerable || !session(t, h, "s1").Pending.Question {
+		t.Errorf("pending = %+v; an allow cannot pick an option, so a question is for the terminal alone", p)
+	}
+	if h.Decide(p.ID, Decision{Behavior: Allow}) {
+		t.Error("a question was allowed from Slorp")
 	}
 }
 

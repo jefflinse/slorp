@@ -106,6 +106,12 @@ h1, h2, h3, p { margin: 0; }
   color: color-mix(in srgb, var(--k) 50%, var(--ink)); background: color-mix(in srgb, var(--k) 15%, transparent); }
 .kind i, .chip i { width: 6px; height: 6px; border-radius: 50%; margin-right: 5px; background: var(--k); }
 .chip i { display: inline-block; vertical-align: 1px; }
+.asked + .asked { margin-top: 16px; }
+.asked .q { font-size: 15px; font-weight: 500; margin: 2px 0 8px; }
+.asked .opt { display: flex; gap: 10px; align-items: baseline; padding: 8px 11px; margin-top: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.asked .opt .k { color: var(--ink3); font-family: var(--mono); font-size: 12px; }
+.asked .opt b { font-weight: 600; white-space: nowrap; }
+.asked .opt span:last-child { color: var(--ink2); font-size: 13px; }
 .role { display: inline-flex; align-items: center; white-space: nowrap; padding: 0 7px; border-radius: 99px; border: 1px solid var(--ink3); color: var(--ink2); font-size: 11.5px; font-weight: 500; line-height: 1.5; }
 .role .spark { margin-right: 4px; }
 .tag { font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 1px 6px; border-radius: 4px; }
@@ -1040,8 +1046,27 @@ function connect() {
   events.onerror = () => { if (live && !isOffline) { isOffline = true; render(); } };
 }
 
+/* The questions a session put to the user through its question tool, or
+   null when the prompt is not one or its input cannot be read. */
+function askedQuestions(p) {
+  try {
+    const qs = JSON.parse(p.input).questions;
+    return Array.isArray(qs) && qs.length && qs.every(q => q && typeof q.question === 'string') ? qs : null;
+  } catch (e) { return null; }
+}
+
+function questionBox(qs) {
+  return qs.map(q => `<div class="asked">${q.header ? `<div class="label">${esc(q.header)}</div>` : ''}
+      <p class="q">${esc(q.question)}</p>
+      ${(Array.isArray(q.options) ? q.options : []).map((o, i) => `<div class="opt"><span class="k">${i + 1}</span><b>${esc(o.label ?? '')}</b><span>${esc(o.description ?? '')}</span></div>`).join('')}
+      ${q.multiSelect ? '<div class="none" style="margin-top:6px">More than one may be chosen.</div>' : ''}</div>`).join('');
+}
+
 function pendingBox(s) {
-  const p = s.pending;
+  const p = s.pending, qs = askedQuestions(p);
+  const inTerminal = `<div class="none" style="margin-top:10px">Answer in the session's terminal. Slorp cannot pick an option for you.</div>`;
+  if (qs) return questionBox(qs) + inTerminal;
+  if (p.question) return `<div class="asked"><p class="q" style="white-space:pre-wrap">${esc(p.input || p.summary)}</p></div>${inTerminal}`;
   const what = `<div class="rawblock" style="margin-bottom:10px;max-height:280px;overflow:auto"><div class="who" style="margin-bottom:4px">${esc(p.tool)}</div><div class="tx">${esc(p.input || p.summary)}</div></div>`;
   if (!p.answerable) return `${what}<div class="none">Answer this one in the session's terminal.</div>`;
   return `${what}<div class="replies">
@@ -1052,7 +1077,7 @@ function pendingBox(s) {
 }
 
 function liveDetail(s) {
-  const pending = s.pending ? `<div class="pend"><div class="label" style="margin-bottom:8px">Waiting for your permission</div>${pendingBox(s)}</div>` : '';
+  const pending = s.pending ? `<div class="pend"><div class="label" style="margin-bottom:8px">${s.pending.question || askedQuestions(s.pending) ? 'Waiting for your answer' : 'Waiting for your permission'}</div>${pendingBox(s)}</div>` : '';
   const lines = [];
   if (s.lastPrompt) lines.push(['you', s.lastPrompt]);
   if (s.lastReply) lines.push([s.agent, s.lastReply]);
@@ -1076,7 +1101,7 @@ function viewActivityLive() {
     const open = state.expanded[s.id], [dot, label] = LIVE_STATUS[s.status] || LIVE_STATUS.idle;
     const name = clip(s.insight?.title || s.title || s.name || s.id.slice(0, 8), 90);
     const what = state.fluent ? `<span class="ttl">${esc(name)}</span>` : `<span class="mono ttl">${esc(`${s.agent} · ${tilde(s.cwd)} · ${s.id.slice(0, 8)}`)}</span>`;
-    const sub = s.pending ? `Wants to run ${s.pending.tool}: ${s.pending.summary}` : s.insight && s.status !== 'working' ? s.insight.summary : s.lastPrompt ? `You last said: ${s.lastPrompt}` : '';
+    const sub = s.pending ? (s.pending.question ? `Asks: ${s.pending.summary}` : `Wants to run ${s.pending.tool}: ${s.pending.summary}`) : s.insight && s.status !== 'working' ? s.insight.summary : s.lastPrompt ? `You last said: ${s.lastPrompt}` : '';
     return `<tr class="s ${open ? 'open' : ''}" data-act="expand" data-id="${s.id}">
         <td class="st"><span class="dot ${dot}"></span>${label}${s.waitingFor ? `<div class="dim">${esc(s.waitingFor)}</div>` : ''}</td>
         <td><div>${what}</div>${state.fluent && sub ? `<div class="doing">${esc(clip(sub, 220))}</div>` : ''}</td>
