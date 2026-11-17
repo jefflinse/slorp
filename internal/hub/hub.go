@@ -139,10 +139,12 @@ const (
 	KindFailed     = "failed"
 )
 
-// Item is one thing that needs the user.
+// Item is one thing that needs the user: a session waiting on them, or
+// something an integration's feed found.
 type Item struct {
-	ID        string    `json:"id"`
-	SessionID string    `json:"sessionId"`
+	ID string `json:"id"`
+	// SessionID is empty for an item from a feed.
+	SessionID string    `json:"sessionId,omitempty"`
 	Kind      string    `json:"kind"`
 	Urgency   string    `json:"urgency"`
 	Title     string    `json:"title"`
@@ -150,6 +152,27 @@ type Item struct {
 	Summary   string    `json:"summary"`
 	Replies   []string  `json:"replies"`
 	At        time.Time `json:"at"`
+	// Source is the integration whose feed found the item.
+	Source string `json:"source,omitempty"`
+	URL    string `json:"url,omitempty"`
+	// Repo is the repository a feed item belongs to, which is what it is filed by.
+	Repo string `json:"repo,omitempty"`
+	// Effort is the effort the item is filed under, empty when unsorted.
+	Effort    string `json:"effort"`
+	EffortVia string `json:"effortVia,omitempty"`
+}
+
+// FeedStatus is how an integration's last collection went.
+type FeedStatus struct {
+	At time.Time `json:"at"`
+	// Error is why the last collection failed; the items are then older.
+	Error string `json:"error,omitempty"`
+	Count int    `json:"count"`
+}
+
+type feed struct {
+	items []Item
+	FeedStatus
 }
 
 // Summarizer reports which model, if any, is writing insights.
@@ -251,6 +274,8 @@ type Hub struct {
 	settings Settings
 	waiters  map[string]chan Decision
 	lookups  []Lookup
+	feeds    map[string]*feed
+	clones   map[string][]string
 }
 
 type note struct {
@@ -261,7 +286,7 @@ type note struct {
 // New returns a hub restored from what c holds.
 func New(k *kb.Store, c Cache) *Hub {
 	h := &Hub{sessions: map[string]*Session{}, subs: map[chan struct{}]struct{}{}, kb: k, notes: map[string]note{},
-		cache: c, settings: Settings{AnswerPermissions: true}, waiters: map[string]chan Decision{}}
+		cache: c, settings: Settings{AnswerPermissions: true}, waiters: map[string]chan Decision{}, feeds: map[string]*feed{}}
 	h.warn(c.Each("note", func(id string, body []byte) {
 		var n note
 		if json.Unmarshal(body, &n) == nil {
@@ -502,6 +527,80 @@ func (h *Hub) Looked(l Lookup) {
 	h.changed()
 }
 
+// SetFeed records what an integration's feed found. When the collection
+// failed, what it found the time before is kept.
+func (h *Hub) SetFeed(source string, found []Item, err error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	f := h.feeds[source]
+	if f == nil {
+		f = &feed{}
+		h.feeds[source] = f
+	}
+	f.At, f.Error = time.Now(), ""
+	if err != nil {
+		f.Error = err.Error()
+	} else {
+		f.items = make([]Item, len(found))
+		for i, it := range found {
+			it.Source, it.SessionID, it.Replies = source, "", []string{}
+			f.items[i] = it
+		}
+	}
+	f.Count = len(f.items)
+	h.last = ""
+	h.changed()
+}
+
+// DropFeed forgets an integration's feed, as when it is turned off.
+func (h *Hub) DropFeed(source string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, ok := h.feeds[source]; ok {
+		delete(h.feeds, source)
+		h.last = ""
+		h.changed()
+	}
+}
+
+// SetClones records which repositories are checked out in which of the
+// efforts' directories, by directory. Feed items are filed by it.
+func (h *Hub) SetClones(byDir map[string][]string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.clones = byDir
+	h.changed()
+}
+
+// fed returns every feed's items, each filed under the effort its
+// repository belongs to.
+func (h *Hub) fed() []Item {
+	sources := make([]string, 0, len(h.feeds))
+	for id := range h.feeds {
+		sources = append(sources, id)
+	}
+	sort.Strings(sources)
+	out := []Item{}
+	for _, id := range sources {
+		for _, it := range h.feeds[id].items {
+			var held []string
+			for dir, repos := range h.clones {
+				for _, r := range repos {
+					if strings.EqualFold(r, it.Repo) {
+						held = append(held, dir)
+						break
+					}
+				}
+			}
+			if effort, via, ok := h.kb.ResolveRepo(it.Repo, held); ok {
+				it.Effort, it.EffortVia = effort, via
+			}
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
 func newID() string {
 	b := make([]byte, 8)
 	rand.Read(b)
@@ -525,13 +624,20 @@ type State struct {
 	Knowledge  kb.Knowledge `json:"knowledge"`
 	// Lookups are the most recent ones, newest last.
 	Lookups []Lookup `json:"lookups"`
+	// Feeds says how each integration's last collection went, by integration.
+	Feeds map[string]FeedStatus `json:"feeds"`
 }
 
 func (h *Hub) State() State {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	sessions := h.snapshot()
-	return State{sessions, items(sessions), h.efforts(sessions), h.summ, h.settings, h.kb.Knowledge(), append([]Lookup{}, h.lookups...)}
+	feeds := map[string]FeedStatus{}
+	for id, f := range h.feeds {
+		feeds[id] = f.FeedStatus
+	}
+	return State{Sessions: sessions, Items: append(items(sessions), h.fed()...), Efforts: h.efforts(sessions), Summarizer: h.summ,
+		Settings: h.settings, Knowledge: h.kb.Knowledge(), Lookups: append([]Lookup{}, h.lookups...), Feeds: feeds}
 }
 
 func (h *Hub) efforts(sessions []Session) []Effort {
@@ -710,13 +816,15 @@ func contentKey(s *Session) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// items derives what needs the user. Permission prompts, blocked and failed
-// sessions are items on their state alone; a question or finished work is an
-// item only once an insight written for the current content says so.
+// items derives what needs the user from the sessions. Permission prompts,
+// blocked and failed sessions are items on their state alone; a question or
+// finished work is an item only once an insight written for the current
+// content says so.
 func items(sessions []Session) []Item {
 	out := []Item{}
 	for _, s := range sessions {
-		it := Item{ID: s.ID[:min(8, len(s.ID))] + "-" + s.key[:min(10, len(s.key))], SessionID: s.ID, At: s.ActiveAt, Replies: []string{}}
+		it := Item{ID: s.ID[:min(8, len(s.ID))] + "-" + s.key[:min(10, len(s.key))], SessionID: s.ID, At: s.ActiveAt, Replies: []string{},
+			Effort: s.Effort, EffortVia: s.EffortVia}
 		it.Title = s.Title
 		if it.Title == "" {
 			it.Title = s.Name
@@ -861,7 +969,7 @@ func (h *Hub) changed() {
 		}
 	}
 	snap := h.snapshot()
-	b, _ := json.Marshal(map[string]any{"s": snap, "i": items(snap), "e": h.efforts(snap), "m": h.summ})
+	b, _ := json.Marshal(map[string]any{"s": snap, "i": items(snap), "f": h.fed(), "e": h.efforts(snap), "m": h.summ})
 	if string(b) == h.last {
 		return
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -132,6 +133,43 @@ func (s *Store) Assign(sessionID, effortID string) error {
 	}
 	s.f.Assignments[sessionID] = effortID
 	return s.save()
+}
+
+// repoKey prefixes a repository's entry among the assignments.
+const repoKey = "repo:"
+
+// AssignRepo files everything from a repository under an effort on the
+// user's say-so. An empty effortID records that the user wants it left
+// unsorted.
+func (s *Store) AssignRepo(repo, effortID string) error {
+	if strings.TrimSpace(repo) == "" {
+		return errors.New("needs a repository")
+	}
+	return s.Assign(repoKey+strings.ToLower(repo), effortID)
+}
+
+// ResolveRepo reports where the user's own filing or a directory rule puts a
+// repository. held lists the directories known to hold a checkout of it; the
+// rule applies when exactly one effort has any of them. ok is false when
+// neither applies.
+func (s *Store) ResolveRepo(repo string, held []string) (effortID, via string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if id, found := s.f.Assignments[repoKey+strings.ToLower(repo)]; found && (id == "" || s.index(id) >= 0) {
+		return id, ViaUser, true
+	}
+	for _, e := range s.f.Efforts {
+		for _, d := range e.Dirs {
+			if !slices.Contains(held, d) {
+				continue
+			}
+			if effortID != "" && effortID != e.ID {
+				return "", "", false
+			}
+			effortID = e.ID
+		}
+	}
+	return effortID, ViaDir, effortID != ""
 }
 
 // AddDir makes dir belong to one effort, taking it from any other.

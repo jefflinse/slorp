@@ -22,7 +22,16 @@ type fixture struct {
 	srv *httptest.Server
 	hub *hub.Hub
 	kb  *kb.Store
+	// feeds counts what the server asked of the feed poller.
+	feeds *asked
+	// probes counts how often the integration's availability was checked.
+	probes *int
 }
+
+type asked struct{ checks, rescans int }
+
+func (a *asked) Check()  { a.checks++ }
+func (a *asked) Rescan() { a.rescans++ }
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
@@ -33,15 +42,19 @@ func newFixture(t *testing.T) *fixture {
 	if err := os.WriteFile(page, []byte("<title>slorp</title>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	feeds, probes := &asked{}, new(int)
 	tools := integrations.NewManager(func() map[string]bool { return h.Settings().Integrations }, integrations.Integration{
 		ID: "fake", Name: "Fake", About: "A stand-in.",
-		Check: func(context.Context) (bool, string) { return true, "Ready." },
+		Check: func(context.Context) (bool, string) {
+			*probes++
+			return true, "Ready."
+		},
 		Scope: func(string) (string, bool) { return "", true },
 		Tools: []integrations.Tool{{Name: "fake_lookup", Description: "Look something up."}},
 	})
-	srv := httptest.NewServer(New(h, k, tools, page))
+	srv := httptest.NewServer(New(h, k, tools, feeds, page))
 	t.Cleanup(srv.Close)
-	return &fixture{t, srv, h, k}
+	return &fixture{t, srv, h, k, feeds, probes}
 }
 
 // do sends a request the way the web UI or a bridge would. edit may change
@@ -132,7 +145,7 @@ func TestRefusesRequestsAWebPageElsewhereCouldCause(t *testing.T) {
 func TestStateIsShapedForTheUI(t *testing.T) {
 	f := newFixture(t)
 	_, body := f.do("GET", "/api/sessions", "", nil)
-	for _, field := range []string{`"sessions":[]`, `"items":[]`, `"efforts":[]`, `"watch":[]`, `"questions":[]`, `"context":[]`, `"routing":[]`, `"answerPermissions":true`, `"lookups":[]`, `"integrations":[{`} {
+	for _, field := range []string{`"sessions":[]`, `"items":[]`, `"efforts":[]`, `"watch":[]`, `"questions":[]`, `"context":[]`, `"routing":[]`, `"answerPermissions":true`, `"lookups":[]`, `"integrations":[{`, `"feeds":{}`, `"watches":[]`} {
 		if !strings.Contains(body, field) {
 			t.Errorf("empty state lacks %s, which the page reads without checking: %s", field, body)
 		}
@@ -397,5 +410,79 @@ func TestEventsStreamAnnouncesChanges(t *testing.T) {
 	f.post("/api/efforts", `{"name":"A"}`)
 	if got := read(); got != "data: change\n\n" {
 		t.Errorf("after a knowledge base edit, event = %q", got)
+	}
+}
+
+func TestFeedItemsOverHTTP(t *testing.T) {
+	f := newFixture(t)
+	f.post("/api/efforts", `{"name":"Widgets"}`)
+	f.hub.SetFeed("fake", []hub.Item{{ID: "fake-1", Kind: "ready-to-merge", Title: "Ready", URL: "https://example.com/1", Repo: "Acme/Widgets"}}, nil)
+
+	_, body := f.do("GET", "/api/sessions", "", nil)
+	for _, field := range []string{`"id":"fake-1"`, `"source":"fake"`, `"url":"https://example.com/1"`, `"repo":"Acme/Widgets"`, `"effort":""`, `"replies":[]`, `"feeds":{"fake":{"at":"`, `"count":1`} {
+		if !strings.Contains(body, field) {
+			t.Errorf("state lacks %s, which the page reads: %s", field, body)
+		}
+	}
+	if strings.Contains(body, `"sessionId"`) {
+		t.Errorf("a feed item claims a session: %s", body)
+	}
+
+	before := f.feeds.rescans
+	if code := f.post("/api/repos/effort", `{"repo":"acme/widgets","effort":"widgets"}`); code != 204 {
+		t.Fatalf("file a repository = %d", code)
+	}
+	if it := f.state().Items[0]; it.Effort != "widgets" || it.EffortVia != kb.ViaUser {
+		t.Errorf("item filed %q via %q, want the user's filing of its repository", it.Effort, it.EffortVia)
+	}
+	if f.feeds.rescans != before+1 {
+		t.Errorf("%d rescans after a filing, want 1: an edit may change which directories matter", f.feeds.rescans-before)
+	}
+	if code := f.post("/api/repos/effort", `{"repo":"acme/widgets","effort":""}`); code != 204 || f.state().Items[0].EffortVia != kb.ViaUser || f.state().Items[0].Effort != "" {
+		t.Errorf("leaving a repository unsorted = %d, item %+v", code, f.state().Items[0])
+	}
+	if code := f.post("/api/repos/effort", `{"repo":"acme/widgets","effort":"nope"}`); code != 400 {
+		t.Errorf("filing under an unknown effort = %d, want 400", code)
+	}
+	if code := f.post("/api/repos/effort", `{"repo":"","effort":"widgets"}`); code != 400 {
+		t.Errorf("filing no repository = %d, want 400", code)
+	}
+	if code := f.post("/api/repos/effort", `{`); code != 400 {
+		t.Errorf("a malformed filing = %d, want 400", code)
+	}
+}
+
+func TestFeedIsCollectedWhenAsked(t *testing.T) {
+	f := newFixture(t)
+	f.state()
+	probes := *f.probes
+
+	if code := f.post("/api/feed/check", `{}`); code != 204 || f.feeds.checks != 1 {
+		t.Fatalf("check now = %d with %d collections asked for, want 204 and 1", code, f.feeds.checks)
+	}
+	f.state()
+	if *f.probes != probes+1 {
+		t.Errorf("availability probed %d more times, want 1: checking now should notice a tool that was just signed in", *f.probes-probes)
+	}
+
+	if code := f.post("/api/integrations/fake", `{"enabled":true}`); code != 204 || f.feeds.checks != 2 {
+		t.Errorf("turning an integration on asked for %d collections, want its feed collected at once", f.feeds.checks-1)
+	}
+	if code := f.post("/api/integrations/fake", `{"enabled":false}`); code != 204 || f.feeds.checks != 3 {
+		t.Errorf("turning an integration off asked for %d collections, want one so its items go at once", f.feeds.checks-2)
+	}
+	if code := f.post("/api/integrations/nope", `{"enabled":true}`); code != 404 || f.feeds.checks != 3 {
+		t.Errorf("an unknown integration = %d and asked for a collection", code)
+	}
+
+	rescans := f.feeds.rescans
+	f.post("/api/efforts", `{"name":"A"}`)
+	f.post("/api/efforts/a/dirs", `{"dir":"/work/a"}`)
+	if f.feeds.rescans != rescans+2 {
+		t.Errorf("%d rescans after two edits, want 2", f.feeds.rescans-rescans)
+	}
+	f.post("/api/efforts/nope/dirs", `{"dir":"/work/a"}`)
+	if f.feeds.rescans != rescans+2 {
+		t.Error("a refused edit caused a rescan")
 	}
 }

@@ -245,3 +245,73 @@ func TestKnowledgeBaseSurvivesReopen(t *testing.T) {
 		t.Error("entry ids collide after reopen")
 	}
 }
+
+func TestResolveRepo(t *testing.T) {
+	k := open(t)
+	a, b := create(t, k, "A"), create(t, k, "B")
+	must(t, k.AddDir(a, "/work/a"))
+	must(t, k.AddDir(a, "/work/a2"))
+	must(t, k.AddDir(b, "/work/b"))
+
+	tests := []struct {
+		name string
+		held []string
+		want string
+		via  string
+		ok   bool
+	}{
+		{"no checkout anywhere", nil, "", kb.ViaDir, false},
+		{"a checkout outside every effort", []string{"/elsewhere"}, "", kb.ViaDir, false},
+		{"a checkout in one effort", []string{"/work/b"}, b, kb.ViaDir, true},
+		{"checkouts in two directories of one effort", []string{"/work/a", "/work/a2"}, a, kb.ViaDir, true},
+		{"checkouts in two efforts", []string{"/work/a", "/work/b"}, "", "", false},
+		{"checkouts in two efforts, the later listed first", []string{"/work/b", "/work/a2"}, "", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, via, ok := k.ResolveRepo("acme/widgets", tt.held)
+			if got != tt.want || ok != tt.ok || (ok && via != tt.via) {
+				t.Errorf("ResolveRepo = %q, %q, %v; want %q, %q, %v", got, via, ok, tt.want, tt.via, tt.ok)
+			}
+		})
+	}
+
+	must(t, k.AssignRepo("Acme/Widgets", a))
+	if got, via, ok := k.ResolveRepo("acme/widgets", []string{"/work/b"}); got != a || via != kb.ViaUser || !ok {
+		t.Errorf("after the user filed it: %q, %q, %v; want their choice over the directory rule, whatever the case", got, via, ok)
+	}
+	if got, _, ok := k.ResolveRepo("acme/other", nil); ok {
+		t.Errorf("another repository resolved to %q", got)
+	}
+	if _, _, ok := k.Resolve("acme/widgets", "/nowhere"); ok {
+		t.Error("a repository's filing was read as a session's")
+	}
+
+	must(t, k.AssignRepo("acme/widgets", ""))
+	if got, via, ok := k.ResolveRepo("acme/widgets", []string{"/work/b"}); got != "" || via != kb.ViaUser || !ok {
+		t.Errorf("after the user left it unsorted: %q, %q, %v; want unsorted to hold against the rule", got, via, ok)
+	}
+
+	must(t, k.AssignRepo("acme/widgets", a))
+	must(t, k.Delete(a))
+	if got, via, ok := k.ResolveRepo("acme/widgets", []string{"/work/b"}); got != b || via != kb.ViaDir || !ok {
+		t.Errorf("after its effort was deleted: %q, %q, %v; want the rule to apply again", got, via, ok)
+	}
+
+	if err := k.AssignRepo("acme/widgets", "nope"); err == nil {
+		t.Error("filing under an effort that does not exist was accepted")
+	}
+	if err := k.AssignRepo("  ", b); err == nil {
+		t.Error("filing a repository with no name was accepted")
+	}
+}
+
+func TestRepoFilingSurvivesReopen(t *testing.T) {
+	st := testdb.Open(t)
+	k := testdb.KB(t, st)
+	id := create(t, k, "A")
+	must(t, k.AssignRepo("acme/widgets", id))
+	if got, via, ok := testdb.KB(t, st).ResolveRepo("acme/widgets", nil); got != id || via != kb.ViaUser || !ok {
+		t.Errorf("after reopening: %q, %q, %v", got, via, ok)
+	}
+}

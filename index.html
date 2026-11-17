@@ -11,7 +11,7 @@
   --accent: #4f6b00; --fill: #c8f05a; --fill-ink: #1c2700;
   --warn: #a85a09; --err: #b3261e; --toast-act: #c8f05a;
   --k-claude: #d97757; --k-opencode: #3b82c4; --k-slack: #8e5bb5;
-  --k-worker: #5f8a8b; --k-local: #6a9a23; --k-kb: #b8930f;
+  --k-worker: #5f8a8b; --k-local: #6a9a23; --k-kb: #b8930f; --k-github: #7d8590;
   --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --top: 52px;
@@ -130,6 +130,7 @@ h1.mono { font-family: var(--mono); font-size: 16px; font-weight: 500; line-heig
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn.quiet { border-color: transparent; background: none; color: var(--ink2); }
 .btn.quiet:hover { background: var(--sel); }
+a.btn { display: inline-block; text-decoration: none; color: inherit; }
 select.btn { appearance: none; padding-right: 24px; background-image: linear-gradient(45deg, transparent 50%, var(--ink3) 50%), linear-gradient(135deg, var(--ink3) 50%, transparent 50%); background-position: calc(100% - 13px) 50%, calc(100% - 9px) 50%; background-size: 4px 4px; background-repeat: no-repeat; }
 .need { margin-top: 22px; padding: 16px 18px; background: var(--raised); border: 1px solid var(--line); border-radius: 11px; }
 .need .ask { font-size: 16px; font-weight: 500; line-height: 1.4; margin: 4px 0 14px; }
@@ -259,7 +260,7 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
    stand in for what a local model would write; `raw` and `lines` stand in for
    what the source actually said. */
 
-const KINDS = { claude: 'Claude', opencode: 'OpenCode', slack: 'Slack', worker: 'Worker', local: 'Local LLM', kb: 'Knowledge base' };
+const KINDS = { claude: 'Claude', opencode: 'OpenCode', slack: 'Slack', worker: 'Worker', local: 'Local LLM', kb: 'Knowledge base', github: 'GitHub' };
 const URGENCY = { blocking: 'Holding work up', soon: 'Soon', whenever: 'Whenever' };
 const STATUS = { waiting: 'waiting on you', error: 'failed', running: 'running', done: 'finished', idle: 'idle' };
 
@@ -709,6 +710,7 @@ function effortDetail(e) {
 }
 
 const VIA = { you: 'filed by you', rule: 'filed by directory', guess: 'filed by the model' };
+const VIA_REPO = { you: 'repository filed by you', rule: 'a checkout is in this effort' };
 
 function moveSelect(s) {
   const cur = s.effort || 'unsorted';
@@ -748,7 +750,7 @@ function effortDetailLive(e) {
 }
 
 function viewEffortsLive() {
-  const all = liveEfforts.concat(live.some(s => !s.effort) || !liveEfforts.length ? [LIVE_UNSORTED] : []);
+  const all = liveEfforts.concat(live.some(s => !s.effort) || liveItems.some(i => i.effort === 'unsorted') || !liveEfforts.length ? [LIVE_UNSORTED] : []);
   if (!all.some(e => e.id === state.effortSel)) state.effortSel = all[0].id;
   const rows = all.map(e => {
     const n = activeItems().filter(i => i.effort === e.id).length, total = live.filter(s => (s.effort || 'unsorted') === e.id).length;
@@ -826,7 +828,7 @@ function viewActivity() {
    service's session list; everything outside Activity is still mock data. */
 
 let live = null, liveItems = [], liveEfforts = [], summarizer = {}, settings = {}, isOffline = false;
-let knowledge = { watch: [], questions: [], context: [], routing: [] }, integrations = [], lookups = [];
+let knowledge = { watch: [], questions: [], context: [], routing: [] }, integrations = [], lookups = [], feeds = {};
 const LIVE_STATUS = { waiting: ['waiting', 'waiting on you'], failed: ['error', 'failed'], working: ['running', 'working'], idle: ['idle', 'idle'], done: ['done', 'finished'] };
 const minsSince = iso => Math.max(0, (Date.now() - new Date(iso).getTime()) / 60000);
 const tilde = p => p.replace(/^\/Users\/[^/]+/, '~');
@@ -846,15 +848,19 @@ async function refresh(force) {
     knowledge = data.knowledge || knowledge;
     integrations = data.integrations || [];
     lookups = data.lookups || [];
+    feeds = data.feeds || {};
     isOffline = false;
   } catch (e) { isOffline = live !== null; }
   render();
 }
 
-/* Server items take the mock items' shape so the Attention pane draws both. */
+/* Server items take the mock items' shape so the Attention pane draws both.
+   An item with a source came from an integration's feed and has no session. */
 function toItems(data) {
   const byId = Object.fromEntries(data.sessions.map(s => [s.id, s]));
-  return (data.items || []).filter(i => byId[i.sessionId]).map(i => {
+  return (data.items || []).filter(i => i.source || byId[i.sessionId]).map(i => {
+    if (i.source) return { ...i, live: true, feed: true, effort: i.effort || 'unsorted', kind: i.source, itemKind: i.kind,
+      src: KINDS[i.source] || i.source, raw: `${i.source} · ${i.repo} · ${i.kind}` };
     const s = byId[i.sessionId];
     return { ...i, live: true, session: s, effort: s.effort || 'unsorted', kind: s.agent, itemKind: i.kind,
       src: s.kind === 'background' ? 'Claude background session' : 'Claude session',
@@ -874,7 +880,42 @@ function sendReply(sessionId, text, done) {
     .catch(() => toast('Could not reach the Slorp service'));
 }
 
+const barFor = (it, extra) => `<div class="bar">
+      <button class="btn" data-act="snooze" data-id="${it.id}" data-for="hour">Snooze 1h</button>
+      <button class="btn" data-act="snooze" data-id="${it.id}" data-for="tomorrow">Until tomorrow</button>
+      <button class="btn" data-act="dismiss" data-id="${it.id}">Dismiss</button>
+      ${extra}</div>`;
+const alsoIn = (effort, except) => {
+  const others = live.filter(x => x.id !== except && (x.effort || 'unsorted') === effort);
+  return `<div class="sec"><div class="label"><span>Also going on in ${esc(effortById(effort).name)}</span></div>
+      ${others.length ? others.map(x => `<div class="srow"><span class="dot ${(LIVE_STATUS[x.status] || LIVE_STATUS.idle)[0]}"></span>
+        <div class="body"><div class="ttl">${esc(clip(x.insight?.title || x.title || x.name, 90))}</div></div>
+        <span class="side">${kindBadge(x.agent)} · ${(LIVE_STATUS[x.status] || LIVE_STATUS.idle)[1]}</span></div>`).join('') : '<div class="none">No other sessions here.</div>'}</div>`;
+};
+
+/* A feed item: nothing to reply to, only somewhere to go. Moving it files its
+   whole repository, since that is what the next items from there go by. */
+function feedItemDetail(it) {
+  const real = it.effort !== 'unsorted';
+  const move = `<select class="btn" data-change="repoMove" data-id="${it.id}" aria-label="File this repository under an effort">
+    <option value="">File ${esc(it.repo)} under…</option>
+    ${liveEfforts.concat(LIVE_UNSORTED).filter(e => e.id !== it.effort).map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join('')}
+    <option value="__new">New effort…</option></select>`;
+  return `<div class="inner">
+    <div class="crumb">${real ? `<button class="eff" data-act="effort" data-id="${it.effort}">${esc(effortById(it.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${real && VIA_REPO[it.effortVia] ? `<span>${VIA_REPO[it.effortVia]}</span>` : ''}${kindBadge(it.kind, it.src)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span><span class="mono">${esc(it.repo)}</span></div>
+    <h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>
+    <div class="need"><div class="label">What's needed from you</div><p class="ask">${esc(it.ask)}</p>
+      ${/^https:\/\//.test(it.url || '') ? `<div class="replies"><a class="btn go" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">Open on ${esc(it.src)} ↗</a>
+        <span class="none" style="align-self:center">Slorp only reads ${esc(it.src)}. Anything you do there, you do there.</span></div>` : ''}</div>
+    ${barFor(it, `<button class="btn" data-act="livePark" data-id="${it.id}">Park as open question</button>${move}`)}
+    <div class="sec"><div class="label"><span>What's going on</span></div><p class="prose">${esc(it.summary)}</p>
+      <div class="none" style="margin-top:8px">As ${esc(it.src)} reported it ${ago(minsSince((feeds[it.source] || {}).at || it.at))}. No model wrote any of this.</div></div>
+    ${alsoIn(it.effort, '')}
+  </div>`;
+}
+
 function liveItemDetail(it) {
+  if (it.feed) return feedItemDetail(it);
   const s = it.session, rawOpen = state.rawOpen[it.id] ?? (!state.fluent || !it.summary);
   const lines = [];
   if (s.lastPrompt) lines.push(['you', s.lastPrompt]);
@@ -891,27 +932,17 @@ function liveItemDetail(it) {
   } else {
     answer = `<div class="none">This session isn't running the Slorp mod, so answer it in its terminal: <span class="mono">${esc(shortPath(s.cwd))}</span></div>`;
   }
-  const siblings = live.filter(x => x.id !== s.id && (x.effort || 'unsorted') === it.effort);
   return `<div class="inner">
     <div class="crumb">${s.effort ? `<button class="eff" data-act="effort" data-id="${s.effort}">${esc(effortById(s.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${s.effortVia === 'guess' ? `<span>${spark}filed by the model</span>` : ''}${kindBadge(it.kind, it.src)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span>${s.branch ? `<span class="mono">${esc(s.branch)}</span>` : ''}</div>
     <h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>
     <div class="need"><div class="label">${it.summary ? spark : ''}What's needed from you</div><p class="ask">${esc(it.ask)}</p>${answer}</div>
-    <div class="bar">
-      <button class="btn" data-act="snooze" data-id="${it.id}" data-for="hour">Snooze 1h</button>
-      <button class="btn" data-act="snooze" data-id="${it.id}" data-for="tomorrow">Until tomorrow</button>
-      <button class="btn" data-act="dismiss" data-id="${it.id}">Dismiss</button>
-      ${s.pending ? '' : `<button class="btn" data-act="livePark" data-id="${it.id}">Park as open question</button>`}
-      ${moveSelect(s)}
-    </div>
+    ${barFor(it, `${s.pending ? '' : `<button class="btn" data-act="livePark" data-id="${it.id}">Park as open question</button>`}${moveSelect(s)}`)}
     <div class="sec"><div class="label"><span>${it.summary ? spark : ''}What's going on</span></div>
       <p class="prose">${it.summary ? esc(it.summary) : `<span class="none">${summarizer.model ? 'Not summarized yet.' : 'No local model is available to summarize this.'}</span>`}</p>
       ${(s.insight?.lookups || []).length ? `<div class="none" style="margin-top:8px">${spark}Checked ${esc(listOf(s.insight.lookups))} to write this.</div>` : ''}</div>
     <div class="sec"><div class="label"><span>From the source, verbatim</span><button data-act="toggleRaw" data-id="${it.id}">${rawOpen ? 'Hide' : 'Show'}</button></div>
       ${rawOpen ? (lines.length ? rawBlock(lines) : '<div class="none">No transcript found for this session.</div>') : `<div class="none mono">${esc(it.raw)}</div>`}</div>
-    <div class="sec"><div class="label"><span>Also going on in ${esc(effortById(it.effort).name)}</span></div>
-      ${siblings.length ? siblings.map(x => `<div class="srow"><span class="dot ${(LIVE_STATUS[x.status] || LIVE_STATUS.idle)[0]}"></span>
-        <div class="body"><div class="ttl">${esc(clip(x.insight?.title || x.title || x.name, 90))}</div></div>
-        <span class="side">${kindBadge(x.agent)} · ${(LIVE_STATUS[x.status] || LIVE_STATUS.idle)[1]}</span></div>`).join('') : '<div class="none">No other sessions here.</div>'}</div>
+    ${alsoIn(it.effort, s.id)}
   </div>`;
 }
 
@@ -987,18 +1018,27 @@ const KB_LIVE_LEDE = {
   questions: 'Things you have not decided yet. They show under their effort, and the model reads them when it writes that effort\'s status.',
   context: 'Facts the model should always know. It reads them before describing any session, so changing one re-describes everything.',
   routing: 'Plain-language notes on how to file things, read by the model when it guesses an effort. Directories that file automatically are listed under each effort.',
-  integrations: 'Tools the local model may look things up in while it describes a session. It picks from the lookups listed and supplies only a number and, where there are several, which repository. It cannot run anything else or change anything.',
+  integrations: 'Tools Slorp reads, and never changes. While one is on, Slorp checks it every few minutes for things that need you and lists them under Attention, with no model involved. The local model may also look things up in it while it describes a session: it picks from the lookups listed and supplies only a number and, where there are several, which repository.',
 };
 const kbData = () => live ? knowledge : state.kb;
 const kbSections = () => live ? { ...KB_SECTIONS, integrations: { name: 'Integrations' } } : KB_SECTIONS;
 const kbCount = k => k === 'integrations' ? integrations.filter(i => i.enabled).length : kbData()[k].length;
 
 function integrationsBody() {
+  const checked = i => {
+    const f = feeds[i.id];
+    if (!i.enabled || !i.available || !(i.watches || []).length) return '';
+    const status = !f ? 'Checking now…'
+      : f.error ? `The last check, ${ago(minsSince(f.at))}, failed: ${f.error}${f.count ? ` Showing what it found before.` : ''}`
+      : `Checked ${ago(minsSince(f.at))}: ${f.count ? `${num(f.count)} thing${f.count === 1 ? '' : 's'}` : 'nothing'} for you.`;
+    return `<div class="meta" style="align-items:center"><span>${esc(status)}</span><button class="link" data-act="feedCheck">Check now</button></div>`;
+  };
   const cards = integrations.map(i => `<div class="card"><span class="glyph">${esc(i.name[0])}</span>
       <div class="body"><div class="nm">${esc(i.name)} <span class="tag ${i.enabled && i.available ? 'blocking' : 'whenever'}">${i.enabled ? (i.available ? 'on' : 'on, but unavailable') : 'off'}</span></div>
       <div class="why">${esc(i.about)}</div>
       <div class="meta"><span>${esc(i.detail)}</span></div>
-      <div class="seen">While it is on, the model may:</div>
+      ${(i.watches || []).length ? `<div class="seen">While it is on, Slorp lists under Attention:</div>${i.watches.map(l => `<div class="seen">· ${esc(l)}</div>`).join('')}${checked(i)}` : ''}
+      ${i.lookups.length ? `<div class="seen">While it is on, the model may:</div>` : ''}
       ${i.lookups.map(l => `<div class="seen">· ${esc(l)}</div>`).join('')}</div>
       <button class="btn ${i.enabled ? '' : 'go'}" data-act="integrationToggle" data-id="${i.id}" data-on="${i.enabled ? '0' : '1'}" ${!i.enabled && !i.available ? 'disabled' : ''}>${i.enabled ? 'Turn off' : 'Turn on'}</button></div>`).join('');
   const recent = lookups.slice().reverse().map(l => `<div class="srow"><span class="dot ${l.ok ? 'done' : 'error'}"></span>
@@ -1132,7 +1172,7 @@ const actions = {
   },
   livePark: d => {
     const it = itemById(d.id);
-    api('POST', '/api/kb/questions', { text: it.ask || it.title, effort: it.session.effort || '', origin: `parked from "${it.title}"` },
+    api('POST', '/api/kb/questions', { text: it.feed ? it.title : it.ask || it.title, effort: it.effort === 'unsorted' ? '' : it.effort, origin: `parked from "${it.title}"` },
       () => { resolve(d.id, 'parked'); toast('Parked as an open question'); save(); });
     return false;
   },
@@ -1147,6 +1187,7 @@ const actions = {
       .catch(() => toast('Could not reach the Slorp service'));
     return false;
   },
+  feedCheck: () => { api('POST', '/api/feed/check', {}, () => toast('Checking now')); return false; },
   integrationToggle: d => { api('POST', `/api/integrations/${d.id}`, { enabled: d.on === '1' }); return false; },
   toggleHold: () => { api('POST', '/api/settings', { answerPermissions: !settings.answerPermissions }); return false; },
   effortDelete: d => {
@@ -1190,6 +1231,14 @@ const changes = {
       if (effort) toast(`Filed under ${effortById(effort).name}`, () => { api('POST', `/api/efforts/${effort}/dirs`, { dir: s.cwd }); }, `Always file ${shortPath(s.cwd)} here`);
       else toast('Left unsorted');
     });
+    return false;
+  },
+  repoMove: (d, el) => {
+    const to = el.value, it = itemById(d.id);
+    if (!to) return false;
+    if (to === '__new') { go('efforts'); return; }
+    api('POST', '/api/repos/effort', { repo: it.repo, effort: to === 'unsorted' ? '' : to },
+      () => toast(to === 'unsorted' ? `${it.repo} left unsorted` : `Everything from ${it.repo} now files under ${effortById(to).name}`));
     return false;
   },
   move: (d, el) => {

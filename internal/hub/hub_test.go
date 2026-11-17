@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -759,5 +760,190 @@ func TestSubscribersHearOnlyChanges(t *testing.T) {
 	h.SetRoster(agent, nil)
 	if heard() {
 		t.Error("a cancelled subscription still heard a change")
+	}
+}
+
+func found(id, repo string) Item {
+	return Item{ID: id, Kind: "ready-to-merge", Urgency: "whenever", Title: "Ready: " + id, Ask: "Merge it.", Summary: "facts",
+		URL: "https://example.com/" + id, Repo: repo, At: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)}
+}
+
+func feedItems(h *Hub) []Item {
+	var out []Item
+	for _, it := range h.State().Items {
+		if it.Source != "" {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+func TestFeedItemsSitBesideSessionItems(t *testing.T) {
+	h, _, _ := newHub(t)
+	if st := h.State(); st.Feeds == nil || len(st.Feeds) != 0 {
+		t.Errorf("Feeds = %v before any collection, want an empty map", st.Feeds)
+	}
+	h.SetRoster(agent, []Session{{ID: "s1", Agent: agent, Status: Waiting}})
+	in := found("gh-1", "acme/widgets")
+	in.SessionID, in.Source, in.Replies = "s1", "wrong", nil
+	h.SetFeed("github", []Item{in}, nil)
+
+	st := h.State()
+	if len(st.Items) != 2 || st.Items[0].SessionID != "s1" || st.Items[0].Source != "" {
+		t.Fatalf("items = %+v, want the session's and then the feed's", st.Items)
+	}
+	got, want := st.Items[1], found("gh-1", "acme/widgets")
+	want.Source, want.Replies = "github", []string{}
+	if got.Replies == nil || len(got.Replies) != 0 {
+		t.Errorf("Replies = %#v, want an empty list for the page to read", got.Replies)
+	}
+	got.Replies = []string{}
+	if got.SessionID != "" || got.Source != "github" || got.ID != want.ID || got.Title != want.Title || got.Ask != want.Ask || got.Summary != want.Summary ||
+		got.URL != want.URL || got.Repo != want.Repo || !got.At.Equal(want.At) || got.Kind != want.Kind || got.Urgency != want.Urgency || got.Effort != "" {
+		t.Errorf("feed item = %+v, want %+v", got, want)
+	}
+	if f := st.Feeds["github"]; f.Count != 1 || f.Error != "" || time.Since(f.At) > time.Minute {
+		t.Errorf("feed status = %+v", f)
+	}
+}
+
+func TestFeedsAreKeptApartAndReplaced(t *testing.T) {
+	h, _, _ := newHub(t)
+	h.SetFeed("jira", []Item{found("j-1", "")}, nil)
+	h.SetFeed("github", []Item{found("gh-1", "acme/a"), found("gh-2", "acme/b")}, nil)
+	if got := feedItems(h); len(got) != 3 || got[0].ID != "gh-1" || got[1].ID != "gh-2" || got[2].ID != "j-1" || got[2].Source != "jira" {
+		t.Fatalf("items = %+v, want each feed's, in a steady order", got)
+	}
+
+	h.SetFeed("github", []Item{found("gh-2", "acme/b")}, nil)
+	if got := feedItems(h); len(got) != 2 || got[0].ID != "gh-2" || got[1].ID != "j-1" {
+		t.Errorf("items = %+v, want the new collection to replace that feed's old one and leave the other", got)
+	}
+	if st := h.State(); st.Feeds["github"].Count != 1 || st.Feeds["jira"].Count != 1 {
+		t.Errorf("feeds = %+v", st.Feeds)
+	}
+
+	h.DropFeed("github")
+	st := h.State()
+	if _, kept := st.Feeds["github"]; kept || len(feedItems(h)) != 1 {
+		t.Errorf("after dropping github: feeds %+v, items %+v", st.Feeds, feedItems(h))
+	}
+}
+
+func TestFailedCollectionKeepsWhatWasFoundBefore(t *testing.T) {
+	h, _, _ := newHub(t)
+	h.SetFeed("github", nil, errors.New("gh: not signed in"))
+	if st := h.State(); st.Feeds["github"].Error != "gh: not signed in" || st.Feeds["github"].Count != 0 || len(feedItems(h)) != 0 {
+		t.Errorf("after a first failed collection: %+v", st.Feeds)
+	}
+
+	h.SetFeed("github", []Item{found("gh-1", "acme/a")}, nil)
+	if st := h.State(); st.Feeds["github"].Error != "" {
+		t.Errorf("a good collection left the old error: %+v", st.Feeds)
+	}
+	h.SetFeed("github", nil, errors.New("timed out"))
+	st := h.State()
+	if got := feedItems(h); len(got) != 1 || got[0].ID != "gh-1" {
+		t.Errorf("items = %+v, want what was found before the failure", got)
+	}
+	if f := st.Feeds["github"]; f.Error != "timed out" || f.Count != 1 {
+		t.Errorf("feed status = %+v, want the error and the count still shown", f)
+	}
+}
+
+func TestFeedItemsFileByRepository(t *testing.T) {
+	h, k, _ := newHub(t)
+	a, b := effort(t, k, "A"), effort(t, k, "B")
+	must(t, k.AddDir(a, "/work/a"))
+	must(t, k.AddDir(b, "/work/b"))
+	h.SetFeed("github", []Item{found("gh-1", "Acme/Widgets"), found("gh-2", "acme/gadgets"), found("gh-3", "acme/shared")}, nil)
+	filed := func() map[string][2]string {
+		out := map[string][2]string{}
+		for _, it := range feedItems(h) {
+			out[it.ID] = [2]string{it.Effort, it.EffortVia}
+		}
+		return out
+	}
+
+	if got := filed(); got["gh-1"] != [2]string{} || got["gh-2"] != [2]string{} {
+		t.Errorf("before any directory is known to hold a checkout: %v, want everything unsorted", got)
+	}
+
+	h.SetClones(map[string][]string{"/work/a": {"acme/other", "acme/widgets", "acme/shared"}, "/work/b": {"acme/shared"}, "/elsewhere": {"acme/gadgets"}})
+	got := filed()
+	if got["gh-1"] != [2]string{a, kb.ViaDir} {
+		t.Errorf("gh-1 = %v, want it under the one effort holding a checkout, whatever the case of the name", got["gh-1"])
+	}
+	if got["gh-2"] != [2]string{} {
+		t.Errorf("gh-2 = %v, want unsorted: its checkout is in no effort's directory", got["gh-2"])
+	}
+	if got["gh-3"] != [2]string{} {
+		t.Errorf("gh-3 = %v, want unsorted: two efforts hold a checkout", got["gh-3"])
+	}
+
+	must(t, k.AssignRepo("acme/shared", b))
+	must(t, k.AssignRepo("acme/widgets", ""))
+	h.Touch()
+	got = filed()
+	if got["gh-3"] != [2]string{b, kb.ViaUser} || got["gh-1"] != [2]string{"", kb.ViaUser} {
+		t.Errorf("after the user filed them: %v, want their choices over the rule", got)
+	}
+}
+
+func TestSessionItemsCarryTheirSessionsEffort(t *testing.T) {
+	h, k, _ := newHub(t)
+	a := effort(t, k, "A")
+	must(t, k.AddDir(a, "/work/a"))
+	h.SetRoster(agent, []Session{{ID: "s1", Agent: agent, Status: Waiting, Cwd: "/work/a"}, {ID: "s2", Agent: agent, Status: Waiting, Cwd: "/x"}})
+	for _, it := range h.State().Items {
+		want := map[string][2]string{"s1": {a, kb.ViaDir}, "s2": {}}[it.SessionID]
+		if got := [2]string{it.Effort, it.EffortVia}; got != want {
+			t.Errorf("item for %s filed %v, want %v", it.SessionID, got, want)
+		}
+	}
+}
+
+func TestFeedChangesAreAnnounced(t *testing.T) {
+	h, k, _ := newHub(t)
+	a := effort(t, k, "A")
+	must(t, k.AddDir(a, "/work/a"))
+	ticks, cancel := h.Subscribe()
+	defer cancel()
+	heard := func() bool {
+		select {
+		case <-ticks:
+			return true
+		case <-time.After(50 * time.Millisecond):
+			return false
+		}
+	}
+
+	h.SetFeed("github", []Item{found("gh-1", "acme/widgets")}, nil)
+	if !heard() {
+		t.Error("a collection was not announced")
+	}
+	h.SetFeed("github", []Item{found("gh-1", "acme/widgets")}, nil)
+	if !heard() {
+		t.Error("an identical collection was not announced, so the page would not show it was checked again")
+	}
+	h.SetFeed("github", nil, errors.New("down"))
+	if !heard() {
+		t.Error("a failed collection was not announced")
+	}
+	h.SetClones(map[string][]string{"/work/a": {"acme/widgets"}})
+	if !heard() {
+		t.Error("a checkout that files an item was not announced")
+	}
+	h.SetClones(map[string][]string{"/work/a": {"acme/widgets"}})
+	if heard() {
+		t.Error("an unchanged search of the directories was announced")
+	}
+	h.DropFeed("nope")
+	if heard() {
+		t.Error("dropping a feed that was never collected was announced")
+	}
+	h.DropFeed("github")
+	if !heard() {
+		t.Error("dropping a feed was not announced")
 	}
 }

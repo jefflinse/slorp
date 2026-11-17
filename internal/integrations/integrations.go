@@ -1,7 +1,8 @@
-// Package integrations gives the local model a fixed menu of read-only
-// lookups into the user's other tools. The model chooses a lookup and its
-// arguments; it never composes a command. Each lookup runs a fixed command
-// line, so nothing here can change anything in the tool it reads.
+// Package integrations reads the user's other tools, and never changes
+// anything in them. It gives the local model a fixed menu of lookups: the
+// model chooses one and its arguments, and never composes a command. It also
+// collects each tool's feed, the things there that need the user, with no
+// model involved. Every read is a fixed command line.
 package integrations
 
 import (
@@ -35,6 +36,38 @@ type Integration struct {
 	// Scope tells the model what can be looked up from dir, a session's
 	// working directory. ok is false when nothing can be.
 	Scope func(dir string) (note string, ok bool)
+	// Feed collects what needs the user right now. Nil when the tool has no feed.
+	Feed func(ctx context.Context) ([]FeedItem, error)
+	// Watches says, for the user, what the feed surfaces.
+	Watches []string
+	// Clones names the repositories, as feed items name them, checked out at
+	// dir or directly inside it.
+	Clones func(dir string) []string
+}
+
+// FeedItem is one thing in a tool that needs the user.
+type FeedItem struct {
+	// Key is the same from one collection to the next for as long as the same
+	// thing is needed, and changes when it is needed afresh.
+	Key     string
+	Kind    string
+	Urgency string
+	Title   string
+	Ask     string
+	// Summary states the facts the item rests on.
+	Summary string
+	URL     string
+	// Repo is the repository the item belongs to, as "owner/name".
+	Repo string
+	At   time.Time
+}
+
+// Feed is one integration's feed as a poller sees it.
+type Feed struct {
+	ID string
+	// On is true while the integration is turned on and usable.
+	On    bool
+	Fetch func(ctx context.Context) ([]FeedItem, error)
 }
 
 // Status is an integration as the UI shows it.
@@ -46,6 +79,7 @@ type Status struct {
 	Detail    string   `json:"detail"`
 	Enabled   bool     `json:"enabled"`
 	Lookups   []string `json:"lookups"`
+	Watches   []string `json:"watches"`
 }
 
 const checkEvery = time.Minute
@@ -109,7 +143,7 @@ func (m *Manager) Status(ctx context.Context) []Status {
 	out := []Status{}
 	for _, in := range m.list {
 		c := m.check(ctx, in)
-		s := Status{ID: in.ID, Name: in.Name, About: in.About, Available: c.ok, Detail: c.detail, Enabled: enabled[in.ID], Lookups: []string{}}
+		s := Status{ID: in.ID, Name: in.Name, About: in.About, Available: c.ok, Detail: c.detail, Enabled: enabled[in.ID], Lookups: []string{}, Watches: append([]string{}, in.Watches...)}
 		for _, t := range in.Tools {
 			s.Lookups = append(s.Lookups, t.Description)
 		}
@@ -133,4 +167,35 @@ func (m *Manager) Offer(ctx context.Context, dir string) (tools []Tool, notes []
 		}
 	}
 	return tools, notes
+}
+
+// Feeds lists every integration that has a feed, on or off.
+func (m *Manager) Feeds(ctx context.Context) []Feed {
+	enabled := m.Enabled()
+	var out []Feed
+	for _, in := range m.list {
+		if in.Feed != nil {
+			out = append(out, Feed{ID: in.ID, On: enabled[in.ID] && m.check(ctx, in).ok, Fetch: in.Feed})
+		}
+	}
+	return out
+}
+
+// Clones maps each of dirs to the repositories checked out there, as the
+// integrations that are turned on name them. Directories holding none are
+// left out.
+func (m *Manager) Clones(dirs []string) map[string][]string {
+	enabled := m.Enabled()
+	out := map[string][]string{}
+	for _, in := range m.list {
+		if !enabled[in.ID] || in.Clones == nil {
+			continue
+		}
+		for _, d := range dirs {
+			if found := in.Clones(d); len(found) > 0 {
+				out[d] = append(out[d], found...)
+			}
+		}
+	}
+	return out
 }

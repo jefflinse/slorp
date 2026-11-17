@@ -16,8 +16,16 @@ import (
 	"github.com/jefflinse/slorp/internal/kb"
 )
 
+// Feeds is what the server asks of whatever collects the integrations' feeds.
+type Feeds interface {
+	// Check collects every feed now.
+	Check()
+	// Rescan looks again at which repositories the efforts' directories hold.
+	Rescan()
+}
+
 // New returns the handler. uiPath is the page served at /.
-func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, uiPath string) http.Handler {
+func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, uiPath string) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
@@ -80,6 +88,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, uiPath string) http.H
 			return
 		}
 		h.Touch()
+		feeds.Rescan()
 		w.WriteHeader(http.StatusNoContent)
 	}
 
@@ -129,6 +138,23 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, uiPath string) http.H
 			return
 		}
 		edited(w, k.Assign(r.PathValue("id"), in.Effort))
+	})
+
+	mux.HandleFunc("POST /api/repos/effort", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Repo   string `json:"repo"`
+			Effort string `json:"effort"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		edited(w, k.AssignRepo(in.Repo, in.Effort))
+	})
+
+	mux.HandleFunc("POST /api/feed/check", func(w http.ResponseWriter, r *http.Request) {
+		m.Recheck()
+		feeds.Check()
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	mux.HandleFunc("POST /api/bridge/poll", func(w http.ResponseWriter, r *http.Request) {
@@ -257,6 +283,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, uiPath string) http.H
 		}
 		m.Recheck()
 		h.SetIntegration(r.PathValue("id"), in.Enabled)
+		feeds.Check()
 		w.WriteHeader(http.StatusNoContent)
 	})
 

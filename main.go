@@ -16,6 +16,7 @@ import (
 
 	"github.com/jefflinse/slorp/internal/claude"
 	"github.com/jefflinse/slorp/internal/enrich"
+	"github.com/jefflinse/slorp/internal/feed"
 	"github.com/jefflinse/slorp/internal/hub"
 	"github.com/jefflinse/slorp/internal/integrations"
 	"github.com/jefflinse/slorp/internal/kb"
@@ -88,7 +89,15 @@ func main() {
 		go (&enrich.Enricher{Hub: h, BaseURL: *llm, Model: *model, Offer: tools.Offer}).Run(ctx)
 	}
 
-	srv := &http.Server{Addr: *addr, Handler: server.New(h, k, tools, *ui)}
+	poller := feed.New(h, tools, func() (dirs []string) {
+		for _, e := range k.Efforts() {
+			dirs = append(dirs, e.Dirs...)
+		}
+		return dirs
+	})
+	go poller.Run(ctx)
+
+	srv := &http.Server{Addr: *addr, Handler: server.New(h, k, tools, poller, *ui)}
 	go func() {
 		<-ctx.Done()
 		srv.Close()

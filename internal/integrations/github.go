@@ -108,6 +108,9 @@ func GitHub(run Runner) Integration {
 				return "GitHub lookups read one of the repositories in the session's directory, which you must name: " + strings.Join(found, ", ") + ".", true
 			}
 		},
+		Feed:    githubFeed(run),
+		Watches: githubWatches,
+		Clones:  clones,
 		Tools: []Tool{
 			{
 				Name:        "github_pr",
