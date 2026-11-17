@@ -112,6 +112,9 @@ func TestTailReadsIncrementally(t *testing.T) {
 	if tl.lastPrompt != "and then?" || tl.lastReply != "second" {
 		t.Errorf("after a later append: prompt %q reply %q", tl.lastPrompt, tl.lastReply)
 	}
+	if fi, _ := os.Stat(path); tl.offset != fi.Size() {
+		t.Errorf("offset = %d of %d bytes; the next read would start over", tl.offset, fi.Size())
+	}
 }
 
 func TestTailSurvivesAMissingOrReplacedFile(t *testing.T) {

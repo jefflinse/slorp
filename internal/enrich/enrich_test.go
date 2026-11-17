@@ -47,7 +47,6 @@ func (f *fakeLLM) enricher(t *testing.T) *Enricher {
 			}
 			if f.status != 0 {
 				w.WriteHeader(f.status)
-				return
 			}
 			json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": f.content}}}})
 		default:
@@ -147,7 +146,7 @@ func TestAskReportsFailuresAsErrors(t *testing.T) {
 		name string
 		llm  fakeLLM
 	}{
-		{"server error", fakeLLM{status: 500}},
+		{"server error, whatever its body says", fakeLLM{status: 500, content: `{"title":"t","summary":"s","kind":"none","ask":"","replies":[]}`}},
 		{"reply is not the JSON asked for", fakeLLM{content: "Sure! Here is a summary."}},
 		{"reply is empty", fakeLLM{content: ""}},
 	}

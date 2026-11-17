@@ -355,4 +355,8 @@ func TestEventsStreamAnnouncesChanges(t *testing.T) {
 	if got := read(); got != "data: change\n\n" {
 		t.Errorf("after a change, event = %q", got)
 	}
+	f.post("/api/efforts", `{"name":"A"}`)
+	if got := read(); got != "data: change\n\n" {
+		t.Errorf("after a knowledge base edit, event = %q", got)
+	}
 }

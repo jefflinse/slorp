@@ -544,6 +544,39 @@ func TestRequestSettledOutsideSlorp(t *testing.T) {
 		assertRetired(t, h, p.ID)
 	})
 
+	// A bridge already blocked in Await must be woken, not left to time out.
+	woken := func(t *testing.T, settle func(h *Hub, id string)) {
+		t.Helper()
+		h, _, _ := newHub(t)
+		p := h.Ask(agent, "s1", Pending{Tool: "Bash"}, true)
+		got := make(chan Decision, 1)
+		go func() {
+			dec, _ := h.Await(ctx, p.ID, 5*time.Second)
+			got <- dec
+		}()
+		time.Sleep(20 * time.Millisecond)
+		settle(h, p.ID)
+		select {
+		case dec := <-got:
+			if dec.Behavior != Terminal {
+				t.Errorf("the waiting bridge was told %+v", dec)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("the waiting bridge was left waiting")
+		}
+	}
+	t.Run("a waiting bridge hears that the bridge reported it done", func(t *testing.T) {
+		woken(t, func(h *Hub, id string) { h.Done(id) })
+	})
+	t.Run("a waiting bridge hears that the roster moved on", func(t *testing.T) {
+		woken(t, func(h *Hub, id string) {
+			h.mu.Lock()
+			h.sessions["s1"].Pending.At = time.Now().Add(-time.Minute)
+			h.mu.Unlock()
+			h.SetRoster(agent, []Session{{ID: "s1", Agent: agent, Status: Working}})
+		})
+	})
+
 	t.Run("a request the roster has not caught up with is kept", func(t *testing.T) {
 		h, _, _ := newHub(t)
 		p := h.Ask(agent, "s1", Pending{Tool: "Bash"}, true)
