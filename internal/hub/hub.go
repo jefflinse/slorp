@@ -11,6 +11,7 @@ import (
 	"log"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -88,6 +89,8 @@ type Unrouted struct {
 	Session Session
 	Key     string
 	Efforts []kb.Effort
+	// Hints are the user's standing context and routing hints.
+	Hints []string
 }
 
 // Unnoted is an effort whose sessions have changed since its note was written.
@@ -95,6 +98,9 @@ type Unnoted struct {
 	Effort  kb.Effort
 	Members []Session
 	Key     string
+	Context []string
+	// Questions are what the user has left undecided about this effort.
+	Questions []string
 }
 
 // Insight is a model-written description of a session's current state.
@@ -138,6 +144,8 @@ type Summarizer struct {
 type Undescribed struct {
 	Session Session
 	Key     string
+	// Context is the user's standing context.
+	Context []string
 }
 
 // Pending is a permission request a session is blocked on.
@@ -450,18 +458,19 @@ func (h *Hub) Sessions() []Session {
 
 // State is everything the web UI draws.
 type State struct {
-	Sessions   []Session  `json:"sessions"`
-	Items      []Item     `json:"items"`
-	Efforts    []Effort   `json:"efforts"`
-	Summarizer Summarizer `json:"summarizer"`
-	Settings   Settings   `json:"settings"`
+	Sessions   []Session    `json:"sessions"`
+	Items      []Item       `json:"items"`
+	Efforts    []Effort     `json:"efforts"`
+	Summarizer Summarizer   `json:"summarizer"`
+	Settings   Settings     `json:"settings"`
+	Knowledge  kb.Knowledge `json:"knowledge"`
 }
 
 func (h *Hub) State() State {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	sessions := h.snapshot()
-	return State{sessions, items(sessions), h.efforts(sessions), h.summ, h.settings}
+	return State{sessions, items(sessions), h.efforts(sessions), h.summ, h.settings, h.kb.Knowledge()}
 }
 
 func (h *Hub) efforts(sessions []Session) []Effort {
@@ -505,7 +514,8 @@ func (h *Hub) Unrouted() []Unrouted {
 			continue
 		}
 		if _, _, ok := h.kb.Resolve(s.ID, s.Cwd); !ok {
-			out = append(out, Unrouted{Session: *s, Key: h.routeKey(s), Efforts: efforts})
+			know := h.kb.Knowledge()
+			out = append(out, Unrouted{Session: *s, Key: h.routeKey(s), Efforts: efforts, Hints: append(texts(know.Context), texts(know.Routing)...)})
 		}
 	}
 	return out
@@ -528,10 +538,18 @@ func (h *Hub) Unnoted() []Unnoted {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	sessions := h.snapshot()
+	know := h.kb.Knowledge()
 	var out []Unnoted
 	for _, e := range h.kb.Efforts() {
 		var members []Session
+		var questions []string
 		key := e.Name + "\x00" + e.About
+		for _, q := range know.Questions {
+			if q.Effort == e.ID {
+				questions = append(questions, q.Text)
+				key += "\x00?" + q.Text
+			}
+		}
 		for _, s := range sessions {
 			if s.Effort == e.ID && s.Insight != nil {
 				members = append(members, s)
@@ -540,7 +558,7 @@ func (h *Hub) Unnoted() []Unnoted {
 		}
 		sum := sha1.Sum([]byte(key))
 		if k := hex.EncodeToString(sum[:]); len(members) > 0 && h.notes[e.ID].Key != k {
-			out = append(out, Unnoted{Effort: e, Members: members, Key: k})
+			out = append(out, Unnoted{Effort: e, Members: members, Key: k, Context: texts(know.Context), Questions: questions})
 		}
 	}
 	return out
@@ -564,7 +582,7 @@ func (h *Hub) Undescribed() []Undescribed {
 	for _, s := range h.sessions {
 		hasContent := s.LastReply != "" || s.Pending != nil
 		if hasContent && s.key != s.insightKey && time.Since(s.keySince) >= quiet && (s.Status != Working || s.Pending != nil) {
-			out = append(out, Undescribed{Session: *s, Key: s.key})
+			out = append(out, Undescribed{Session: *s, Key: s.key, Context: texts(h.kb.Knowledge().Context)})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Session.ActiveAt.After(out[j].Session.ActiveAt) })
@@ -592,6 +610,29 @@ func (h *Hub) SetSummarizer(s Summarizer) {
 	}
 }
 
+// described reports whether the session's insight was written about what it
+// is showing now. An insight written under older standing context still
+// counts, so that editing the context does not blank everything it replaces.
+func (s *Session) described() bool {
+	return s.Insight != nil && contentOf(s.insightKey) == contentOf(s.key)
+}
+
+// contentOf strips the standing-context revision from a content key.
+func contentOf(key string) string {
+	if i := strings.LastIndexByte(key, ':'); i >= 0 {
+		return key[:i]
+	}
+	return key
+}
+
+func texts(facts []kb.Fact) []string {
+	out := make([]string, len(facts))
+	for i, f := range facts {
+		out[i] = f.Text
+	}
+	return out
+}
+
 // contentKey identifies what a session is currently showing the user.
 func contentKey(s *Session) string {
 	state, pending := "open", ""
@@ -616,7 +657,7 @@ func items(sessions []Session) []Item {
 		if it.Title == "" {
 			it.Title = s.Name
 		}
-		fresh := s.Insight != nil && s.insightKey == s.key
+		fresh := s.described()
 		if fresh {
 			it.Title, it.Summary, it.Ask = s.Insight.Title, s.Insight.Summary, s.Insight.Ask
 		}
@@ -749,8 +790,9 @@ func (h *Hub) Subscribe() (<-chan struct{}, func()) {
 
 func (h *Hub) changed() {
 	now := time.Now()
+	context := ":" + strconv.Itoa(h.kb.ContextRevision())
 	for _, s := range h.sessions {
-		if k := contentKey(s); k != s.key {
+		if k := contentKey(s) + context; k != s.key {
 			s.key, s.keySince = k, now
 		}
 	}

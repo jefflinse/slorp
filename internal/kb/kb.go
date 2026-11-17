@@ -36,8 +36,13 @@ const docKind, docID = "kb", "main"
 
 type file struct {
 	Efforts []Effort `json:"efforts"`
-	// Revision counts changes to the set of efforts or their descriptions.
-	Revision int `json:"revision"`
+	// Revision counts changes to what the model reads when it files a
+	// session: the efforts, their descriptions and the routing hints.
+	Revision        int `json:"revision"`
+	ContextRevision int `json:"contextRevision"`
+	// Seq numbers knowledge entries.
+	Seq       int       `json:"seq"`
+	Knowledge Knowledge `json:"knowledge"`
 	// Assignments maps a session ID to the effort the user filed it under;
 	// an empty effort means the user chose to leave it unsorted.
 	Assignments map[string]string `json:"assignments"`
@@ -72,7 +77,7 @@ func (s *Store) Efforts() []Effort {
 	return out
 }
 
-// Revision changes whenever the set of efforts or their descriptions change.
+// Revision changes whenever what the model reads to file a session changes.
 func (s *Store) Revision() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -112,6 +117,7 @@ func (s *Store) Delete(id string) error {
 			delete(s.f.Assignments, session)
 		}
 	}
+	s.f.Knowledge.forget(id)
 	s.f.Revision++
 	return s.save()
 }

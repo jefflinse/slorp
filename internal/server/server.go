@@ -105,6 +105,18 @@ func New(h *hub.Hub, k *kb.Store, uiPath string) http.Handler {
 		edited(w, k.AddDir(r.PathValue("id"), in.Dir))
 	})
 
+	mux.HandleFunc("POST /api/kb/{section}", func(w http.ResponseWriter, r *http.Request) {
+		var in kb.Entry
+		if !readJSON(w, r, &in) {
+			return
+		}
+		edited(w, k.Add(r.PathValue("section"), in))
+	})
+
+	mux.HandleFunc("DELETE /api/kb/{section}/{id}", func(w http.ResponseWriter, r *http.Request) {
+		edited(w, k.Remove(r.PathValue("section"), r.PathValue("id")))
+	})
+
 	mux.HandleFunc("POST /api/sessions/{id}/effort", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Effort string `json:"effort"`

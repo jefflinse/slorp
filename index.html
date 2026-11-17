@@ -195,7 +195,6 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
 .tbl tr.s.open td { border-bottom-color: transparent; }
 .st { white-space: nowrap; font-size: 12.5px; color: var(--ink2); }
 
-.mocktag { margin-left: 6px; padding: 0 5px; border: 1px solid var(--line); border-radius: 4px; font-size: 10px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink3); }
 .livebox { margin: 12px 0 16px; max-width: 760px; }
 .livebox textarea { display: block; width: 100%; min-height: 60px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); resize: vertical; line-height: 1.45; }
 .livebox .send { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; color: var(--ink3); font-size: 12px; }
@@ -737,6 +736,10 @@ function effortDetailLive(e) {
         <div class="body"><div class="ttl">${esc(clip(x.insight?.title || x.title || x.name, 90))}</div>
           <div class="sub">${(LIVE_STATUS[x.status] || LIVE_STATUS.idle)[1]} · <span class="mono">${esc(shortPath(x.cwd))}</span>${x.effortVia ? ` · ${VIA[x.effortVia]}` : ''}</div></div>
         ${moveSelect(x)}</div>`).join('') : '<div class="none">None.</div>'}</div>
+    ${real ? `<div class="sec"><div class="label"><span>Open questions (${knowledge.questions.filter(q => q.effort === e.id).length})</span><button data-act="kbGo" data-s="questions">Manage ›</button></div>
+      ${knowledge.questions.filter(q => q.effort === e.id).map(q => `<div class="srow"><div class="body">${esc(q.text)}</div><span class="side">${ago(minsSince(q.at))}</span></div>`).join('') || '<div class="none">None recorded.</div>'}</div>
+    ${knowledge.watch.some(w => w.efforts.includes(e.id)) ? `<div class="sec"><div class="label"><span>Watching</span><button data-act="kbGo" data-s="watch">Manage ›</button></div>
+      ${knowledge.watch.filter(w => w.efforts.includes(e.id)).map(w => `<div class="srow"><div class="body"><b>${esc(w.name)}</b><div class="sub">${esc(w.why)}</div></div></div>`).join('')}</div>` : ''}` : ''}
     ${real ? `<div class="sec"><div class="label"><span>Directories filed here automatically</span></div>
       ${e.dirs.length ? e.dirs.map(d => `<div class="none mono">${esc(tilde(d))}</div>`).join('') : '<div class="none">None yet. Move a session here and choose to remember its directory.</div>'}</div>
     <div class="bar" style="margin-top:34px"><button class="btn quiet" data-act="effortDelete" data-id="${e.id}">Delete this effort</button></div>` : ''}
@@ -756,8 +759,8 @@ function viewEffortsLive() {
   return `<div class="split">
     <section class="pane list" data-scroll="eff-list"><div class="listbar"><span class="label">Work efforts</span></div>${rows}
       <form class="add" data-form="effort" style="padding:16px 18px;border-top:0">
-        <input name="name" placeholder="New effort, e.g. Snapshot store" required style="flex-basis:100%">
-        <input name="about" placeholder="One line on what it covers" style="flex-basis:100%">
+        <input name="name" data-keep="effort-name" placeholder="New effort, e.g. Snapshot store" required style="flex-basis:100%">
+        <input name="about" data-keep="effort-about" placeholder="One line on what it covers" style="flex-basis:100%">
         <button class="btn go">Add effort</button>
         <p class="none" style="width:100%">${liveEfforts.length ? 'The description is what the model reads when it files sessions.' : 'Declare an effort and Slorp will start filing sessions under it.'}</p>
       </form></section>
@@ -822,6 +825,7 @@ function viewActivity() {
    service's session list; everything outside Activity is still mock data. */
 
 let live = null, liveItems = [], liveEfforts = [], summarizer = {}, settings = {}, isOffline = false;
+let knowledge = { watch: [], questions: [], context: [], routing: [] };
 const LIVE_STATUS = { waiting: ['waiting', 'waiting on you'], failed: ['error', 'failed'], working: ['running', 'working'], idle: ['idle', 'idle'], done: ['done', 'finished'] };
 const minsSince = iso => Math.max(0, (Date.now() - new Date(iso).getTime()) / 60000);
 const tilde = p => p.replace(/^\/Users\/[^/]+/, '~');
@@ -838,12 +842,11 @@ async function refresh(force) {
     liveItems = toItems(data);
     summarizer = data.summarizer || {};
     settings = data.settings || {};
+    knowledge = data.knowledge || knowledge;
     isOffline = false;
   } catch (e) { isOffline = live !== null; }
-  if (force || state.view !== 'knowledge') render();
+  render();
 }
-
-const projectOf = s => s.cwd.split('/').filter(Boolean).pop() || s.cwd;
 
 /* Server items take the mock items' shape so the Attention pane draws both. */
 function toItems(data) {
@@ -894,6 +897,7 @@ function liveItemDetail(it) {
       <button class="btn" data-act="snooze" data-id="${it.id}" data-for="hour">Snooze 1h</button>
       <button class="btn" data-act="snooze" data-id="${it.id}" data-for="tomorrow">Until tomorrow</button>
       <button class="btn" data-act="dismiss" data-id="${it.id}">Dismiss</button>
+      ${s.pending ? '' : `<button class="btn" data-act="livePark" data-id="${it.id}">Park as open question</button>`}
       ${moveSelect(s)}
     </div>
     <div class="sec"><div class="label"><span>${it.summary ? spark : ''}What's going on</span></div>
@@ -971,34 +975,42 @@ function viewActivityLive() {
 
 /* ───────────────────────── Knowledge base ───────────────────────── */
 
-const effortOptions = () => EFFORTS.map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join('');
+const effortOptions = () => (live ? '<option value="">No effort</option>' : '') + (live ? liveEfforts : EFFORTS).map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join('');
 const GLYPH = { person: '@', channel: '#', dm: '✉' };
 
+const KB_LIVE_LEDE = {
+  watch: 'People, channels and DMs worth checking for each effort, and why. This list is saved, but nothing reads Slack yet, so it does not surface anything on its own.',
+  questions: 'Things you have not decided yet. They show under their effort, and the model reads them when it writes that effort\'s status.',
+  context: 'Facts the model should always know. It reads them before describing any session, so changing one re-describes everything.',
+  routing: 'Plain-language notes on how to file things, read by the model when it guesses an effort. Directories that file automatically are listed under each effort.',
+};
+const kbData = () => live ? knowledge : state.kb;
+
 function kbBody(sec) {
-  const list = state.kb[sec];
+  const list = kbData()[sec];
   const rm = id => `<button class="x" data-act="kbRemove" data-sec="${sec}" data-id="${id}" title="Remove" aria-label="Remove">×</button>`;
   if (sec === 'watch') return list.map(w => `<div class="card"><span class="glyph">${GLYPH[w.type]}</span>
       <div class="body"><div class="nm">${esc(w.name)}</div><div class="why">${esc(w.why)}</div>
       ${w.seen ? `<div class="seen">${spark}${esc(w.seen)} <span class="dim" style="color:var(--ink3)">${ago(w.seenAge)}</span></div>` : ''}
-      <div class="meta"><span>checked ${esc(w.cadence)}</span>${w.efforts.map(id => `<button class="link" data-act="effort" data-id="${id}">${esc(effortById(id).name)}</button>`).join('')}</div></div>${rm(w.id)}</div>`).join('')
-    + `<form class="add" data-form="watch"><select name="type" aria-label="Type"><option value="person">Person</option><option value="channel">Channel</option><option value="dm">DM</option></select>
-      <input name="name" placeholder="Name or #channel" required><input name="why" placeholder="Why it's worth watching" required>
-      <select name="effort" aria-label="Effort">${effortOptions()}</select><button class="btn go">Add</button></form>`;
+      <div class="meta">${w.cadence ? `<span>checked ${esc(w.cadence)}</span>` : ''}${w.efforts.map(id => `<button class="link" data-act="effort" data-id="${id}">${esc(effortById(id).name)}</button>`).join('')}</div></div>${rm(w.id)}</div>`).join('')
+    + `<form class="add" data-form="watch"><select name="type" data-keep="kb-watch-type" aria-label="Type"><option value="person">Person</option><option value="channel">Channel</option><option value="dm">DM</option></select>
+      <input name="name" data-keep="kb-watch-name" placeholder="Name or #channel" required><input name="why" data-keep="kb-watch-why" placeholder="Why it's worth watching" required>
+      <select name="effort" data-keep="kb-watch-effort" aria-label="Effort">${effortOptions()}</select><button class="btn go">Add</button></form>`;
   if (sec === 'questions') return list.map(q => `<div class="card"><input type="checkbox" data-change="kbResolve" data-id="${q.id}" aria-label="Mark resolved">
       <div class="body"><div class="q">${esc(q.text)}</div>
-      <div class="meta"><button class="link" data-act="effort" data-id="${q.effort}">${esc(effortById(q.effort).name)}</button><span>${ago(q.age)}</span><span>${esc(q.origin)}</span></div></div>${rm(q.id)}</div>`).join('')
-    + `<form class="add" data-form="questions"><input name="text" placeholder="Something you haven't decided yet" required>
-      <select name="effort" aria-label="Effort">${effortOptions()}</select><button class="btn go">Add</button></form>`;
+      <div class="meta">${q.effort ? `<button class="link" data-act="effort" data-id="${q.effort}">${esc(effortById(q.effort).name)}</button>` : '<span>no effort</span>'}<span>${ago(q.at ? minsSince(q.at) : q.age)}</span><span>${esc(q.origin)}</span></div></div>${rm(q.id)}</div>`).join('')
+    + `<form class="add" data-form="questions"><input name="text" data-keep="kb-questions-text" placeholder="Something you haven't decided yet" required>
+      <select name="effort" data-keep="kb-questions-effort" aria-label="Effort">${effortOptions()}</select><button class="btn go">Add</button></form>`;
   return list.map(c => `<div class="card fact"><div class="body"><div class="q">${esc(c.text)}</div></div>${rm(c.id)}</div>`).join('')
-    + `<form class="add" data-form="${sec}"><input name="text" placeholder="${sec === 'context' ? 'A fact the summarizer should always know' : 'A rule for filing things under efforts'}" required><button class="btn go">Add</button></form>`;
+    + `<form class="add" data-form="${sec}"><input name="text" data-keep="kb-${sec}-text" placeholder="${sec === 'context' ? 'A fact the summarizer should always know' : 'A rule for filing things under efforts'}" required><button class="btn go">Add</button></form>`;
 }
 
 function viewKnowledge() {
-  const nav = Object.entries(KB_SECTIONS).map(([k, s]) => `<button class="${state.kbSel === k ? 'on' : ''}" data-act="kbSel" data-s="${k}">${s.name}<span>${state.kb[k].length}</span></button>`).join('');
+  const nav = Object.entries(KB_SECTIONS).map(([k, s]) => `<button class="${state.kbSel === k ? 'on' : ''}" data-act="kbSel" data-s="${k}">${s.name}<span>${kbData()[k].length}</span></button>`).join('');
   const s = KB_SECTIONS[state.kbSel];
   return `<div class="split narrow">
     <section class="pane list kbnav"><div class="label">Knowledge base</div>${nav}</section>
-    <section class="pane detail" data-scroll="kb-${state.kbSel}"><div class="inner"><h1>${s.name}</h1><p class="lede">${s.lede}</p>${kbBody(state.kbSel)}</div></section>
+    <section class="pane detail" data-scroll="kb-${state.kbSel}"><div class="inner"><h1>${s.name}</h1><p class="lede">${live ? KB_LIVE_LEDE[state.kbSel] : s.lede}</p>${kbBody(state.kbSel)}</div></section>
   </div>`;
 }
 
@@ -1010,14 +1022,14 @@ function render() {
   const scrolls = {};
   document.querySelectorAll('[data-scroll]').forEach(el => { scrolls[el.dataset.scroll] = el.scrollTop; });
   const drafts = {};
-  document.querySelectorAll('textarea[data-keep]').forEach(el => { drafts[el.dataset.keep] = el.value; });
+  document.querySelectorAll('[data-keep]').forEach(el => { drafts[el.dataset.keep] = el.value; });
   const focused = document.activeElement?.dataset?.keep, caret = focused && [document.activeElement.selectionStart, document.activeElement.selectionEnd];
   const menuOpen = $('#menu')?.open;
 
   document.documentElement.dataset.theme = state.theme;
   const main = RENDER[state.view]();  // first: it may settle the selection
   const n = activeItems().length;
-  $('#nav').innerHTML = VIEWS.map(v => `<button class="${state.view === v ? 'on' : ''}" data-act="view" data-view="${v}">${cap(v)}${v === 'attention' && n ? `<span class="count">${n}</span>` : ''}${live && v === 'knowledge' ? '<span class="mocktag">mock</span>' : ''}</button>`).join('');
+  $('#nav').innerHTML = VIEWS.map(v => `<button class="${state.view === v ? 'on' : ''}" data-act="view" data-view="${v}">${cap(v)}${v === 'attention' && n ? `<span class="count">${n}</span>` : ''}</button>`).join('');
   $('#tools').innerHTML = `
     <span class="model"><span class="dot ${live && isOffline ? 'error' : 'running'}"></span>${live ? (isOffline ? 'service offline' : `live · ${summarizer.model ? summarizer.model.split('/').pop() : summarizer.error || 'no local model'}`) : 'qwen3:14b · local · caught up'}</span>
     <span class="seg" role="group" aria-label="Voice" title="Fluent shows what the model wrote. Raw shows what the sources said. (r)">
@@ -1026,15 +1038,15 @@ function render() {
     <details class="menu" id="menu" ${menuOpen ? 'open' : ''}><summary class="icon" title="Prototype controls" aria-label="Prototype controls">⋯</summary>
       <div class="pop"><p>Prototype controls</p>
         ${live ? `<button data-act="toggleHold">Permission prompts: ${settings.answerPermissions ? 'Slorp or terminal' : 'terminal only'}</button>` : ''}
-        <button data-act="simulate">Simulate an incoming item</button>
+        ${live ? '' : '<button data-act="simulate">Simulate an incoming item</button>'}
         <button data-act="reset">Reset the demo</button>
         <p>Keys: j/k move · e dismiss · s snooze · r fluent/raw · 1–4 views</p></div></details>`;
   $('#main').innerHTML = main;
 
   document.querySelectorAll('[data-scroll]').forEach(el => { if (scrolls[el.dataset.scroll]) el.scrollTop = scrolls[el.dataset.scroll]; });
-  document.querySelectorAll('textarea[data-keep]').forEach(el => {
+  document.querySelectorAll('[data-keep]').forEach(el => {
     if (el.dataset.keep in drafts) el.value = drafts[el.dataset.keep];
-    if (el.dataset.keep === focused) { el.focus(); el.setSelectionRange(caret[0], caret[1]); }
+    if (el.dataset.keep === focused) { el.focus(); if (el.setSelectionRange && caret[0] != null) el.setSelectionRange(caret[0], caret[1]); }
   });
   freshId = null;
 }
@@ -1090,8 +1102,15 @@ const actions = {
   kbSel: d => { state.kbSel = d.s; },
   kbGo: d => { state.kbSel = d.s; go('knowledge'); },
   kbRemove: d => {
+    if (live) { api('DELETE', `/api/kb/${d.sec}/${d.id}`, null, () => toast('Removed')); return false; }
     const list = state.kb[d.sec], i = list.findIndex(x => x.id === d.id), gone = list.splice(i, 1)[0];
     toast('Removed', () => { state.kb[d.sec].splice(i, 0, gone); });
+  },
+  livePark: d => {
+    const it = itemById(d.id);
+    api('POST', '/api/kb/questions', { text: it.ask || it.title, effort: it.session.effort || '', origin: `parked from "${it.title}"` },
+      () => { resolve(d.id, 'parked'); toast('Parked as an open question'); save(); });
+    return false;
   },
   livePermit: d => {
     const note = document.querySelector(`textarea[data-keep="deny-${d.id}"]`);
@@ -1155,6 +1174,7 @@ const changes = {
     toast(`Moved to ${effortById(el.value).name}`, () => { if (prev) state.moved[d.id] = prev; else delete state.moved[d.id]; });
   },
   kbResolve: d => {
+    if (live) { api('DELETE', `/api/kb/questions/${d.id}`, null, () => toast('Resolved')); return false; }
     const i = state.kb.questions.findIndex(q => q.id === d.id), gone = state.kb.questions.splice(i, 1)[0];
     toast('Resolved', () => { state.kb.questions.splice(i, 0, gone); });
   },
@@ -1175,7 +1195,9 @@ document.addEventListener('submit', e => {
   if (!form) return;
   e.preventDefault();
   const f = Object.fromEntries(new FormData(form)), sec = form.dataset.form, id = sec[0] + (++state.seq);
-  if (sec === 'effort') { api('POST', '/api/efforts', { name: f.name, about: f.about }); form.reset(); return; }
+  const clear = () => form.querySelectorAll('input').forEach(el => { el.value = ''; });
+  if (sec === 'effort') { api('POST', '/api/efforts', { name: f.name, about: f.about }); clear(); return; }
+  if (live) { api('POST', `/api/kb/${sec}`, { ...f, origin: 'you wrote this down' }); clear(); return; }
   if (sec === 'watch') state.kb.watch.push({ id, type: f.type, name: f.name, why: f.why, efforts: [f.effort], cadence: 'daily', seen: '', seenAge: 0 });
   else if (sec === 'questions') state.kb.questions.unshift({ id, text: f.text, effort: f.effort, age: 0, origin: 'you wrote this down' });
   else state.kb[sec].push({ id, text: f.text });

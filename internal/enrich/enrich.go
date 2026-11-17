@@ -71,7 +71,7 @@ func (e *Enricher) next() (key, what string, job func(context.Context, string) e
 	for _, w := range e.Hub.Undescribed() {
 		if ready(w.Key) {
 			return w.Key, "describe " + w.Session.Name, func(ctx context.Context, model string) error {
-				in, err := e.describe(ctx, model, w.Session)
+				in, err := e.describe(ctx, model, w)
 				if err == nil {
 					e.Hub.SetInsight(w.Session.ID, w.Key, in)
 				}
@@ -119,6 +119,7 @@ func (e *Enricher) route(ctx context.Context, model string, w hub.Unrouted) (str
 	s := w.Session
 	fmt.Fprintf(&b, "\nSession:\nProject directory: %s\nGit branch: %s\nTitle: %s\nSummary: %s\nThe developer's last message: %s",
 		filepath.Base(s.Cwd), orNone(s.Branch), s.Insight.Title, s.Insight.Summary, orNone(s.LastPrompt))
+	knowing(&b, "The developer's own notes on how to file things:", w.Hints)
 	schema, _ := json.Marshal(map[string]any{"type": "object", "additionalProperties": false, "required": []string{"effort"},
 		"properties": map[string]any{"effort": map[string]any{"type": "string", "enum": ids}}})
 	var out struct {
@@ -151,6 +152,8 @@ func (e *Enricher) note(ctx context.Context, model string, w hub.Unnoted) (hub.N
 		fmt.Fprintf(&b, "- %s (%s, branch %s): %s Needs from the developer: %s\n",
 			s.Insight.Title, status(s), orNone(s.Branch), s.Insight.Summary, orNone(s.Insight.Ask))
 	}
+	knowing(&b, "Questions the developer has left open about this effort; mention one only if the sessions now depend on it:", w.Questions)
+	knowing(&b, "What the developer wants you to keep in mind:", w.Context)
 	var n hub.Note
 	err := e.ask(ctx, model, noteSystem, b.String(), "note", noteSchema, &n)
 	n.Line = strings.TrimSuffix(strings.TrimSpace(n.Line), ".")
@@ -200,7 +203,19 @@ var schema = json.RawMessage(`{"type":"object","additionalProperties":false,"req
 "kind":{"type":"string","enum":["question","permission","review","none"]},
 "ask":{"type":"string"},"replies":{"type":"array","items":{"type":"string"},"maxItems":3}}}`)
 
-func (e *Enricher) describe(ctx context.Context, model string, s hub.Session) (hub.Insight, error) {
+// knowing appends what the user wants the model to keep in mind.
+func knowing(b *strings.Builder, heading string, facts []string) {
+	if len(facts) == 0 {
+		return
+	}
+	b.WriteString("\n\n" + heading + "\n")
+	for _, f := range facts {
+		b.WriteString("- " + f + "\n")
+	}
+}
+
+func (e *Enricher) describe(ctx context.Context, model string, w hub.Undescribed) (hub.Insight, error) {
+	s := w.Session
 	var b strings.Builder
 	fmt.Fprintf(&b, "Status: %s\nProject directory: %s\nGit branch: %s\n", status(s), filepath.Base(s.Cwd), orNone(s.Branch))
 	if s.Pending != nil {
@@ -208,6 +223,7 @@ func (e *Enricher) describe(ctx context.Context, model string, s hub.Session) (h
 	}
 	fmt.Fprintf(&b, "\nThe developer's last message:\n<<<\n%s\n>>>\n\nThe agent's last message:\n<<<\n%s\n>>>", orNone(s.LastPrompt), orNone(s.LastReply))
 
+	knowing(&b, "What the developer wants you to keep in mind, as background rather than about this session in particular:", w.Context)
 	var in hub.Insight
 	if err := e.ask(ctx, model, system, b.String(), "insight", schema, &in); err != nil {
 		return hub.Insight{}, err
