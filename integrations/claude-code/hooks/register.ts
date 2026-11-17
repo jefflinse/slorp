@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 
-const DEFAULT_URL = 'http://127.0.0.1:4747'
+const AGENT = 'claude'
 const POLL_MS = 2000
 const SUMMARY_LIMIT = 400
 /** Inputs longer than this are too much to judge in Slorp; the terminal asks. */
@@ -12,7 +12,7 @@ const NEEDS_PERSON = new Set(['AskUserQuestion', 'ExitPlanMode'])
 
 type Reply = { id: string; text: string }
 
-let base = DEFAULT_URL
+let base = ''
 let cwd = ''
 let isPolling = false
 
@@ -28,7 +28,7 @@ async function post($: EngineInterface, path: string, body: object) {
 function report($: EngineInterface, type: string, fields: object = {}) {
   void $.session
     .id()
-    .then(sessionId => post($, '/api/bridge/event', { sessionId, type, ...fields }))
+    .then(sessionId => post($, '/api/bridge/event', { agent: AGENT, sessionId, type, ...fields }))
     .catch(() => {})
 }
 
@@ -43,7 +43,7 @@ async function poll($: EngineInterface) {
   isPolling = true
   try {
     const sessionId = await $.session.id()
-    const claimed = await post($, '/api/bridge/poll', { sessionId, cwd })
+    const claimed = await post($, '/api/bridge/poll', { agent: AGENT, sessionId, cwd })
     for (const reply of (claimed?.replies ?? []) as Reply[]) {
       void deliver($, reply).catch(() => {})
     }
@@ -65,6 +65,7 @@ async function askSlorp($: EngineInterface, tool: string, input: unknown, abando
   const command = (input as { command?: unknown } | null)?.command
   const full = typeof command === 'string' ? command : JSON.stringify(input, null, 2)
   const asked = await post($, '/api/bridge/permission', {
+    agent: AGENT,
     sessionId: await $.session.id(),
     tool,
     summary: full.slice(0, SUMMARY_LIMIT),
@@ -86,15 +87,16 @@ async function askSlorp($: EngineInterface, tool: string, input: unknown, abando
 }
 
 /**
- * Bridges one Claude Code session to the Slorp service. Every POLL_MS it
+ * Bridges one Claude Code session to the Slorp service at the `url` option,
+ * or at SLORP_URL when that is set. Every POLL_MS it
  * claims replies queued for this session and submits each as the user's own
  * prompt; alongside, it reports turn events. A permission prompt is offered
  * to Slorp as well as the terminal's own dialog, and whichever the user
  * answers first decides it.
  */
-export const register: Register = on => {
+export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
-    base = (await $.env.get('SLORP_URL')) ?? DEFAULT_URL
+    base = ((await $.env.get('SLORP_URL')) || String(options.url)).replace(/\/+$/, '')
     cwd = e.cwd
     $.clock.every(POLL_MS, () => void poll($))
     return next(e)
