@@ -317,8 +317,19 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, uiPath s
 		var in struct {
 			Behavior string `json:"behavior"`
 			Message  string `json:"message"`
+			// Answers are the options picked, by label, for each question of
+			// a question prompt by its text.
+			Answers map[string][]string `json:"answers"`
 		}
 		if !readJSON(w, r, &in) {
+			return
+		}
+		if len(in.Answers) > 0 {
+			if !h.Answer(r.PathValue("id"), in.Answers) {
+				http.Error(w, "that question is no longer waiting here, or those are not answers to it", http.StatusConflict)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		if in.Behavior != hub.Allow && in.Behavior != hub.Deny {

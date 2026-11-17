@@ -7,8 +7,8 @@ const SUMMARY_LIMIT = 400
 const INPUT_LIMIT = 8000
 /** How long Slorp may answer a prompt before only the terminal can. */
 const ANSWER_MAX_MS = 60 * 60_000
-/** Tools whose prompt is a question for the user, which an allow cannot answer. */
-const NEEDS_PERSON = new Set(['AskUserQuestion', 'ExitPlanMode'])
+/** Tools whose prompt only the terminal's own dialog can answer. */
+const NEEDS_PERSON = new Set(['ExitPlanMode'])
 
 type Reply = { id: string; text: string }
 
@@ -94,7 +94,8 @@ async function askSlorp($: EngineInterface, tool: string, input: unknown, abando
  * claims replies queued for this session and submits each as the user's own
  * prompt; alongside, it reports turn events. A permission prompt is offered
  * to Slorp as well as the terminal's own dialog, and whichever the user
- * answers first decides it.
+ * answers first decides it; a question is answered there with the options
+ * the user picked.
  */
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
@@ -116,6 +117,10 @@ export const register: Register = (on, options) => {
 
   on('classic.PermissionRequest', async ($, e, next) => {
     const answer = await askSlorp($, e.tool_name, e.tool_input, next.signal).catch(() => ({ state: 'terminal' }))
+    if (answer.state === 'allow' && e.tool_name === 'AskUserQuestion') {
+      if (!answer.answers) return next(e)
+      return { decision: { behavior: 'allow' as const, updatedInput: { ...(e.tool_input as object), answers: answer.answers } } }
+    }
     if (answer.state === 'allow') return { decision: { behavior: 'allow' as const } }
     if (answer.state === 'deny') {
       const why = answer.message ? `The user denied this in Slorp and said: ${answer.message}` : 'The user denied this in Slorp.'

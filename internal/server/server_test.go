@@ -305,6 +305,29 @@ func TestAQuestionOverHTTP(t *testing.T) {
 	if _, body := f.do("GET", "/api/sessions", "", nil); !strings.Contains(body, `"question":true`) {
 		t.Errorf("state lacks the question mark the page reads: %s", body)
 	}
+
+	input := `{"questions":[{"question":"Which soup?","multiSelect":false,"options":[{"label":"Tomato"},{"label":"No soup"}]},{"question":"Which sides?","multiSelect":true,"options":[{"label":"Pickle"},{"label":"Crisps"}]}]}`
+	req, _ := json.Marshal(map[string]any{"sessionId": "s2", "tool": "AskUserQuestion", "summary": "Which soup?", "input": input, "canAnswer": true, "question": true})
+	_, body = f.do("POST", "/api/bridge/permission", string(req), nil)
+	var asked struct {
+		ID         string
+		Answerable bool
+	}
+	if json.Unmarshal([]byte(body), &asked) != nil || !asked.Answerable {
+		t.Fatalf("permission = %s, want a readable question offered for answering", body)
+	}
+	if code := f.post("/api/permissions/"+asked.ID, `{"behavior":"allow"}`); code != 409 {
+		t.Errorf("allowing a question without answers = %d, want 409", code)
+	}
+	if code := f.post("/api/permissions/"+asked.ID, `{"answers":{"Which soup?":["Gazpacho"],"Which sides?":["Pickle"]}}`); code != 409 {
+		t.Errorf("an answer that was not offered = %d, want 409", code)
+	}
+	if code := f.post("/api/permissions/"+asked.ID, `{"answers":{"Which soup?":["Tomato"],"Which sides?":["Crisps","Pickle"]}}`); code != 204 {
+		t.Fatalf("answering a question = %d", code)
+	}
+	if _, body := f.do("POST", "/api/bridge/permission/wait", `{"id":"`+asked.ID+`"}`, nil); strings.TrimSpace(body) != `{"state":"allow","answers":{"Which sides?":"Pickle, Crisps","Which soup?":"Tomato"}}` {
+		t.Errorf("the bridge was told %s", body)
+	}
 }
 
 func TestPermissionAnsweredFromTheUI(t *testing.T) {

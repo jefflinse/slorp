@@ -111,6 +111,10 @@ h1, h2, h3, p { margin: 0; }
 .asked .opt { display: flex; gap: 10px; align-items: baseline; padding: 8px 11px; margin-top: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
 .asked .opt .k { color: var(--ink3); font-family: var(--mono); font-size: 12px; }
 .asked .opt b { font-weight: 600; white-space: nowrap; }
+.asked button.opt { width: 100%; text-align: left; cursor: pointer; }
+.asked button.opt:hover { border-color: var(--ink3); }
+.asked button.opt.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.asked button.opt.on .k { color: var(--accent); }
 .asked .opt span:last-child { color: var(--ink2); font-size: 13px; }
 .role { display: inline-flex; align-items: center; white-space: nowrap; padding: 0 7px; border-radius: 99px; border: 1px solid var(--ink3); color: var(--ink2); font-size: 11.5px; font-weight: 500; line-height: 1.5; }
 .role .spark { margin-right: 4px; }
@@ -519,7 +523,7 @@ const KB_SECTIONS = {
 const KEY = 'slorp.proto.v1';
 const VIEWS = ['attention', 'efforts', 'activity', 'pulls', 'knowledge'];
 const VIEW_NAMES = { pulls: 'PRs' };
-const fresh = () => ({ view: 'attention', sel: null, effortSel: 'snap', kbSel: 'watch', groupBy: 'effort', srcFilter: 'all', pullFilter: 'all', notify: false, fluent: true, theme: 'auto',
+const fresh = () => ({ view: 'attention', sel: null, effortSel: 'snap', kbSel: 'watch', groupBy: 'effort', srcFilter: 'all', pullFilter: 'all', notify: false, picks: {}, fluent: true, theme: 'auto',
   handled: {}, moved: {}, sessMoved: {}, extra: [], arrived: {}, collapsed: {}, showHandled: false, variant: {}, rawOpen: {},
   actFilter: 'all', expanded: {}, kb: structuredClone(KB_SEED), seq: 100 });
 let state = fresh();
@@ -1055,16 +1059,33 @@ function askedQuestions(p) {
   } catch (e) { return null; }
 }
 
-function questionBox(qs) {
-  return qs.map(q => `<div class="asked">${q.header ? `<div class="label">${esc(q.header)}</div>` : ''}
+/* What the user has picked so far for a question prompt: for each of its
+   questions by position, the positions of the options picked. */
+const picksFor = id => state.picks[id] || {};
+
+/* The questions laid out; with a prompt Slorp may answer, each option is a
+   button that picks it. */
+function questionBox(qs, p) {
+  const picks = p ? picksFor(p.id) : {};
+  return qs.map((q, n) => `<div class="asked">${q.header ? `<div class="label">${esc(q.header)}</div>` : ''}
       <p class="q">${esc(q.question)}</p>
-      ${(Array.isArray(q.options) ? q.options : []).map((o, i) => `<div class="opt"><span class="k">${i + 1}</span><b>${esc(o.label ?? '')}</b><span>${esc(o.description ?? '')}</span></div>`).join('')}
+      ${(Array.isArray(q.options) ? q.options : []).map((o, i) => {
+        const inner = `<span class="k">${i + 1}</span><b>${esc(o.label ?? '')}</b><span>${esc(o.description ?? '')}</span>`;
+        return p ? `<button class="opt ${(picks[n] || []).includes(i) ? 'on' : ''}" data-act="pick" data-id="${p.id}" data-q="${n}" data-o="${i}" data-many="${q.multiSelect ? 1 : 0}" aria-pressed="${(picks[n] || []).includes(i)}">${inner}</button>`
+          : `<div class="opt">${inner}</div>`;
+      }).join('')}
       ${q.multiSelect ? '<div class="none" style="margin-top:6px">More than one may be chosen.</div>' : ''}</div>`).join('');
 }
 
 function pendingBox(s) {
   const p = s.pending, qs = askedQuestions(p);
   const inTerminal = `<div class="none" style="margin-top:10px">Answer in the session's terminal. Slorp cannot pick an option for you.</div>`;
+  if (qs && p.answerable) {
+    const picks = picksFor(p.id), ready = qs.every((q, n) => (picks[n] || []).length);
+    return `${questionBox(qs, p)}<div class="replies" style="margin-top:12px">
+      <button class="btn go" data-act="liveAnswer" data-id="${p.id}" ${ready ? '' : 'disabled'}>Send answer</button>
+      <span class="none" style="align-self:center">${ready ? 'The terminal is asking too; whichever you answer first decides.' : `Pick an option for ${qs.length === 1 ? 'the question' : 'each question'}. To type something else, answer in the terminal.`}</span></div>`;
+  }
   if (qs) return questionBox(qs) + inTerminal;
   if (p.question) return `<div class="asked"><p class="q" style="white-space:pre-wrap">${esc(p.input || p.summary)}</p></div>${inTerminal}`;
   const what = `<div class="rawblock" style="margin-bottom:10px;max-height:280px;overflow:auto"><div class="who" style="margin-bottom:4px">${esc(p.tool)}</div><div class="tx">${esc(p.input || p.summary)}</div></div>`;
@@ -1376,6 +1397,23 @@ const actions = {
     const it = itemById(d.id);
     api('POST', '/api/kb/questions', { text: it.feed ? it.title : it.ask || it.title, effort: it.effort === 'unsorted' ? '' : it.effort, origin: `parked from "${it.title}"` },
       () => { resolve(d.id, 'parked'); toast('Parked as an open question'); save(); });
+    return false;
+  },
+  pick: d => {
+    const all = state.picks[d.id] ||= {}, mine = all[d.q] || [], o = Number(d.o);
+    all[d.q] = d.many === '1' ? (mine.includes(o) ? mine.filter(x => x !== o) : mine.concat(o)) : [o];
+  },
+  liveAnswer: d => {
+    const s = live.find(x => x.pending && x.pending.id === d.id), qs = s && askedQuestions(s.pending), picks = picksFor(d.id);
+    if (!qs) return false;
+    const answers = Object.fromEntries(qs.map((q, n) => [q.question, (picks[n] || []).map(i => q.options[i].label)]));
+    fetch(`/api/permissions/${d.id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ answers }) })
+      .then(res => {
+        toast(res.status === 409 ? 'That question is no longer waiting here' : !res.ok ? 'Slorp refused that' : 'Answered');
+        delete state.picks[d.id];
+        save(); refresh(true);
+      })
+      .catch(() => toast('Could not reach the Slorp service'));
     return false;
   },
   livePermit: d => {

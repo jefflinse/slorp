@@ -509,15 +509,103 @@ func TestRecentLookupsAreKept(t *testing.T) {
 	}
 }
 
-func TestAQuestionIsNeverAnswerableInSlorp(t *testing.T) {
-	h, _, _ := newHub(t)
-	h.SetRoster(agent, []Session{{ID: "s1", Agent: agent, Status: Working}})
-	p := h.Ask(agent, "s1", Pending{Tool: "AskUserQuestion", Summary: "Which one?", Question: true}, true)
-	if p.Answerable || !session(t, h, "s1").Pending.Question {
-		t.Errorf("pending = %+v; an allow cannot pick an option, so a question is for the terminal alone", p)
+// sandwich is a question prompt's input: one question taking a single pick
+// and one taking several.
+const sandwich = `{"questions":[
+	{"question":"Which soup?","header":"Soup","multiSelect":false,"options":[{"label":"Tomato","description":"Classic"},{"label":"Matzo ball"},{"label":"No soup"}]},
+	{"question":"Which sides?","header":"Sides","multiSelect":true,"options":[{"label":"Pickle"},{"label":"Crisps"},{"label":"Coleslaw"}]}]}`
+
+func TestAQuestionSlorpCannotReadIsForTheTerminal(t *testing.T) {
+	inputs := map[string]string{
+		"no input":                  "",
+		"input cut short":           sandwich[:80],
+		"no questions":              `{"questions":[]}`,
+		"a question with no text":   `{"questions":[{"question":"","options":[{"label":"A"}]}]}`,
+		"a question with no option": `{"questions":[{"question":"Which?","options":[]}]}`,
+		"an option with no label":   `{"questions":[{"question":"Which?","options":[{"label":"A"},{"label":""}]}]}`,
+		"the same option twice":     `{"questions":[{"question":"Which?","options":[{"label":"A"},{"label":"A"}]}]}`,
+		"the same question twice":   `{"questions":[{"question":"Which?","options":[{"label":"A"}]},{"question":"Which?","options":[{"label":"B"}]}]}`,
 	}
-	if h.Decide(p.ID, Decision{Behavior: Allow}) {
-		t.Error("a question was allowed from Slorp")
+	for name, input := range inputs {
+		h, _, _ := newHub(t)
+		p := h.Ask(agent, "s1", Pending{Tool: "AskUserQuestion", Summary: "Which?", Input: input, Question: true}, true)
+		if p.Answerable || !session(t, h, "s1").Pending.Question {
+			t.Errorf("%s: pending = %+v; want a question only the terminal can answer", name, p)
+		}
+		if h.Answer(p.ID, map[string][]string{"Which?": {"A"}}) || h.Decide(p.ID, Decision{Behavior: Allow}) {
+			t.Errorf("%s: answered from Slorp all the same", name)
+		}
+	}
+}
+
+func TestAQuestionIsAnsweredByPickingItsOptions(t *testing.T) {
+	ctx := context.Background()
+	ask := func(t *testing.T) (*Hub, Pending) {
+		h, _, _ := newHub(t)
+		return h, h.Ask(agent, "s1", Pending{Tool: "AskUserQuestion", Summary: "Which soup? Which sides?", Input: sandwich, Question: true}, true)
+	}
+	h, p := ask(t)
+	if !p.Answerable {
+		t.Fatalf("a question Slorp can read was kept for the terminal: %+v", p)
+	}
+
+	refused := map[string]map[string][]string{
+		"nothing picked":                         {},
+		"one question left out":                  {"Which soup?": {"Tomato"}},
+		"a question with no pick":                {"Which soup?": {"Tomato"}, "Which sides?": {}},
+		"two picks where one is taken":           {"Which soup?": {"Tomato", "No soup"}, "Which sides?": {"Pickle"}},
+		"a pick that was not offered":            {"Which soup?": {"Gazpacho"}, "Which sides?": {"Pickle"}},
+		"a pick from another question":           {"Which soup?": {"Pickle"}, "Which sides?": {"Pickle"}},
+		"the same pick twice":                    {"Which soup?": {"Tomato"}, "Which sides?": {"Pickle", "Pickle"}},
+		"an answer to a question never asked":    {"Which soup?": {"Tomato"}, "Which sides?": {"Pickle"}, "Which bread?": {"Rye"}},
+		"a question never asked in place of one": {"Which soup?": {"Tomato"}, "Which bread?": {"Rye"}},
+	}
+	for name, picks := range refused {
+		if h.Answer(p.ID, picks) {
+			t.Fatalf("%s was taken as an answer", name)
+		}
+	}
+	if h.Decide(p.ID, Decision{Behavior: Allow}) || h.Decide(p.ID, Decision{Behavior: Allow, Answers: map[string]string{"Which soup?": "Tomato"}}) {
+		t.Fatal("a question was allowed without picking its options")
+	}
+	if session(t, h, "s1").Pending == nil {
+		t.Fatal("a refused answer settled the question")
+	}
+
+	if !h.Answer(p.ID, map[string][]string{"Which soup?": {"Tomato"}, "Which sides?": {"Crisps", "Pickle"}}) {
+		t.Fatal("picks from the options offered were refused")
+	}
+	dec, ok := h.Await(ctx, p.ID, time.Second)
+	want := map[string]string{"Which soup?": "Tomato", "Which sides?": "Pickle, Crisps"}
+	if !ok || dec.Behavior != Allow || !reflect.DeepEqual(dec.Answers, want) {
+		t.Errorf("the bridge was told %+v, %v; want allow with %v, several picks in the order offered", dec, ok, want)
+	}
+	if s := session(t, h, "s1"); s.Pending != nil || s.Status != Working {
+		t.Errorf("after the answer: status %q pending %+v", s.Status, s.Pending)
+	}
+	if h.Answer(p.ID, map[string][]string{"Which soup?": {"Tomato"}, "Which sides?": {"Pickle"}}) {
+		t.Error("a question was answered twice")
+	}
+
+	h, p = ask(t)
+	if !h.Decide(p.ID, Decision{Behavior: Deny, Message: "not now", Answers: map[string]string{"Which soup?": "Tomato"}}) {
+		t.Fatal("declining to answer was refused")
+	}
+	if dec, _ := h.Await(ctx, p.ID, time.Second); dec.Behavior != Deny || dec.Message != "not now" || dec.Answers != nil {
+		t.Errorf("after declining, the bridge was told %+v", dec)
+	}
+
+	h, _, _ = newHub(t)
+	command := h.Ask(agent, "s1", Pending{Tool: "Bash", Input: sandwich}, true)
+	if h.Answer(command.ID, map[string][]string{"Which soup?": {"Tomato"}, "Which sides?": {"Pickle"}}) {
+		t.Error("a permission prompt was answered as if it were a question")
+	}
+	h.SetSettings(Settings{AnswerPermissions: false})
+	if p := h.Ask(agent, "s2", Pending{Tool: "AskUserQuestion", Input: sandwich, Question: true}, true); p.Answerable {
+		t.Error("the setting to keep prompts in the terminal was ignored for a question")
+	}
+	if p := h.Ask(agent, "s3", Pending{Tool: "AskUserQuestion", Input: sandwich, Question: true}, false); p.Answerable {
+		t.Error("a question the bridge cannot pass an answer to was offered")
 	}
 }
 
@@ -1152,10 +1240,10 @@ func TestARoleCanKeepASessionFromAsking(t *testing.T) {
 	for _, id := range []string{"review", "question", "nothing", "prompt", "waiting", "failed"} {
 		must(t, k.SetRole(id, r))
 	}
-	for attention, want := range map[string]string{kb.AttentionAll: everything, kb.AttentionStopped: stopped, kb.AttentionNone: ""} {
-		must(t, k.SetRoleAttention(r, attention))
-		if got := asking(); got != want {
-			t.Errorf("with attention %q: %q, want %q", attention, got, want)
+	for _, tt := range [][2]string{{kb.AttentionAll, everything}, {kb.AttentionStopped, stopped}, {kb.AttentionNone, ""}} {
+		must(t, k.SetRoleAttention(r, tt[0]))
+		if got := asking(); got != tt[1] {
+			t.Errorf("with attention %q: %q, want %q", tt[0], got, tt[1])
 		}
 	}
 	must(t, k.SetRole("review", ""))

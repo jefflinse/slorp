@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -225,8 +226,8 @@ type Pending struct {
 	ID      string `json:"id"`
 	Tool    string `json:"tool"`
 	Summary string `json:"summary"`
-	// Question is true when the session asked the user something, which no
-	// allow or deny can answer.
+	// Question is true when the session asked the user something, which is
+	// answered by picking from its options and not by an allow.
 	Question bool `json:"question"`
 	// Input is the tool's full input, shown to the user before they decide.
 	Input string `json:"input"`
@@ -234,12 +235,58 @@ type Pending struct {
 	// session's own terminal, whose dialog is asking at the same time.
 	Answerable bool      `json:"answerable"`
 	At         time.Time `json:"at"`
+
+	// questions is what a question asks, read from its input.
+	questions []asked
 }
 
-// Decision is the user's answer, given in Slorp, to a permission request.
+// asked is one question put to the user and the options it offers, by label.
+type asked struct {
+	text   string
+	labels []string
+	// many is true when more than one option may be picked.
+	many bool
+}
+
+// questionsIn reads the questions a prompt's input holds. It returns nil
+// unless each has its own text and at least one labelled option.
+func questionsIn(input string) []asked {
+	var in struct {
+		Questions []struct {
+			Question    string `json:"question"`
+			MultiSelect bool   `json:"multiSelect"`
+			Options     []struct {
+				Label string `json:"label"`
+			} `json:"options"`
+		} `json:"questions"`
+	}
+	if json.Unmarshal([]byte(input), &in) != nil {
+		return nil
+	}
+	var out []asked
+	for _, q := range in.Questions {
+		a := asked{text: q.Question, many: q.MultiSelect}
+		for _, o := range q.Options {
+			if o.Label == "" || slices.Contains(a.labels, o.Label) {
+				return nil
+			}
+			a.labels = append(a.labels, o.Label)
+		}
+		if q.Question == "" || len(a.labels) == 0 || slices.ContainsFunc(out, func(b asked) bool { return b.text == q.Question }) {
+			return nil
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// Decision is the user's answer, given in Slorp, to a request.
 type Decision struct {
 	Behavior string `json:"state"`
 	Message  string `json:"message,omitempty"`
+	// Answers holds, for a question, what the user picked for each of its
+	// questions by its text; several picks are joined with ", ".
+	Answers map[string]string `json:"answers,omitempty"`
 }
 
 // Decision behaviors. Terminal means Slorp will not answer: the session's
@@ -445,7 +492,10 @@ func (h *Hub) Retire(agent string, silence time.Duration) {
 func (h *Hub) Ask(agent, sessionID string, p Pending, canAnswer bool) Pending {
 	p.ID, p.At = newID(), time.Now()
 	h.Apply(agent, sessionID, func(s *Session) {
-		p.Answerable = canAnswer && !p.Question && h.settings.AnswerPermissions
+		if p.Question {
+			p.questions = questionsIn(p.Input)
+		}
+		p.Answerable = canAnswer && h.settings.AnswerPermissions && (!p.Question || p.questions != nil)
 		s.Pending, s.Status, s.WaitingFor, s.ActiveAt = &p, Waiting, "permission prompt", p.At
 		if p.Answerable {
 			h.waiters[p.ID] = make(chan Decision, 1)
@@ -500,14 +550,57 @@ func (h *Hub) asking(requestID string) bool {
 	return false
 }
 
-// Decide answers a request from Slorp, and reports whether it was still
-// waiting for an answer.
+// Decide allows or denies a request from Slorp, and reports whether it took.
+// It does not when the request is no longer waiting, or is a question being
+// allowed: Answer answers those.
 func (h *Hub) Decide(requestID string, dec Decision) bool {
+	dec.Answers = nil
+	return h.decide(requestID, func(p *Pending) (Decision, bool) { return dec, !(p.Question && dec.Behavior == Allow) })
+}
+
+// Answer answers a question from Slorp with what the user picked, by label,
+// for each of its questions by text, and reports whether it took. It does
+// not when the request is no longer waiting or the picks do not answer it:
+// every question needs a pick from its own options, and only one unless it
+// takes several.
+func (h *Hub) Answer(requestID string, picks map[string][]string) bool {
+	return h.decide(requestID, func(p *Pending) (Decision, bool) {
+		if len(p.questions) == 0 || len(picks) != len(p.questions) {
+			return Decision{}, false
+		}
+		answers := map[string]string{}
+		for _, q := range p.questions {
+			got := picks[q.text]
+			if len(got) == 0 || (len(got) > 1 && !q.many) {
+				return Decision{}, false
+			}
+			var chosen []string
+			for _, label := range q.labels {
+				if slices.Contains(got, label) {
+					chosen = append(chosen, label)
+				}
+			}
+			if len(chosen) != len(got) {
+				return Decision{}, false
+			}
+			answers[q.text] = strings.Join(chosen, ", ")
+		}
+		return Decision{Behavior: Allow, Answers: answers}, true
+	})
+}
+
+// decide passes on to the bridge the decision with makes of a request Slorp
+// may answer, and reports whether it did.
+func (h *Hub) decide(requestID string, with func(*Pending) (Decision, bool)) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, s := range h.sessions {
 		if s.Pending == nil || s.Pending.ID != requestID || !s.Pending.Answerable {
 			continue
+		}
+		dec, ok := with(s.Pending)
+		if !ok {
+			return false
 		}
 		select {
 		case h.waiters[requestID] <- dec:
