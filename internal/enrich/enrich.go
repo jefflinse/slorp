@@ -27,6 +27,11 @@ const (
 	maxLookups = 4
 	// lookupLimit caps how much of one lookup's result the model is shown.
 	lookupLimit = 2000
+	// promptShown and replyShown cap how much of a session's last exchange
+	// the model is shown, in runes: the start of what the developer said and
+	// the end of what the agent answered.
+	promptShown = 600
+	replyShown  = 3000
 )
 
 type Enricher struct {
@@ -137,7 +142,7 @@ func (e *Enricher) route(ctx context.Context, model string, w hub.Unrouted) (str
 	}
 	s := w.Session
 	fmt.Fprintf(&b, "\nSession:\nProject directory: %s\nGit branch: %s\nTitle: %s\nSummary: %s\nThe developer's last message: %s",
-		filepath.Base(s.Cwd), orNone(s.Branch), s.Insight.Title, s.Insight.Summary, orNone(s.LastPrompt))
+		filepath.Base(s.Cwd), orNone(s.Branch), s.Insight.Title, s.Insight.Summary, orNone(start(s.LastPrompt, promptShown)))
 	knowing(&b, "The developer's own notes on how to file things:", w.Hints)
 	schema, _ := json.Marshal(map[string]any{"type": "object", "additionalProperties": false, "required": []string{"effort"},
 		"properties": map[string]any{"effort": map[string]any{"type": "string", "enum": ids}}})
@@ -169,7 +174,7 @@ func (e *Enricher) role(ctx context.Context, model string, w hub.Unroled) (strin
 	}
 	s := w.Session
 	fmt.Fprintf(&b, "\nSession:\nProject directory: %s\nGit branch: %s\nTitle: %s\nSummary: %s\nThe developer's last message: %s",
-		filepath.Base(s.Cwd), orNone(s.Branch), s.Insight.Title, s.Insight.Summary, orNone(s.LastPrompt))
+		filepath.Base(s.Cwd), orNone(s.Branch), s.Insight.Title, s.Insight.Summary, orNone(start(s.LastPrompt, promptShown)))
 	schema, _ := json.Marshal(map[string]any{"type": "object", "additionalProperties": false, "required": []string{"kind"},
 		"properties": map[string]any{"kind": map[string]any{"type": "string", "enum": ids}}})
 	var out struct {
@@ -337,7 +342,7 @@ func (e *Enricher) describe(ctx context.Context, model string, w hub.Undescribed
 	} else if s.Pending != nil {
 		fmt.Fprintf(&b, "Blocked on a permission prompt for %s: %s\n", s.Pending.Tool, s.Pending.Summary)
 	}
-	fmt.Fprintf(&b, "\nThe developer's last message:\n<<<\n%s\n>>>\n\nThe agent's last message:\n<<<\n%s\n>>>", orNone(s.LastPrompt), orNone(s.LastReply))
+	fmt.Fprintf(&b, "\nThe developer's last message:\n<<<\n%s\n>>>\n\nThe agent's last message:\n<<<\n%s\n>>>", orNone(start(s.LastPrompt, promptShown)), orNone(end(s.LastReply, replyShown)))
 
 	found := e.lookUp(ctx, model, s, b.String())
 	lookups := []string{}
@@ -443,6 +448,22 @@ func status(s hub.Session) string {
 		return "waiting on the developer (" + s.WaitingFor + ")"
 	}
 	return string(s.Status)
+}
+
+// start returns the first n runes of s, marked when it was cut.
+func start(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
+}
+
+// end returns the last n runes of s, marked when it was cut.
+func end(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return "…" + string(r[len(r)-n:])
+	}
+	return s
 }
 
 func orNone(s string) string {

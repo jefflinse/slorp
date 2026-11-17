@@ -23,10 +23,10 @@ const (
 	Agent = "claude"
 
 	// ReplyLimit is how much of a session's last message is kept, in runes.
-	ReplyLimit = 3000
+	ReplyLimit = 30000
 
 	maxFirstRead = 64 << 20
-	promptLimit  = 600
+	promptLimit  = 8000
 )
 
 type Adapter struct {

@@ -204,6 +204,41 @@ func TestAskReportsFailuresAsErrors(t *testing.T) {
 	})
 }
 
+func TestTheModelIsShownOnlyPartOfALongExchange(t *testing.T) {
+	prompt := "PROMPT-START " + strings.Repeat("é", 700) + " PROMPT-END"
+	reply := "REPLY-START " + strings.Repeat("ü", 3100) + " REPLY-END"
+	s := hub.Session{Cwd: "/w", LastPrompt: prompt, LastReply: reply, Insight: &hub.Insight{Title: "t", Summary: "s"}}
+
+	llm := &fakeLLM{content: `{"title":"t","summary":"s","kind":"none","ask":"","replies":[]}`}
+	if _, err := llm.enricher(t).describe(ctx, "m", hub.Undescribed{Session: s}); err != nil {
+		t.Fatal(err)
+	}
+	u := llm.user()
+	if !strings.Contains(u, "PROMPT-START "+strings.Repeat("é", 600-len("PROMPT-START "))+"…\n") || strings.Contains(u, "PROMPT-END") {
+		t.Errorf("describing: want the first 600 characters of what the developer said, marked as cut")
+	}
+	if !strings.Contains(u, "\n…"+strings.Repeat("ü", 3000-len(" REPLY-END"))+" REPLY-END") || strings.Contains(u, "REPLY-START") {
+		t.Errorf("describing: want the last 3000 characters of what the agent answered, marked as cut")
+	}
+
+	filing := &fakeLLM{content: `{"effort":"none"}`}
+	filing.enricher(t).route(ctx, "m", hub.Unrouted{Session: s, Efforts: []kb.Effort{{ID: "a", Name: "A"}}})
+	sorting := &fakeLLM{content: `{"kind":"none"}`}
+	sorting.enricher(t).role(ctx, "m", hub.Unroled{Session: s, Roles: []kb.Role{{ID: "r", Name: "R"}}})
+	for what, got := range map[string]string{"filing": filing.user(), "guessing a role": sorting.user()} {
+		if !strings.Contains(got, "PROMPT-START") || strings.Contains(got, "PROMPT-END") || !strings.HasSuffix(got, "…") {
+			t.Errorf("%s: want only the start of what the developer said: …%s", what, got[max(0, len(got)-60):])
+		}
+	}
+
+	short := hub.Session{LastPrompt: "fix it", LastReply: "done"}
+	whole := &fakeLLM{content: llm.content}
+	whole.enricher(t).describe(ctx, "m", hub.Undescribed{Session: short})
+	if u := whole.user(); !strings.Contains(u, "<<<\nfix it\n>>>") || !strings.Contains(u, "<<<\ndone\n>>>") {
+		t.Errorf("a short exchange was changed: %s", u)
+	}
+}
+
 func TestRoute(t *testing.T) {
 	work := hub.Unrouted{
 		Session: hub.Session{Cwd: "/work/toasters", LastPrompt: "what is stale?", Insight: &hub.Insight{Title: "Assess relevance", Summary: "Docs are stale."}},

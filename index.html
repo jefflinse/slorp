@@ -111,7 +111,12 @@ h1, h2, h3, p { margin: 0; }
 .tabs > button:hover { color: var(--ink); }
 .tabs > button.on { color: var(--ink); border-bottom-color: var(--ink); }
 .tabs > button .n { margin-left: 6px; font-weight: 500; letter-spacing: 0; }
-.tabs .seg { margin: 0 0 7px auto; }
+.tabs .tools { display: flex; align-items: center; gap: 8px; margin: 0 0 7px auto; }
+.tabs .tools .btn { padding: 3px 10px; font-size: 12px; }
+.said { margin-bottom: 14px; padding-left: 12px; border-left: 3px solid var(--line); }
+.said .tx { margin-top: 3px; color: var(--ink2); font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.said.open .tx { display: block; }
+.said .link { margin-top: 4px; font-size: 12px; }
 .tabbody { padding-top: 14px; }
 .md { font-size: 14.5px; line-height: 1.6; max-width: 80ch; overflow-wrap: anywhere; }
 .md > :first-child { margin-top: 0; }
@@ -1096,11 +1101,14 @@ function detailTabs(it, s) {
   const others = alsoRows(it.effort, s.id), also = state.detailTab === 'also';
   const tab = (key, name, on) => `<button class="label ${on ? 'on' : ''}" data-act="detailTab" data-t="${key}">${name}</button>`;
   const shown = state.sourceRaw ? `<div class="rawblock"><div class="tx">${esc(s.lastReply)}</div></div>` : md(s.lastReply);
-  const source = `${s.lastPrompt ? `<div class="none" style="margin-bottom:10px">You last said: ${esc(clip(s.lastPrompt, 240))}</div>` : ''}
+  const open = state.expanded['said:' + s.id];
+  const source = `${s.lastPrompt ? `<div class="said ${open ? 'open' : ''}"><div class="label">You said</div><div class="tx">${esc(s.lastPrompt)}</div>
+      <button class="link" data-act="expand" data-id="said:${s.id}" hidden>${open ? 'Show less' : 'Show all of it'}</button></div>` : ''}
     ${s.lastReply ? shown : '<div class="none">No response found for this session.</div>'}
     <div class="none mono" style="margin-top:12px">${esc(it.raw)}</div>`;
   return `<div class="tabs" role="tablist">${tab('source', 'Most Recent Agent Response', !also)}${tab('also', `Also In ${esc(effortById(it.effort).name)}<span class="n">${others.count}</span>`, also)}
-      ${also ? '' : `<span class="seg" role="group" aria-label="How the response is shown"><button class="${state.sourceRaw ? '' : 'on'}" data-act="sourceRaw" data-on="0">Rendered</button><button class="${state.sourceRaw ? 'on' : ''}" data-act="sourceRaw" data-on="1">Raw</button></span>`}</div>
+      ${also ? '' : `<span class="tools">${s.lastReply ? `<button class="btn" data-act="copyReply" data-id="${s.id}" title="Copy the response as it was written">Copy</button>` : ''}
+        <span class="seg" role="group" aria-label="How the response is shown"><button class="${state.sourceRaw ? '' : 'on'}" data-act="sourceRaw" data-on="0">Rendered</button><button class="${state.sourceRaw ? 'on' : ''}" data-act="sourceRaw" data-on="1">Raw</button></span></span>`}</div>
     <div class="tabbody">${also ? others.html : source}</div>`;
 }
 
@@ -1418,6 +1426,11 @@ function render() {
         <button data-act="reset">Reset the demo</button>
         <p>Keys: j/k move · e dismiss · s snooze · r fluent/raw · 1–5 views</p></div></details>`;
   $('#main').innerHTML = main;
+  // The toggle shows only where there is more of what the user said to see.
+  document.querySelectorAll('.said').forEach(el => {
+    const tx = el.querySelector('.tx');
+    el.querySelector('button').hidden = !el.classList.contains('open') && tx.scrollHeight <= tx.clientHeight + 1;
+  });
 
   document.querySelectorAll('[data-scroll]').forEach(el => { if (scrolls[el.dataset.scroll]) el.scrollTop = scrolls[el.dataset.scroll]; });
   document.querySelectorAll('[data-keep]').forEach(el => {
@@ -1478,6 +1491,13 @@ const actions = {
   actFilter: d => { state.actFilter = d.f; },
   detailTab: d => { state.detailTab = d.t; },
   sourceRaw: d => { state.sourceRaw = d.on === '1'; },
+  copyReply: d => {
+    const text = (live.find(x => x.id === d.id) || {}).lastReply || '';
+    Promise.resolve().then(() => navigator.clipboard.writeText(text))
+      .then(() => toast(text.startsWith('…') ? 'Copied. It was longer than Slorp keeps, so it starts part-way' : 'Copied'))
+      .catch(() => toast('The browser would not let Slorp copy that'));
+    return false;
+  },
   pullFilter: d => { state.pullFilter = d.f; },
   kbSel: d => { state.kbSel = d.s; },
   kbGo: d => { state.kbSel = d.s; go('knowledge'); },
