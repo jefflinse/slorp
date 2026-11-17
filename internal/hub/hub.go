@@ -4,6 +4,7 @@ package hub
 
 import (
 	"crypto/rand"
+	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
 	"sort"
@@ -21,8 +22,12 @@ const (
 	Failed  Status = "failed"
 )
 
-// bridgeTTL is how long after its last poll a session's bridge still counts as connected.
-const bridgeTTL = 10 * time.Second
+const (
+	// bridgeTTL is how long after its last poll a session's bridge still counts as connected.
+	bridgeTTL = 10 * time.Second
+	// settle is how long a session's content must hold still before it is worth describing.
+	settle = 3 * time.Second
+)
 
 // Session is one agent conversation, normalized across agents.
 type Session struct {
@@ -42,8 +47,55 @@ type Session struct {
 	Pending    *Pending  `json:"pending,omitempty"`
 	CanReply   bool      `json:"canReply"`
 	Replies    []Reply   `json:"replies,omitempty"`
+	Insight    *Insight  `json:"insight,omitempty"`
 
 	bridgeSeen time.Time
+	key        string
+	keySince   time.Time
+	insightKey string
+}
+
+// Insight is a model-written description of a session's current state.
+type Insight struct {
+	Title   string   `json:"title"`
+	Summary string   `json:"summary"`
+	Kind    string   `json:"kind"`
+	Ask     string   `json:"ask"`
+	Replies []string `json:"replies"`
+}
+
+// Insight kinds, and the item kinds the hub derives without a model.
+const (
+	KindQuestion   = "question"
+	KindPermission = "permission"
+	KindReview     = "review"
+	KindNone       = "none"
+	KindFailed     = "failed"
+)
+
+// Item is one thing that needs the user.
+type Item struct {
+	ID        string    `json:"id"`
+	SessionID string    `json:"sessionId"`
+	Kind      string    `json:"kind"`
+	Urgency   string    `json:"urgency"`
+	Title     string    `json:"title"`
+	Ask       string    `json:"ask"`
+	Summary   string    `json:"summary"`
+	Replies   []string  `json:"replies"`
+	At        time.Time `json:"at"`
+}
+
+// Summarizer reports which model, if any, is writing insights.
+type Summarizer struct {
+	Model string `json:"model"`
+	Error string `json:"error,omitempty"`
+}
+
+// Undescribed is a settled session whose current content has no insight yet.
+type Undescribed struct {
+	Session Session
+	Key     string
 }
 
 // Pending is a permission request a session is blocked on.
@@ -77,6 +129,7 @@ type Hub struct {
 	replies  []*Reply
 	subs     map[chan struct{}]struct{}
 	last     string
+	summ     Summarizer
 }
 
 func New() *Hub {
@@ -94,6 +147,7 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 		seen[s.ID] = true
 		if old, ok := h.sessions[s.ID]; ok {
 			s.bridgeSeen = old.bridgeSeen
+			s.key, s.keySince, s.insightKey, s.Insight = old.key, old.keySince, old.insightKey, old.Insight
 			if s.Status != Idle {
 				s.Pending = old.Pending
 			}
@@ -140,6 +194,112 @@ func (h *Hub) Sessions() []Session {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.snapshot()
+}
+
+// State returns the sessions, the items derived from them, and the summarizer.
+func (h *Hub) State() ([]Session, []Item, Summarizer) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	sessions := h.snapshot()
+	return sessions, items(sessions), h.summ
+}
+
+// Undescribed lists sessions that have settled on content no insight covers.
+// Working sessions are left out: their content is still moving.
+func (h *Hub) Undescribed() []Undescribed {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []Undescribed
+	for _, s := range h.sessions {
+		hasContent := s.LastReply != "" || s.Pending != nil
+		if hasContent && s.key != s.insightKey && time.Since(s.keySince) >= settle && (s.Status != Working || s.Pending != nil) {
+			out = append(out, Undescribed{Session: *s, Key: s.key})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Session.ActiveAt.After(out[j].Session.ActiveAt) })
+	return out
+}
+
+// SetInsight attaches an insight written for the content identified by key.
+func (h *Hub) SetInsight(sessionID, key string, in Insight) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if s, ok := h.sessions[sessionID]; ok {
+		s.Insight, s.insightKey = &in, key
+		h.changed()
+	}
+}
+
+func (h *Hub) SetSummarizer(s Summarizer) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.summ != s {
+		h.summ = s
+		h.last = ""
+		h.changed()
+	}
+}
+
+// contentKey identifies what a session is currently showing the user.
+func contentKey(s *Session) string {
+	state, pending := "open", ""
+	switch {
+	case s.Pending != nil:
+		state, pending = "permission", s.Pending.Tool+"\x00"+s.Pending.Summary
+	case s.Status == Waiting, s.Status == Failed:
+		state = string(s.Status)
+	}
+	sum := sha1.Sum([]byte(state + "\x00" + pending + "\x00" + s.LastPrompt + "\x00" + s.LastReply))
+	return hex.EncodeToString(sum[:])
+}
+
+// items derives what needs the user. Permission prompts, blocked and failed
+// sessions are items on their state alone; a question or finished work is an
+// item only once an insight written for the current content says so.
+func items(sessions []Session) []Item {
+	out := []Item{}
+	for _, s := range sessions {
+		it := Item{ID: s.ID[:min(8, len(s.ID))] + "-" + s.key[:min(10, len(s.key))], SessionID: s.ID, At: s.ActiveAt, Replies: []string{}}
+		it.Title = s.Title
+		if it.Title == "" {
+			it.Title = s.Name
+		}
+		fresh := s.Insight != nil && s.insightKey == s.key
+		if fresh {
+			it.Title, it.Summary, it.Ask = s.Insight.Title, s.Insight.Summary, s.Insight.Ask
+		}
+		switch {
+		case s.Pending != nil:
+			it.Kind, it.Urgency = KindPermission, "blocking"
+			if it.Ask == "" {
+				it.Ask = "Allow or deny " + s.Pending.Tool + ": " + s.Pending.Summary
+			}
+		case s.Status == Failed:
+			it.Kind, it.Urgency = KindFailed, "soon"
+			if it.Ask == "" {
+				it.Ask = "This session failed. Look at what went wrong."
+			}
+		case s.Status == Waiting:
+			it.Kind, it.Urgency = KindQuestion, "blocking"
+			if it.Ask == "" {
+				it.Ask = "This session is stopped until you respond."
+			}
+			if fresh {
+				it.Replies = s.Insight.Replies
+			}
+		case fresh && s.Status != Working && s.Insight.Kind == KindQuestion:
+			it.Kind, it.Urgency, it.Replies = KindQuestion, "blocking", s.Insight.Replies
+		case fresh && s.Status != Working && s.Insight.Kind == KindReview:
+			it.Kind, it.Urgency, it.Replies = KindReview, "whenever", s.Insight.Replies
+		default:
+			continue
+		}
+		if it.Replies == nil {
+			it.Replies = []string{}
+		}
+		out = append(out, it)
+	}
+	return out
 }
 
 func (h *Hub) snapshot() []Session {
@@ -229,7 +389,14 @@ func (h *Hub) Subscribe() (<-chan struct{}, func()) {
 }
 
 func (h *Hub) changed() {
-	b, _ := json.Marshal(h.snapshot())
+	now := time.Now()
+	for _, s := range h.sessions {
+		if k := contentKey(s); k != s.key {
+			s.key, s.keySince = k, now
+		}
+	}
+	snap := h.snapshot()
+	b, _ := json.Marshal(map[string]any{"s": snap, "i": items(snap), "m": h.summ})
 	if string(b) == h.last {
 		return
 	}

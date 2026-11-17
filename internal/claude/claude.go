@@ -22,9 +22,11 @@ import (
 const (
 	Agent = "claude"
 
+	// ReplyLimit is how much of a session's last message is kept, in runes.
+	ReplyLimit = 3000
+
 	maxFirstRead = 64 << 20
-	promptLimit  = 400
-	replyLimit   = 900
+	promptLimit  = 600
 )
 
 type Adapter struct {
@@ -222,7 +224,7 @@ func (t *tail) apply(line []byte) {
 		}
 	case "assistant":
 		if text := assistantText(e.Message.Content); text != "" {
-			t.lastReply = Tail(text, replyLimit)
+			t.lastReply = Tail(text, ReplyLimit)
 		}
 	}
 }

@@ -519,14 +519,16 @@ const listOf = a => a.length < 2 ? a.join('') : a.slice(0, -1).join(', ') + ' an
 const ago = m => m < 1 ? 'just now' : m < 60 ? `${Math.round(m)}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`;
 const span = m => m < 60 ? `${Math.round(m)}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`;
 
-const allItems = () => ITEMS.concat(state.extra.map(id => POOL.find(p => p.id === id)).filter(Boolean));
+const mockItems = () => ITEMS.concat(state.extra.map(id => POOL.find(p => p.id === id)).filter(Boolean));
+const allItems = () => live ? liveItems : mockItems();
 const itemById = id => allItems().find(i => i.id === id);
-const effortById = id => EFFORTS.find(e => e.id === id) || UNSORTED;
+const effortById = id => EFFORTS.find(e => e.id === id) || (live && id !== 'unsorted' ? { id, name: id, raw: id, line: '' } : UNSORTED);
 const effortOf = it => state.moved[it.id] || it.effort;
 const sessEffort = s => state.sessMoved[s.id] || s.effort;
-const ageOf = it => state.arrived[it.id] ? (Date.now() - state.arrived[it.id]) / 60000 : it.age;
+const ageOf = it => it.live ? minsSince(it.at) : state.arrived[it.id] ? (Date.now() - state.arrived[it.id]) / 60000 : it.age;
 const isActive = it => { const h = state.handled[it.id]; return !h || (h.how === 'snoozed' && h.until < Date.now()); };
 const activeItems = () => allItems().filter(isActive);
+const activeMockItems = () => mockItems().filter(isActive);
 const URG_W = { blocking: 0, soon: 1, whenever: 2 };
 const byUrgency = (a, b) => URG_W[a.urgency] - URG_W[b.urgency] || ageOf(a) - ageOf(b);
 
@@ -542,7 +544,7 @@ function groupItems(items) {
   let defs;
   if (state.groupBy === 'urgency') defs = Object.keys(URGENCY).map(k => ({ key: 'u:' + k, name: URGENCY[k], test: i => i.urgency === k }));
   else if (state.groupBy === 'source') defs = Object.keys(KINDS).map(k => ({ key: 'k:' + k, name: KINDS[k], test: i => i.kind === k }));
-  else defs = EFFORTS.concat(UNSORTED).map(e => ({ key: 'e:' + e.id, effort: e, name: e.name, test: i => effortOf(i) === e.id }));
+  else defs = (live ? [...new Set(sorted.map(i => i.effort))].map(effortById) : EFFORTS.concat(UNSORTED)).map(e => ({ key: 'e:' + e.id, effort: e, name: e.name, test: i => effortOf(i) === e.id }));
   return defs.map(d => ({ ...d, items: sorted.filter(d.test) })).filter(g => g.items.length);
 }
 const visibleOrder = () => groupItems(activeItems()).filter(g => !state.collapsed[g.key]).flatMap(g => g.items.map(i => i.id));
@@ -580,13 +582,13 @@ function briefing(items) {
     const blocking = items.filter(i => i.urgency === 'blocking');
     const where = [...new Set(blocking.map(i => effortById(effortOf(i)).name))];
     const one = items.length === 1;
-    text = `${cap(num(items.length))} thing${one ? '' : 's'} need${one ? 's' : ''} you across ${num(efforts.size)} effort${efforts.size === 1 ? '' : 's'}. `;
+    text = `${cap(num(items.length))} thing${one ? '' : 's'} need${one ? 's' : ''} you across ${num(efforts.size)} ${live ? 'project' : 'effort'}${efforts.size === 1 ? '' : 's'}. `;
     text += blocking.length
       ? `${cap(num(blocking.length))} ${blocking.length === 1 ? 'is' : 'are'} holding work up right now, in ${listOf(where)}.${items.length > blocking.length ? ' The rest will keep.' : ''}`
       : 'Nothing is stopped waiting on you, so all of it will keep.';
   }
   const day = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
-  return `<div class="brief"><div class="when"><span class="label">${day}</span><span class="label">${spark}briefing</span></div><p>${esc(text)}</p></div>`;
+  return `<div class="brief"><div class="when"><span class="label">${day}</span><span class="label">${live ? '' : spark}briefing</span></div><p>${esc(text)}</p></div>`;
 }
 
 function rowHtml(it, act = 'select') {
@@ -616,6 +618,7 @@ function sessionRow(s) {
 }
 
 function itemDetail(it) {
+  if (it.live) return liveItemDetail(it);
   const eff = effortById(effortOf(it));
   const v = (state.variant[it.id] || 0) % it.summary.length;
   const siblings = SESSIONS.filter(s => sessEffort(s) === eff.id && s.id !== it.session);
@@ -663,12 +666,12 @@ function viewAttention() {
     return `<div class="ghead">
         <button class="name" data-act="collapse" data-key="${g.key}"><span class="chev ${shut ? 'shut' : ''}">▼</span> ${name}</button>
         <span class="n">${g.items.length}</span>
-        ${g.effort ? `<button class="open" data-act="effort" data-id="${g.effort.id}" title="Open this effort">open ›</button>` : ''}
+        ${g.effort && !live ? `<button class="open" data-act="effort" data-id="${g.effort.id}" title="Open this effort">open ›</button>` : ''}
       </div>
-      ${g.effort && state.fluent && !shut ? `<div class="gline">${esc(g.effort.line)}</div>` : ''}
+      ${g.effort && g.effort.line && state.fluent && !shut ? `<div class="gline">${esc(g.effort.line)}</div>` : ''}
       ${shut ? '' : g.items.map(i => rowHtml(i)).join('')}`;
   }).join('');
-  const seg = ['effort', 'urgency', 'source'].map(b => `<button class="${state.groupBy === b ? 'on' : ''}" data-act="group" data-by="${b}">${cap(b)}</button>`).join('');
+  const seg = ['effort', 'urgency', 'source'].map(b => `<button class="${state.groupBy === b ? 'on' : ''}" data-act="group" data-by="${b}">${b === 'effort' && live ? 'Project' : cap(b)}</button>`).join('');
   const sel = state.sel && itemById(state.sel);
   return `<div class="split">
     <section class="pane list" data-scroll="att-list">
@@ -684,7 +687,7 @@ function viewAttention() {
 /* ───────────────────────── Efforts ───────────────────────── */
 
 function effortDetail(e) {
-  const needs = activeItems().filter(i => effortOf(i) === e.id).sort(byUrgency);
+  const needs = activeMockItems().filter(i => effortOf(i) === e.id).sort(byUrgency);
   const sess = SESSIONS.filter(s => sessEffort(s) === e.id);
   const qs = state.kb.questions.filter(q => q.effort === e.id);
   const watch = state.kb.watch.filter(w => w.efforts.includes(e.id));
@@ -707,7 +710,7 @@ function effortDetail(e) {
 function viewEfforts() {
   const all = EFFORTS.concat(UNSORTED);
   const rows = all.map(e => {
-    const n = activeItems().filter(i => effortOf(i) === e.id).length;
+    const n = activeMockItems().filter(i => effortOf(i) === e.id).length;
     const live = SESSIONS.filter(s => sessEffort(s) === e.id && s.status === 'running').length;
     const total = SESSIONS.filter(s => sessEffort(s) === e.id).length;
     return `<button class="erow ${e.id === state.effortSel ? 'sel' : ''}" data-act="effortSel" data-id="${e.id}">
@@ -734,7 +737,7 @@ function viewActivity() {
     .sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status) || a.last - b.last)
     .map(s => {
       const open = state.expanded[s.id];
-      const it = activeItems().find(i => i.session === s.id);
+      const it = activeMockItems().find(i => i.session === s.id);
       return `<tr class="s ${open ? 'open' : ''}" data-act="expand" data-id="${s.id}">
         <td class="st"><span class="dot ${s.status}"></span>${STATUS[s.status]}</td>
         <td><div>${title(s, 'ttl')}</div>${state.fluent ? `<div class="doing">${esc(s.doing)}</div>` : ''}</td>
@@ -759,7 +762,7 @@ function viewActivity() {
    Present only when the page is served by the slorp service. `live` is the
    service's session list; everything outside Activity is still mock data. */
 
-let live = null, isOffline = false;
+let live = null, liveItems = [], summarizer = {}, isOffline = false;
 const LIVE_STATUS = { waiting: ['waiting', 'waiting on you'], failed: ['error', 'failed'], working: ['running', 'working'], idle: ['idle', 'idle'], done: ['done', 'finished'] };
 const minsSince = iso => Math.max(0, (Date.now() - new Date(iso).getTime()) / 60000);
 const tilde = p => p.replace(/^\/Users\/[^/]+/, '~');
@@ -770,10 +773,71 @@ async function refresh(force) {
   try {
     const res = await fetch('/api/sessions');
     if (!res.ok) throw new Error(res.status);
-    live = (await res.json()).sessions;
+    const data = await res.json();
+    live = data.sessions;
+    liveItems = toItems(data);
+    summarizer = data.summarizer || {};
     isOffline = false;
   } catch (e) { isOffline = live !== null; }
-  if (force || state.view === 'activity') render();
+  if (force || state.view === 'activity' || state.view === 'attention') render();
+}
+
+const projectOf = s => s.cwd.split('/').filter(Boolean).pop() || s.cwd;
+
+/* Server items take the mock items' shape so the Attention pane draws both. */
+function toItems(data) {
+  const byId = Object.fromEntries(data.sessions.map(s => [s.id, s]));
+  return (data.items || []).filter(i => byId[i.sessionId]).map(i => {
+    const s = byId[i.sessionId];
+    return { ...i, live: true, session: s, effort: projectOf(s), kind: s.agent, itemKind: i.kind,
+      src: s.kind === 'background' ? 'Claude background session' : 'Claude session',
+      raw: `${s.agent} · ${shortPath(s.cwd)} · ${s.id.slice(0, 8)}` };
+  });
+}
+
+function sendReply(sessionId, text, done) {
+  fetch(`/api/sessions/${sessionId}/reply`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) })
+    .then(res => { if (!res.ok) throw new Error(res.status); done(); })
+    .catch(() => toast('Could not reach the Slorp service'));
+}
+
+function liveItemDetail(it) {
+  const s = it.session, rawOpen = state.rawOpen[it.id] ?? (!state.fluent || !it.summary);
+  const lines = [];
+  if (s.lastPrompt) lines.push(['you', s.lastPrompt]);
+  if (s.lastReply) lines.push([s.agent, s.lastReply]);
+  let answer;
+  if (s.pending) {
+    answer = `<div class="rawblock" style="margin-bottom:10px">${esc(s.pending.tool)}: ${esc(s.pending.summary)}</div>
+      <div class="none">Answer this one in its terminal. Slorp can see permission prompts but can't approve them yet.</div>`;
+  } else if (s.canReply) {
+    const quick = it.replies.map(r => `<button class="btn" data-act="liveSuggest" data-id="${it.id}" data-text="${esc(r)}">${esc(r)}</button>`).join('');
+    answer = `${quick ? `<div class="replies">${quick}</div>` : ''}
+      <textarea data-keep="item-${it.id}" placeholder="Reply to this session…"></textarea>
+      <div class="send"><span>${quick ? `${spark}Suggestions fill the box; nothing is sent until you press Send.` : 'Arrives as your next message once the session is idle.'}</span>
+      <button class="btn go" data-act="liveItemSend" data-id="${it.id}">Send</button></div>`;
+  } else {
+    answer = `<div class="none">This session isn't running the Slorp mod, so answer it in its terminal: <span class="mono">${esc(shortPath(s.cwd))}</span></div>`;
+  }
+  const siblings = live.filter(x => x.id !== s.id && projectOf(x) === it.effort);
+  return `<div class="inner">
+    <div class="crumb"><span class="eff">${esc(it.effort)}</span>${kindBadge(it.kind, it.src)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span>${s.branch ? `<span class="mono">${esc(s.branch)}</span>` : ''}</div>
+    <h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>
+    <div class="need"><div class="label">${it.summary ? spark : ''}What's needed from you</div><p class="ask">${esc(it.ask)}</p>${answer}</div>
+    <div class="bar">
+      <button class="btn" data-act="snooze" data-id="${it.id}" data-for="hour">Snooze 1h</button>
+      <button class="btn" data-act="snooze" data-id="${it.id}" data-for="tomorrow">Until tomorrow</button>
+      <button class="btn" data-act="dismiss" data-id="${it.id}">Dismiss</button>
+    </div>
+    <div class="sec"><div class="label"><span>${it.summary ? spark : ''}What's going on</span></div>
+      <p class="prose">${it.summary ? esc(it.summary) : `<span class="none">${summarizer.model ? 'Not summarized yet.' : 'No local model is available to summarize this.'}</span>`}</p></div>
+    <div class="sec"><div class="label"><span>From the source, verbatim</span><button data-act="toggleRaw" data-id="${it.id}">${rawOpen ? 'Hide' : 'Show'}</button></div>
+      ${rawOpen ? (lines.length ? rawBlock(lines) : '<div class="none">No transcript found for this session.</div>') : `<div class="none mono">${esc(it.raw)}</div>`}</div>
+    <div class="sec"><div class="label"><span>Also open in ${esc(it.effort)}</span></div>
+      ${siblings.length ? siblings.map(x => `<div class="srow"><span class="dot ${(LIVE_STATUS[x.status] || LIVE_STATUS.idle)[0]}"></span>
+        <div class="body"><div class="ttl">${esc(clip(x.insight?.title || x.title || x.name, 90))}</div></div>
+        <span class="side">${kindBadge(x.agent)} · ${(LIVE_STATUS[x.status] || LIVE_STATUS.idle)[1]}</span></div>`).join('') : '<div class="none">No other sessions in this project.</div>'}</div>
+  </div>`;
 }
 
 function connect() {
@@ -808,12 +872,12 @@ function viewActivityLive() {
     : 'No Claude Code sessions are open on this machine.';
   const rows = live.map(s => {
     const open = state.expanded[s.id], [dot, label] = LIVE_STATUS[s.status] || LIVE_STATUS.idle;
-    const name = clip(s.title || s.name || s.id.slice(0, 8), 90);
+    const name = clip(s.insight?.title || s.title || s.name || s.id.slice(0, 8), 90);
     const what = state.fluent ? `<span class="ttl">${esc(name)}</span>` : `<span class="mono ttl">${esc(`${s.agent} · ${tilde(s.cwd)} · ${s.id.slice(0, 8)}`)}</span>`;
-    const sub = s.pending ? `Wants to run ${s.pending.tool}: ${s.pending.summary}` : s.lastPrompt ? `You last said: ${s.lastPrompt}` : '';
+    const sub = s.pending ? `Wants to run ${s.pending.tool}: ${s.pending.summary}` : s.insight && s.status !== 'working' ? s.insight.summary : s.lastPrompt ? `You last said: ${s.lastPrompt}` : '';
     return `<tr class="s ${open ? 'open' : ''}" data-act="expand" data-id="${s.id}">
         <td class="st"><span class="dot ${dot}"></span>${label}${s.waitingFor ? `<div class="dim">${esc(s.waitingFor)}</div>` : ''}</td>
-        <td><div>${what}</div>${state.fluent && sub ? `<div class="doing">${esc(clip(sub, 160))}</div>` : ''}</td>
+        <td><div>${what}</div>${state.fluent && sub ? `<div class="doing">${esc(clip(sub, 220))}</div>` : ''}</td>
         <td class="dim">${kindBadge(s.agent)}${s.kind === 'background' ? ' · background' : ''}${s.canReply ? ' · connected' : ''}</td>
         <td class="dim hide mono">${esc(s.branch || '')}</td>
         <td class="dim hide mono" title="${esc(s.cwd)}">${esc(shortPath(s.cwd))}</td>
@@ -877,9 +941,9 @@ function render() {
   document.documentElement.dataset.theme = state.theme;
   const main = RENDER[state.view]();  // first: it may settle the selection
   const n = activeItems().length;
-  $('#nav').innerHTML = VIEWS.map(v => `<button class="${state.view === v ? 'on' : ''}" data-act="view" data-view="${v}">${cap(v)}${v === 'attention' && n ? `<span class="count">${n}</span>` : ''}${live && v !== 'activity' ? '<span class="mocktag">mock</span>' : ''}</button>`).join('');
+  $('#nav').innerHTML = VIEWS.map(v => `<button class="${state.view === v ? 'on' : ''}" data-act="view" data-view="${v}">${cap(v)}${v === 'attention' && n ? `<span class="count">${n}</span>` : ''}${live && (v === 'efforts' || v === 'knowledge') ? '<span class="mocktag">mock</span>' : ''}</button>`).join('');
   $('#tools').innerHTML = `
-    <span class="model"><span class="dot ${live && isOffline ? 'error' : 'running'}"></span>${live ? (isOffline ? 'service offline' : 'live · no summarizer yet') : 'qwen3:14b · local · caught up'}</span>
+    <span class="model"><span class="dot ${live && isOffline ? 'error' : 'running'}"></span>${live ? (isOffline ? 'service offline' : `live · ${summarizer.model ? summarizer.model.split('/').pop() : summarizer.error || 'no local model'}`) : 'qwen3:14b · local · caught up'}</span>
     <span class="seg" role="group" aria-label="Voice" title="Fluent shows what the model wrote. Raw shows what the sources said. (r)">
       <button class="${state.fluent ? 'on' : ''}" data-act="fluent" data-on="1">Fluent</button><button class="${state.fluent ? '' : 'on'}" data-act="fluent" data-on="0">Raw</button></span>
     <button class="icon" data-act="theme" title="Light or dark" aria-label="Toggle theme">◐</button>
@@ -952,12 +1016,21 @@ const actions = {
     const list = state.kb[d.sec], i = list.findIndex(x => x.id === d.id), gone = list.splice(i, 1)[0];
     toast('Removed', () => { state.kb[d.sec].splice(i, 0, gone); });
   },
+  liveSuggest: d => {
+    const ta = document.querySelector(`textarea[data-keep="item-${d.id}"]`);
+    ta.value = d.text; ta.focus();
+    return false;
+  },
+  liveItemSend: d => {
+    const ta = document.querySelector(`textarea[data-keep="item-${d.id}"]`), text = ta.value.trim(), it = itemById(d.id);
+    if (!text) { ta.focus(); return false; }
+    sendReply(it.session.id, text, () => { ta.value = ''; resolve(d.id, 'answered', text); toast('Sent to the session'); save(); render(); });
+    return false;
+  },
   liveSend: d => {
     const ta = document.querySelector(`textarea[data-keep="live-${d.id}"]`), text = ta.value.trim();
     if (!text) { ta.focus(); return false; }
-    fetch(`/api/sessions/${d.id}/reply`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) })
-      .then(res => { if (!res.ok) throw new Error(res.status); ta.value = ''; toast('Queued for the session'); refresh(true); })
-      .catch(() => toast('Could not reach the Slorp service'));
+    sendReply(d.id, text, () => { ta.value = ''; toast('Queued for the session'); refresh(true); });
     return false;
   },
   simulate: () => {

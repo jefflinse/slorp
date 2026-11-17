@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jefflinse/slorp/internal/claude"
+	"github.com/jefflinse/slorp/internal/enrich"
 	"github.com/jefflinse/slorp/internal/hub"
 	"github.com/jefflinse/slorp/internal/server"
 )
@@ -21,6 +22,8 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:4747", "loopback address to listen on")
 	ui := flag.String("ui", "index.html", "path to the web UI page")
 	claudeBin := flag.String("claude", "claude", "Claude Code executable")
+	llm := flag.String("llm", "http://localhost:1234", "OpenAI-compatible local model server; empty disables summaries")
+	model := flag.String("model", "", "model to summarize with (default: whichever one is loaded)")
 	flag.Parse()
 
 	host, _, err := net.SplitHostPort(*addr)
@@ -37,6 +40,9 @@ func main() {
 
 	h := hub.New()
 	go (&claude.Adapter{Hub: h, Bin: *claudeBin, Home: home, Interval: 2 * time.Second}).Run(ctx)
+	if *llm != "" {
+		go (&enrich.Enricher{Hub: h, BaseURL: *llm, Model: *model}).Run(ctx)
+	}
 
 	srv := &http.Server{Addr: *addr, Handler: server.New(h, *ui)}
 	go func() {

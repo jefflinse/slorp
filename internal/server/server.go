@@ -24,7 +24,8 @@ func New(h *hub.Hub, uiPath string) http.Handler {
 	})
 
 	mux.HandleFunc("GET /api/sessions", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"sessions": h.Sessions()})
+		sessions, items, summarizer := h.State()
+		writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions, "items": items, "summarizer": summarizer})
 	})
 
 	mux.HandleFunc("GET /api/events", func(w http.ResponseWriter, r *http.Request) {
@@ -110,7 +111,7 @@ func New(h *hub.Hub, uiPath string) http.Handler {
 			case "turn.complete":
 				s.Status, s.WaitingFor, s.Pending, s.ActiveAt = hub.Idle, "", nil, now
 				if in.Text != "" {
-					s.LastReply = claude.Tail(in.Text, 900)
+					s.LastReply = claude.Tail(in.Text, claude.ReplyLimit)
 				}
 			case "permission":
 				s.Status, s.WaitingFor, s.ActiveAt = hub.Waiting, "permission prompt", now
