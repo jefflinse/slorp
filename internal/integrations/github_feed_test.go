@@ -63,8 +63,8 @@ func permission(level string) func(node) {
 	return func(p node) { p["repository"] = node{"nameWithOwner": "Acme/Widgets", "viewerPermission": level} }
 }
 
-// collect runs the GitHub feed against a gh that answers with those nodes.
-func collect(t *testing.T, mine, review []node) []FeedItem {
+// surveyed runs the GitHub feed against a gh that answers with those nodes.
+func surveyed(t *testing.T, mine, review []node) Found {
 	t.Helper()
 	b, err := json.Marshal(node{"data": node{"mine": node{"nodes": mine}, "review": node{"nodes": review}}})
 	if err != nil {
@@ -75,6 +75,22 @@ func collect(t *testing.T, mine, review []node) []FeedItem {
 		t.Fatal(err)
 	}
 	return got
+}
+
+// collect returns the items the GitHub feed makes of those nodes.
+func collect(t *testing.T, mine, review []node) []FeedItem {
+	t.Helper()
+	return surveyed(t, mine, review).Items
+}
+
+func reviews(states ...string) func(node) {
+	return func(p node) {
+		nodes := []node{}
+		for _, s := range states {
+			nodes = append(nodes, node{"state": s})
+		}
+		p["latestOpinionatedReviews"] = node{"nodes": nodes}
+	}
 }
 
 func TestFeedPicksOutYourPullRequestsThatNeedYou(t *testing.T) {
@@ -196,11 +212,73 @@ func TestFeedListsReviewRequests(t *testing.T) {
 	}
 }
 
+func TestFeedListsYourPullRequestsAndWhoseMoveItIs(t *testing.T) {
+	tests := []struct {
+		name  string
+		edit  func(node)
+		onYou bool
+		needs string
+	}{
+		{"ready to merge", nil, true, "Ready to merge."},
+		{"checks failed", checks("FAILURE"), true, "Checks are failing."},
+		{"changes requested", set("reviewDecision", "CHANGES_REQUESTED"), true, "A reviewer asked for changes."},
+		{"conflicts with its base", set("mergeable", "CONFLICTING"), true, "It conflicts with its base branch."},
+		{"conflicts, and changes requested", both(set("mergeable", "CONFLICTING"), set("reviewDecision", "CHANGES_REQUESTED")), true, "A reviewer asked for changes."},
+		{"a draft", set("isDraft", true), false, "Still a draft."},
+		{"a failing draft", both(set("isDraft", true), checks("FAILURE")), false, "Still a draft."},
+		{"checks still running", checks("PENDING"), false, "Checks are still running."},
+		{"checks running, review outstanding", both(checks("PENDING"), set("reviewDecision", "REVIEW_REQUIRED")), false, "Checks are still running."},
+		{"still waiting on a review", set("reviewDecision", "REVIEW_REQUIRED"), false, "Waiting on review."},
+		{"approved where you cannot merge", both(set("reviewDecision", "APPROVED"), permission("READ")), false, "Waiting on someone else."},
+		{"mergeability not worked out yet", set("mergeable", "UNKNOWN"), false, "Waiting on someone else."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := surveyed(t, []node{own(tt.edit)}, nil).PullRequests
+			if len(got) != 1 || got[0].OnYou != tt.onYou || got[0].Needs != tt.needs {
+				t.Fatalf("got %+v, want one pull request, on you = %v, %q", got, tt.onYou, tt.needs)
+			}
+		})
+	}
+	if got := surveyed(t, []node{own(func(p node) { clear(p) })}, nil).PullRequests; len(got) != 0 {
+		t.Errorf("something that is not a pull request was listed: %+v", got)
+	}
+}
+
+func TestFeedSaysHowAPullRequestStands(t *testing.T) {
+	got := surveyed(t,
+		[]node{own(both(reviews("APPROVED", "CHANGES_REQUESTED", "APPROVED", "DISMISSED"), set("reviewRequests", node{"totalCount": 3}),
+			set("author", node{"login": "you", "__typename": "User"}), set("mergeable", "CONFLICTING"), checks("PENDING")))},
+		[]node{asked(nil), asked(both(set("number", 11), set("isDraft", true), set("url", "javascript:alert(1)"), checks("ERROR"))), asked(func(p node) { clear(p) })}).PullRequests
+	if len(got) != 3 {
+		t.Fatalf("listed %d pull requests, want yours and the two you are asked to review: %+v", len(got), got)
+	}
+	want := PullRequest{Repo: "Acme/Widgets", Number: 7, Title: "Add a thing", URL: "https://github.com/Acme/Widgets/pull/7", Author: "you", Mine: true,
+		At: time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC), Approvals: 2, ChangesRequested: 1, Awaiting: 3, Checks: "running", Conflicts: true,
+		OnYou: true, Needs: "It conflicts with its base branch."}
+	if got[0] != want {
+		t.Errorf("yours =\n%+v, want\n%+v", got[0], want)
+	}
+	want = PullRequest{Repo: "Acme/Widgets", Number: 9, Title: "Fix the flange", URL: "https://github.com/Acme/Widgets/pull/9", Author: "sam",
+		At: time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC), Checks: "none", OnYou: true, Needs: "Your review is requested."}
+	if got[1] != want {
+		t.Errorf("one to review =\n%+v, want\n%+v", got[1], want)
+	}
+	if d := got[2]; !d.Draft || d.OnYou || d.Needs != "Your review is requested, but it is still a draft." || d.URL != "" || d.Checks != "failing" || d.Mine {
+		t.Errorf("draft to review = %+v; want it listed but not on you, with no link that is not https", d)
+	}
+	for state, word := range map[string]string{"SUCCESS": "passing", "FAILURE": "failing"} {
+		if got := surveyed(t, []node{own(checks(state))}, nil).PullRequests[0].Checks; got != word {
+			t.Errorf("checks %s read as %q, want %q", state, got, word)
+		}
+	}
+}
+
 func TestFeedRunsOneFixedReadOnlyQuery(t *testing.T) {
 	r := &recorder{out: `{"data":{"mine":{"nodes":[]},"review":{"nodes":[]}}}`}
 	got, err := GitHub(r.run).Feed(ctx)
-	if err != nil || got == nil || len(got) != 0 {
-		t.Fatalf("Feed = %v, %v; want an empty list", got, err)
+	if err != nil || got.Items == nil || len(got.Items) != 0 || got.PullRequests == nil || len(got.PullRequests) != 0 {
+		t.Fatalf("Feed = %+v, %v; want two empty lists", got, err)
 	}
 	want := []string{"gh", "api", "graphql", "-f", "query=" + feedQuery}
 	if !reflect.DeepEqual(r.argv, want) || r.dir != "" {
@@ -209,7 +287,7 @@ func TestFeedRunsOneFixedReadOnlyQuery(t *testing.T) {
 	if strings.Contains(feedQuery, "mutation") || !strings.HasPrefix(feedQuery, "query {") {
 		t.Error("the feed's request is not a plain query")
 	}
-	for _, scope := range []string{"is:open author:@me", "is:open review-requested:@me"} {
+	for _, scope := range []string{"is:open author:@me", "is:open review-requested:@me", "reviewRequests", "latestOpinionatedReviews", "mergeable", "statusCheckRollup"} {
 		if !strings.Contains(feedQuery, scope) {
 			t.Errorf("the query does not ask for %q", scope)
 		}
@@ -354,7 +432,7 @@ func TestClones(t *testing.T) {
 
 func feeder(id string, available bool, found []FeedItem) Integration {
 	in := fake(id, available, true, new(int))
-	in.Feed = func(ctx context.Context) ([]FeedItem, error) { return found, nil }
+	in.Feed = func(ctx context.Context) (Found, error) { return Found{Items: found}, nil }
 	in.Watches = []string{"Watches " + id}
 	in.Clones = func(dir string) []string {
 		if filepath.Base(dir) == "empty" {
@@ -382,7 +460,7 @@ func TestManagerFeeds(t *testing.T) {
 			t.Errorf("feed %d = %s on=%v, want %s on=%v", i, got[i].ID, got[i].On, want.id, want.on)
 		}
 	}
-	if found, err := got[0].Fetch(ctx); err != nil || len(found) != 1 || found[0].Key != "k" {
+	if found, err := got[0].Fetch(ctx); err != nil || len(found.Items) != 1 || found.Items[0].Key != "k" {
 		t.Errorf("Fetch = %+v, %v", found, err)
 	}
 

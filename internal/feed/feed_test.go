@@ -25,6 +25,7 @@ type source struct {
 	order   []string
 	on      map[string]bool
 	found   map[string][]integrations.FeedItem
+	pulls   map[string][]integrations.PullRequest
 	err     error
 	fetched map[string]int
 	clones  map[string][]string
@@ -44,11 +45,11 @@ func (s *source) Feeds(context.Context) []integrations.Feed {
 	defer s.mu.Unlock()
 	var out []integrations.Feed
 	for _, id := range s.order {
-		out = append(out, integrations.Feed{ID: id, On: s.on[id], Fetch: func(context.Context) ([]integrations.FeedItem, error) {
+		out = append(out, integrations.Feed{ID: id, On: s.on[id], Fetch: func(context.Context) (integrations.Found, error) {
 			s.mu.Lock()
 			defer s.mu.Unlock()
 			s.fetched[id]++
-			return s.found[id], s.err
+			return integrations.Found{Items: s.found[id], PullRequests: s.pulls[id]}, s.err
 		}})
 	}
 	return out
@@ -127,6 +128,19 @@ func TestStepHandsWhatAFeedFoundToTheHub(t *testing.T) {
 	}
 	if !regexp.MustCompile(`^github-[0-9a-f]{12}$`).MatchString(got[0].ID) {
 		t.Errorf("id = %q, want one safe to put in a page", got[0].ID)
+	}
+}
+
+func TestStepHandsTheHubThePullRequestsAFeedListed(t *testing.T) {
+	src := newSource("github")
+	listed := integrations.PullRequest{Repo: "acme/widgets", Number: 7, Title: "Add a thing", Approvals: 2, Needs: "Waiting on review."}
+	src.pulls = map[string][]integrations.PullRequest{"github": {listed}}
+	p, h, _ := newPoller(t, src)
+	p.Step(ctx, false)
+
+	got := h.State().PullRequests
+	if len(got) != 1 || got[0].PullRequest != listed || got[0].Source != "github" {
+		t.Errorf("pull requests = %+v, want the one listed, as GitHub's", got)
 	}
 }
 

@@ -481,10 +481,13 @@ func TestEventsStreamAnnouncesChanges(t *testing.T) {
 func TestFeedItemsOverHTTP(t *testing.T) {
 	f := newFixture(t)
 	f.post("/api/efforts", `{"name":"Widgets"}`)
-	f.hub.SetFeed("fake", []hub.Item{{ID: "fake-1", Kind: "ready-to-merge", Title: "Ready", URL: "https://example.com/1", Repo: "Acme/Widgets"}}, nil)
+	f.hub.SetFeed("fake", []hub.Item{{ID: "fake-1", Kind: "ready-to-merge", Title: "Ready", URL: "https://example.com/1", Repo: "Acme/Widgets"}},
+		[]integrations.PullRequest{{Repo: "Acme/Widgets", Number: 7, Title: "Add a thing", URL: "https://example.com/7", Author: "sam", Approvals: 2, Awaiting: 1, Checks: "passing", Needs: "Waiting on review."}}, nil)
 
 	_, body := f.do("GET", "/api/sessions", "", nil)
-	for _, field := range []string{`"id":"fake-1"`, `"source":"fake"`, `"url":"https://example.com/1"`, `"repo":"Acme/Widgets"`, `"effort":""`, `"replies":[]`, `"feeds":{"fake":{"at":"`, `"count":1`} {
+	for _, field := range []string{`"pullRequests":[{"repo":"Acme/Widgets","number":7,"title":"Add a thing","url":"https://example.com/7","author":"sam","mine":false,"draft":false,`,
+		`"approvals":2,"changesRequested":0,"awaiting":1,"checks":"passing","conflicts":false,"onYou":false,"needs":"Waiting on review.","source":"fake","effort":""}]`,
+		`"id":"fake-1"`, `"source":"fake"`, `"url":"https://example.com/1"`, `"repo":"Acme/Widgets"`, `"effort":""`, `"replies":[]`, `"feeds":{"fake":{"at":"`, `"count":1`} {
 		if !strings.Contains(body, field) {
 			t.Errorf("state lacks %s, which the page reads: %s", field, body)
 		}

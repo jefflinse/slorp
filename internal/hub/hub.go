@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jefflinse/slorp/internal/integrations"
 	"github.com/jefflinse/slorp/internal/kb"
 )
 
@@ -172,7 +173,17 @@ type FeedStatus struct {
 
 type feed struct {
 	items []Item
+	pulls []integrations.PullRequest
 	FeedStatus
+}
+
+// PullRequest is an open pull request an integration listed, filed like the
+// feed items from its repository.
+type PullRequest struct {
+	integrations.PullRequest
+	Source    string `json:"source"`
+	Effort    string `json:"effort"`
+	EffortVia string `json:"effortVia,omitempty"`
 }
 
 // Summarizer reports which model, if any, is writing insights.
@@ -542,9 +553,10 @@ func (h *Hub) Looked(l Lookup) {
 	h.changed()
 }
 
-// SetFeed records what an integration's feed found. When the collection
-// failed, what it found the time before is kept.
-func (h *Hub) SetFeed(source string, found []Item, err error) {
+// SetFeed records what an integration's feed found: the things that need the
+// user and the pull requests it listed. When the collection failed, what it
+// found the time before is kept.
+func (h *Hub) SetFeed(source string, found []Item, pulls []integrations.PullRequest, err error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	f := h.feeds[source]
@@ -561,6 +573,7 @@ func (h *Hub) SetFeed(source string, found []Item, err error) {
 			it.Source, it.SessionID, it.Replies = source, "", []string{}
 			f.items[i] = it
 		}
+		f.pulls = pulls
 	}
 	f.Count = len(f.items)
 	h.last = ""
@@ -598,22 +611,52 @@ func (h *Hub) fed() []Item {
 	out := []Item{}
 	for _, id := range sources {
 		for _, it := range h.feeds[id].items {
-			var held []string
-			for dir, repos := range h.clones {
-				for _, r := range repos {
-					if strings.EqualFold(r, it.Repo) {
-						held = append(held, dir)
-						break
-					}
-				}
-			}
-			if effort, via, ok := h.kb.ResolveRepo(it.Repo, held); ok {
-				it.Effort, it.EffortVia = effort, via
-			}
+			it.Effort, it.EffortVia = h.fileRepo(it.Repo)
 			out = append(out, it)
 		}
 	}
 	return out
+}
+
+// pulls returns every feed's pull requests, those waiting on the user first
+// and the most recently changed first among the rest.
+func (h *Hub) pulls() []PullRequest {
+	out := []PullRequest{}
+	for id, f := range h.feeds {
+		for _, p := range f.pulls {
+			pr := PullRequest{PullRequest: p, Source: id}
+			pr.Effort, pr.EffortVia = h.fileRepo(p.Repo)
+			out = append(out, pr)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].OnYou != out[j].OnYou {
+			return out[i].OnYou
+		}
+		if !out[i].At.Equal(out[j].At) {
+			return out[i].At.After(out[j].At)
+		}
+		return out[i].Repo+"#"+strconv.Itoa(out[i].Number) < out[j].Repo+"#"+strconv.Itoa(out[j].Number)
+	})
+	return out
+}
+
+// fileRepo reports the effort a repository's items belong under, empty when
+// neither the user nor a directory rule says.
+func (h *Hub) fileRepo(repo string) (effort, via string) {
+	var held []string
+	for dir, repos := range h.clones {
+		for _, r := range repos {
+			if strings.EqualFold(r, repo) {
+				held = append(held, dir)
+				break
+			}
+		}
+	}
+	if effort, via, ok := h.kb.ResolveRepo(repo, held); ok {
+		return effort, via
+	}
+	return "", ""
 }
 
 func newID() string {
@@ -641,6 +684,8 @@ type State struct {
 	Lookups []Lookup `json:"lookups"`
 	// Feeds says how each integration's last collection went, by integration.
 	Feeds map[string]FeedStatus `json:"feeds"`
+	// PullRequests are the open ones the integrations listed.
+	PullRequests []PullRequest `json:"pullRequests"`
 }
 
 func (h *Hub) State() State {
@@ -652,7 +697,7 @@ func (h *Hub) State() State {
 		feeds[id] = f.FeedStatus
 	}
 	return State{Sessions: sessions, Items: append(items(sessions), h.fed()...), Efforts: h.efforts(sessions), Summarizer: h.summ,
-		Settings: h.settings, Knowledge: h.kb.Knowledge(), Lookups: append([]Lookup{}, h.lookups...), Feeds: feeds}
+		Settings: h.settings, Knowledge: h.kb.Knowledge(), Lookups: append([]Lookup{}, h.lookups...), Feeds: feeds, PullRequests: h.pulls()}
 }
 
 func (h *Hub) efforts(sessions []Session) []Effort {

@@ -23,17 +23,15 @@ const (
 // feedQuery asks, in one read-only request, for the user's open pull
 // requests and the open ones waiting on their review.
 const feedQuery = `query {
-  mine: search(query: "is:pr is:open author:@me archived:false", type: ISSUE, first: 50) {
-    nodes { ... on PullRequest { number title url isDraft updatedAt reviewDecision mergeable headRefOid
-      repository { nameWithOwner viewerPermission }
-      commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } }
-  }
-  review: search(query: "is:pr is:open review-requested:@me archived:false", type: ISSUE, first: 50) {
-    nodes { ... on PullRequest { number title url isDraft updatedAt
-      author { login __typename }
-      repository { nameWithOwner } } }
-  }
-}`
+  mine: search(query: "is:pr is:open author:@me archived:false", type: ISSUE, first: 50) { nodes { ...pr } }
+  review: search(query: "is:pr is:open review-requested:@me archived:false", type: ISSUE, first: 50) { nodes { ...pr } }
+}
+fragment pr on PullRequest { number title url isDraft updatedAt reviewDecision mergeable headRefOid
+  author { login __typename }
+  repository { nameWithOwner viewerPermission }
+  reviewRequests { totalCount }
+  latestOpinionatedReviews(first: 50) { nodes { state } }
+  commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } }`
 
 var githubWatches = []string{
 	"Pull requests where your review is requested.",
@@ -64,6 +62,14 @@ type feedPR struct {
 		Name       string `json:"nameWithOwner"`
 		Permission string `json:"viewerPermission"`
 	} `json:"repository"`
+	ReviewRequests struct {
+		TotalCount int `json:"totalCount"`
+	} `json:"reviewRequests"`
+	Reviews struct {
+		Nodes []struct {
+			State string `json:"state"`
+		} `json:"nodes"`
+	} `json:"latestOpinionatedReviews"`
 	Commits struct {
 		Nodes []struct {
 			Commit struct {
@@ -84,11 +90,11 @@ func (p feedPR) checks() string {
 	return ""
 }
 
-func githubFeed(run Runner) func(ctx context.Context) ([]FeedItem, error) {
-	return func(ctx context.Context) ([]FeedItem, error) {
+func githubFeed(run Runner) func(ctx context.Context) (Found, error) {
+	return func(ctx context.Context) (Found, error) {
 		out, err := run(ctx, "", "gh", "api", "graphql", "-f", "query="+feedQuery)
 		if err != nil {
-			return nil, err
+			return Found{}, err
 		}
 		var res struct {
 			Data struct {
@@ -97,49 +103,72 @@ func githubFeed(run Runner) func(ctx context.Context) ([]FeedItem, error) {
 			} `json:"data"`
 		}
 		if json.Unmarshal(out, &res) != nil {
-			return nil, errors.New("gh returned something unreadable")
+			return Found{}, errors.New("gh returned something unreadable")
 		}
-		return needs(res.Data.Mine.Nodes, res.Data.Review.Nodes), nil
+		return survey(res.Data.Mine.Nodes, res.Data.Review.Nodes), nil
 	}
 }
 
-// needs picks out the pull requests that are waiting on the user. Drafts,
-// and the user's own pull requests still waiting on someone else, are not.
-func needs(mine, review []feedPR) []FeedItem {
-	out := []FeedItem{}
+// survey lists every pull request and picks out, as items, those waiting on
+// the user. Drafts, a pull request of the user's that conflicts with its
+// base, and one still waiting on someone else are listed but are not items.
+func survey(mine, review []feedPR) Found {
+	found := Found{Items: []FeedItem{}, PullRequests: []PullRequest{}}
 	for _, p := range mine {
-		if p.IsDraft {
+		if p.Number == 0 {
 			continue
 		}
 		failing := p.checks() == "FAILURE" || p.checks() == "ERROR"
 		passing := p.checks() == "SUCCESS" || p.checks() == ""
 		approved := p.ReviewDecision == "APPROVED" || p.ReviewDecision == ""
 		canMerge := p.Repository.Permission == "ADMIN" || p.Repository.Permission == "MAINTAIN" || p.Repository.Permission == "WRITE"
+		pr := p.pull(true)
 		it := p.item("opened by you")
 		it.Summary += fmt.Sprintf(" Review: %s. Checks: %s.%s",
 			orWord(strings.ToLower(strings.ReplaceAll(p.ReviewDecision, "_", " ")), "none required"),
 			orWord(checkWords[p.checks()], "still running"), mergeWords[p.Mergeable])
 		switch {
+		case p.IsDraft:
+			pr.Needs = "Still a draft."
 		case failing:
-			it.Kind, it.Urgency = FeedChecks, "soon"
+			it.Kind, it.Urgency, pr.Needs = FeedChecks, "soon", "Checks are failing."
 			it.Title, it.Ask = "Checks failing: "+p.Title, "Checks are failing on your pull request. Fix them or run them again."
 			it.Key += ":" + p.Head
 		case p.ReviewDecision == "CHANGES_REQUESTED":
-			it.Kind, it.Urgency = FeedChanges, "soon"
+			it.Kind, it.Urgency, pr.Needs = FeedChanges, "soon", "A reviewer asked for changes."
 			it.Title, it.Ask = "Changes requested: "+p.Title, "A reviewer asked for changes on your pull request."
+		case pr.Conflicts:
+			pr.OnYou, pr.Needs = true, "It conflicts with its base branch."
 		case passing && approved && canMerge && p.Mergeable == "MERGEABLE":
-			it.Kind, it.Urgency = FeedReady, "whenever"
+			it.Kind, it.Urgency, pr.Needs = FeedReady, "whenever", "Ready to merge."
 			it.Title, it.Ask = "Ready to merge: "+p.Title, "Your pull request has nothing left in its way. Merge it when you are ready."
+		case !failing && !passing:
+			pr.Needs = "Checks are still running."
+		case p.ReviewDecision == "REVIEW_REQUIRED":
+			pr.Needs = "Waiting on review."
 		default:
-			continue
+			pr.Needs = "Waiting on someone else."
 		}
-		it.Key += ":" + it.Kind
-		out = append(out, it)
+		if it.Kind != "" {
+			pr.OnYou = true
+			it.Key += ":" + it.Kind
+			found.Items = append(found.Items, it)
+		}
+		found.PullRequests = append(found.PullRequests, pr)
 	}
 	for _, p := range review {
-		if p.Number == 0 || p.IsDraft {
+		if p.Number == 0 {
 			continue
 		}
+		pr := p.pull(false)
+		pr.Needs = "Your review is requested."
+		if p.IsDraft {
+			pr.Needs = "Your review is requested, but it is still a draft."
+			found.PullRequests = append(found.PullRequests, pr)
+			continue
+		}
+		pr.OnYou = true
+		found.PullRequests = append(found.PullRequests, pr)
 		who := orWord(p.Author.Login, "someone")
 		it := p.item("opened by " + who)
 		it.Kind, it.Urgency = FeedReview, "soon"
@@ -148,9 +177,28 @@ func needs(mine, review []feedPR) []FeedItem {
 			it.Urgency = "whenever"
 		}
 		it.Key += ":" + it.Kind
-		out = append(out, it)
+		found.Items = append(found.Items, it)
 	}
-	return out
+	return found
+}
+
+// pull is the pull request as the user's list of them shows it, before
+// anything is said about whose move it is.
+func (p feedPR) pull(mine bool) PullRequest {
+	pr := PullRequest{Repo: p.Repository.Name, Number: p.Number, Title: p.Title, Author: p.Author.Login, Mine: mine, Draft: p.IsDraft,
+		At: p.UpdatedAt, Awaiting: p.ReviewRequests.TotalCount, Checks: orWord(checkWords[p.checks()], "running"), Conflicts: p.Mergeable == "CONFLICTING"}
+	if strings.HasPrefix(p.URL, "https://") {
+		pr.URL = p.URL
+	}
+	for _, r := range p.Reviews.Nodes {
+		switch r.State {
+		case "APPROVED":
+			pr.Approvals++
+		case "CHANGES_REQUESTED":
+			pr.ChangesRequested++
+		}
+	}
+	return pr
 }
 
 func (p feedPR) item(by string) FeedItem {

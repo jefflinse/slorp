@@ -36,8 +36,9 @@ type Integration struct {
 	// Scope tells the model what can be looked up from dir, a session's
 	// working directory. ok is false when nothing can be.
 	Scope func(dir string) (note string, ok bool)
-	// Feed collects what needs the user right now. Nil when the tool has no feed.
-	Feed func(ctx context.Context) ([]FeedItem, error)
+	// Feed collects what the tool holds for the user right now. Nil when the
+	// tool has no feed.
+	Feed func(ctx context.Context) (Found, error)
 	// Watches says, for the user, what the feed surfaces.
 	Watches []string
 	// Clones names the repositories, as feed items name them, checked out at
@@ -62,12 +63,48 @@ type FeedItem struct {
 	At   time.Time
 }
 
+// PullRequest is one open pull request the user wrote or is asked to review.
+type PullRequest struct {
+	// Repo is the repository it belongs to, as "owner/name".
+	Repo   string `json:"repo"`
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	URL    string `json:"url,omitempty"`
+	Author string `json:"author"`
+	// Mine is true when the user wrote it.
+	Mine  bool      `json:"mine"`
+	Draft bool      `json:"draft"`
+	At    time.Time `json:"at"`
+	// Approvals and ChangesRequested count reviewers by their latest verdict.
+	Approvals        int `json:"approvals"`
+	ChangesRequested int `json:"changesRequested"`
+	// Awaiting counts the reviewers asked who have not answered.
+	Awaiting int `json:"awaiting"`
+	// Checks is "passing", "failing", "running" or "none".
+	Checks string `json:"checks"`
+	// Conflicts is true when it cannot merge into its base branch as it stands.
+	Conflicts bool `json:"conflicts"`
+	// OnYou is true while the next move is the user's.
+	OnYou bool `json:"onYou"`
+	// Needs says what that move is, or what the pull request is waiting on.
+	Needs string `json:"needs"`
+}
+
+// Found is what one collection of a feed brought back.
+type Found struct {
+	// Items are the things that need the user.
+	Items []FeedItem
+	// PullRequests are the open ones the user is involved in, whether or not
+	// one needs them.
+	PullRequests []PullRequest
+}
+
 // Feed is one integration's feed as a poller sees it.
 type Feed struct {
 	ID string
 	// On is true while the integration is turned on and usable.
 	On    bool
-	Fetch func(ctx context.Context) ([]FeedItem, error)
+	Fetch func(ctx context.Context) (Found, error)
 }
 
 // Status is an integration as the UI shows it.

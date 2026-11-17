@@ -3,11 +3,13 @@ package hub
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jefflinse/slorp/internal/integrations"
 	"github.com/jefflinse/slorp/internal/kb"
 	"github.com/jefflinse/slorp/internal/store"
 	"github.com/jefflinse/slorp/internal/testdb"
@@ -787,7 +789,7 @@ func TestFeedItemsSitBesideSessionItems(t *testing.T) {
 	h.SetRoster(agent, []Session{{ID: "s1", Agent: agent, Status: Waiting}})
 	in := found("gh-1", "acme/widgets")
 	in.SessionID, in.Source, in.Replies = "s1", "wrong", nil
-	h.SetFeed("github", []Item{in}, nil)
+	h.SetFeed("github", []Item{in}, nil, nil)
 
 	st := h.State()
 	if len(st.Items) != 2 || st.Items[0].SessionID != "s1" || st.Items[0].Source != "" {
@@ -810,13 +812,13 @@ func TestFeedItemsSitBesideSessionItems(t *testing.T) {
 
 func TestFeedsAreKeptApartAndReplaced(t *testing.T) {
 	h, _, _ := newHub(t)
-	h.SetFeed("jira", []Item{found("j-1", "")}, nil)
-	h.SetFeed("github", []Item{found("gh-1", "acme/a"), found("gh-2", "acme/b")}, nil)
+	h.SetFeed("jira", []Item{found("j-1", "")}, nil, nil)
+	h.SetFeed("github", []Item{found("gh-1", "acme/a"), found("gh-2", "acme/b")}, nil, nil)
 	if got := feedItems(h); len(got) != 3 || got[0].ID != "gh-1" || got[1].ID != "gh-2" || got[2].ID != "j-1" || got[2].Source != "jira" {
 		t.Fatalf("items = %+v, want each feed's, in a steady order", got)
 	}
 
-	h.SetFeed("github", []Item{found("gh-2", "acme/b")}, nil)
+	h.SetFeed("github", []Item{found("gh-2", "acme/b")}, nil, nil)
 	if got := feedItems(h); len(got) != 2 || got[0].ID != "gh-2" || got[1].ID != "j-1" {
 		t.Errorf("items = %+v, want the new collection to replace that feed's old one and leave the other", got)
 	}
@@ -833,16 +835,16 @@ func TestFeedsAreKeptApartAndReplaced(t *testing.T) {
 
 func TestFailedCollectionKeepsWhatWasFoundBefore(t *testing.T) {
 	h, _, _ := newHub(t)
-	h.SetFeed("github", nil, errors.New("gh: not signed in"))
+	h.SetFeed("github", nil, nil, errors.New("gh: not signed in"))
 	if st := h.State(); st.Feeds["github"].Error != "gh: not signed in" || st.Feeds["github"].Count != 0 || len(feedItems(h)) != 0 {
 		t.Errorf("after a first failed collection: %+v", st.Feeds)
 	}
 
-	h.SetFeed("github", []Item{found("gh-1", "acme/a")}, nil)
+	h.SetFeed("github", []Item{found("gh-1", "acme/a")}, nil, nil)
 	if st := h.State(); st.Feeds["github"].Error != "" {
 		t.Errorf("a good collection left the old error: %+v", st.Feeds)
 	}
-	h.SetFeed("github", nil, errors.New("timed out"))
+	h.SetFeed("github", nil, nil, errors.New("timed out"))
 	st := h.State()
 	if got := feedItems(h); len(got) != 1 || got[0].ID != "gh-1" {
 		t.Errorf("items = %+v, want what was found before the failure", got)
@@ -857,7 +859,7 @@ func TestFeedItemsFileByRepository(t *testing.T) {
 	a, b := effort(t, k, "A"), effort(t, k, "B")
 	must(t, k.AddDir(a, "/work/a"))
 	must(t, k.AddDir(b, "/work/b"))
-	h.SetFeed("github", []Item{found("gh-1", "Acme/Widgets"), found("gh-2", "acme/gadgets"), found("gh-3", "acme/shared")}, nil)
+	h.SetFeed("github", []Item{found("gh-1", "Acme/Widgets"), found("gh-2", "acme/gadgets"), found("gh-3", "acme/shared")}, nil, nil)
 	filed := func() map[string][2]string {
 		out := map[string][2]string{}
 		for _, it := range feedItems(h) {
@@ -919,15 +921,15 @@ func TestFeedChangesAreAnnounced(t *testing.T) {
 		}
 	}
 
-	h.SetFeed("github", []Item{found("gh-1", "acme/widgets")}, nil)
+	h.SetFeed("github", []Item{found("gh-1", "acme/widgets")}, nil, nil)
 	if !heard() {
 		t.Error("a collection was not announced")
 	}
-	h.SetFeed("github", []Item{found("gh-1", "acme/widgets")}, nil)
+	h.SetFeed("github", []Item{found("gh-1", "acme/widgets")}, nil, nil)
 	if !heard() {
 		t.Error("an identical collection was not announced, so the page would not show it was checked again")
 	}
-	h.SetFeed("github", nil, errors.New("down"))
+	h.SetFeed("github", nil, nil, errors.New("down"))
 	if !heard() {
 		t.Error("a failed collection was not announced")
 	}
@@ -991,4 +993,51 @@ func TestRetireDropsSessionsWhoseBridgeWentSilent(t *testing.T) {
 	h.sessions["polling"].bridgeSeen = time.Now().Add(-29 * time.Second)
 	h.Retire("opencode", 30*time.Second)
 	session(t, h, "polling")
+}
+
+func pull(repo string, n int, onYou bool, at time.Time) integrations.PullRequest {
+	return integrations.PullRequest{Repo: repo, Number: n, Title: "A change", OnYou: onYou, At: at}
+}
+
+func TestPullRequestsAreListedAndFiledByRepository(t *testing.T) {
+	h, k, _ := newHub(t)
+	if st := h.State(); st.PullRequests == nil || len(st.PullRequests) != 0 {
+		t.Errorf("PullRequests = %v before any collection, want an empty list", st.PullRequests)
+	}
+	a := effort(t, k, "A")
+	must(t, k.AddDir(a, "/work/a"))
+	h.SetClones(map[string][]string{"/work/a": {"acme/widgets"}})
+	day := func(d int) time.Time { return time.Date(2026, 11, d, 0, 0, 0, 0, time.UTC) }
+	h.SetFeed("github", nil, []integrations.PullRequest{
+		pull("acme/gadgets", 1, false, day(9)), pull("Acme/Widgets", 2, true, day(1)), pull("acme/gadgets", 4, true, day(5)),
+		pull("acme/gadgets", 3, false, day(9)), pull("acme/gadgets", 5, true, day(5)),
+	}, nil)
+
+	got := h.State().PullRequests
+	var order []int
+	for _, p := range got {
+		order = append(order, p.Number)
+	}
+	if want := []int{4, 5, 2, 1, 3}; !reflect.DeepEqual(order, want) {
+		t.Fatalf("order = %v, want %v: those waiting on you first, then the most recently changed, then by number", order, want)
+	}
+	if p := got[2]; p.Effort != a || p.EffortVia != kb.ViaDir || p.Source != "github" || p.Title != "A change" {
+		t.Errorf("widgets pull request = %+v, want it filed where its checkout is and marked as GitHub's", p)
+	}
+	if p := got[0]; p.Effort != "" || p.EffortVia != "" {
+		t.Errorf("gadgets pull request = %+v, want it unsorted", p)
+	}
+
+	h.SetFeed("github", nil, nil, errors.New("timed out"))
+	if got := h.State().PullRequests; len(got) != 5 {
+		t.Errorf("after a failed collection %d pull requests are listed, want the 5 found before", len(got))
+	}
+	h.SetFeed("github", nil, []integrations.PullRequest{pull("acme/gadgets", 1, false, day(9))}, nil)
+	if got := h.State().PullRequests; len(got) != 1 {
+		t.Errorf("after the next collection %d pull requests are listed, want the 1 it found", len(got))
+	}
+	h.DropFeed("github")
+	if got := h.State().PullRequests; len(got) != 0 {
+		t.Errorf("after the feed is turned off %d pull requests are still listed", len(got))
+	}
 }
