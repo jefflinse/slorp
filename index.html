@@ -863,7 +863,7 @@ function toItems(data) {
       src: KINDS[i.source] || i.source, raw: `${i.source} · ${i.repo} · ${i.kind}` };
     const s = byId[i.sessionId];
     return { ...i, live: true, session: s, effort: s.effort || 'unsorted', kind: s.agent, itemKind: i.kind,
-      src: s.kind === 'background' ? 'Claude background session' : 'Claude session',
+      src: `${KINDS[s.agent] || s.agent} ${s.kind === 'background' ? 'background session' : 'session'}`,
       raw: `${s.agent} · ${shortPath(s.cwd)} · ${s.id.slice(0, 8)}` };
   });
 }
@@ -983,8 +983,8 @@ function liveDetail(s) {
 function viewActivityLive() {
   const n = k => live.filter(s => s.status === k).length;
   const lede = live.length
-    ? `${cap(num(live.length))} Claude Code session${live.length === 1 ? ' is' : 's are'} open on this machine: ${n('waiting')} waiting on you, ${n('working')} working, ${n('idle') + n('done') + n('failed')} quiet.`
-    : 'No Claude Code sessions are open on this machine.';
+    ? `${cap(num(live.length))} agent session${live.length === 1 ? ' is' : 's are'} open on this machine: ${n('waiting')} waiting on you, ${n('working')} working, ${n('idle') + n('done') + n('failed')} quiet.`
+    : 'No agent sessions are open on this machine.';
   const rows = live.map(s => {
     const open = state.expanded[s.id], [dot, label] = LIVE_STATUS[s.status] || LIVE_STATUS.idle;
     const name = clip(s.insight?.title || s.title || s.name || s.id.slice(0, 8), 90);
