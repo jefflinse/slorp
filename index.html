@@ -522,7 +522,8 @@ const span = m => m < 60 ? `${Math.round(m)}m` : m < 1440 ? `${Math.round(m / 60
 const mockItems = () => ITEMS.concat(state.extra.map(id => POOL.find(p => p.id === id)).filter(Boolean));
 const allItems = () => live ? liveItems : mockItems();
 const itemById = id => allItems().find(i => i.id === id);
-const effortById = id => EFFORTS.find(e => e.id === id) || (live && id !== 'unsorted' ? { id, name: id, raw: id, line: '' } : UNSORTED);
+const LIVE_UNSORTED = { id: 'unsorted', name: 'Unsorted', raw: '(not filed under any effort)', about: 'Sessions that are not filed under any effort.', line: '', stands: '', dirs: [] };
+const effortById = id => live ? (liveEfforts.find(e => e.id === id) || EFFORTS.find(e => e.id === id) || LIVE_UNSORTED) : (EFFORTS.find(e => e.id === id) || UNSORTED);
 const effortOf = it => state.moved[it.id] || it.effort;
 const sessEffort = s => state.sessMoved[s.id] || s.effort;
 const ageOf = it => it.live ? minsSince(it.at) : state.arrived[it.id] ? (Date.now() - state.arrived[it.id]) / 60000 : it.age;
@@ -544,15 +545,15 @@ function groupItems(items) {
   let defs;
   if (state.groupBy === 'urgency') defs = Object.keys(URGENCY).map(k => ({ key: 'u:' + k, name: URGENCY[k], test: i => i.urgency === k }));
   else if (state.groupBy === 'source') defs = Object.keys(KINDS).map(k => ({ key: 'k:' + k, name: KINDS[k], test: i => i.kind === k }));
-  else defs = (live ? [...new Set(sorted.map(i => i.effort))].map(effortById) : EFFORTS.concat(UNSORTED)).map(e => ({ key: 'e:' + e.id, effort: e, name: e.name, test: i => effortOf(i) === e.id }));
+  else defs = (live ? liveEfforts.concat(LIVE_UNSORTED) : EFFORTS.concat(UNSORTED)).map(e => ({ key: 'e:' + e.id, effort: e, name: e.name, test: i => effortOf(i) === e.id }));
   return defs.map(d => ({ ...d, items: sorted.filter(d.test) })).filter(g => g.items.length);
 }
 const visibleOrder = () => groupItems(activeItems()).filter(g => !state.collapsed[g.key]).flatMap(g => g.items.map(i => i.id));
 
 let toastTimer;
-function toast(msg, undo) {
+function toast(msg, undo, label = 'Undo') {
   const t = $('#toast');
-  t.innerHTML = `<span>${esc(msg)}</span>${undo ? '<button id="undo">Undo</button>' : ''}`;
+  t.innerHTML = `<span>${esc(msg)}</span>${undo ? `<button id="undo">${label}</button>` : ''}`;
   t.classList.add('show');
   if (undo) $('#undo').onclick = () => { undo(); save(); render(); t.classList.remove('show'); };
   clearTimeout(toastTimer);
@@ -582,7 +583,7 @@ function briefing(items) {
     const blocking = items.filter(i => i.urgency === 'blocking');
     const where = [...new Set(blocking.map(i => effortById(effortOf(i)).name))];
     const one = items.length === 1;
-    text = `${cap(num(items.length))} thing${one ? '' : 's'} need${one ? 's' : ''} you across ${num(efforts.size)} ${live ? 'project' : 'effort'}${efforts.size === 1 ? '' : 's'}. `;
+    text = `${cap(num(items.length))} thing${one ? '' : 's'} need${one ? 's' : ''} you across ${num(efforts.size)} effort${efforts.size === 1 ? '' : 's'}. `;
     text += blocking.length
       ? `${cap(num(blocking.length))} ${blocking.length === 1 ? 'is' : 'are'} holding work up right now, in ${listOf(where)}.${items.length > blocking.length ? ' The rest will keep.' : ''}`
       : 'Nothing is stopped waiting on you, so all of it will keep.';
@@ -666,12 +667,12 @@ function viewAttention() {
     return `<div class="ghead">
         <button class="name" data-act="collapse" data-key="${g.key}"><span class="chev ${shut ? 'shut' : ''}">▼</span> ${name}</button>
         <span class="n">${g.items.length}</span>
-        ${g.effort && !live ? `<button class="open" data-act="effort" data-id="${g.effort.id}" title="Open this effort">open ›</button>` : ''}
+        ${g.effort && !(live && g.effort.id === 'unsorted') ? `<button class="open" data-act="effort" data-id="${g.effort.id}" title="Open this effort">open ›</button>` : ''}
       </div>
       ${g.effort && g.effort.line && state.fluent && !shut ? `<div class="gline">${esc(g.effort.line)}</div>` : ''}
       ${shut ? '' : g.items.map(i => rowHtml(i)).join('')}`;
   }).join('');
-  const seg = ['effort', 'urgency', 'source'].map(b => `<button class="${state.groupBy === b ? 'on' : ''}" data-act="group" data-by="${b}">${b === 'effort' && live ? 'Project' : cap(b)}</button>`).join('');
+  const seg = ['effort', 'urgency', 'source'].map(b => `<button class="${state.groupBy === b ? 'on' : ''}" data-act="group" data-by="${b}">${cap(b)}</button>`).join('');
   const sel = state.sel && itemById(state.sel);
   return `<div class="split">
     <section class="pane list" data-scroll="att-list">
@@ -707,7 +708,65 @@ function effortDetail(e) {
   </div>`;
 }
 
+const VIA = { you: 'filed by you', rule: 'filed by directory', guess: 'filed by the model' };
+
+function moveSelect(s) {
+  const cur = s.effort || 'unsorted';
+  return `<select class="btn" data-change="liveMove" data-id="${s.id}" aria-label="Move to another effort">
+    <option value="">Move to…</option>
+    ${liveEfforts.concat(LIVE_UNSORTED).filter(e => e.id !== cur).map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join('')}
+    <option value="__new">New effort…</option></select>`;
+}
+
+function effortDetailLive(e) {
+  const sess = live.filter(s => (s.effort || 'unsorted') === e.id);
+  const needs = activeItems().filter(i => i.effort === e.id).sort(byUrgency);
+  const real = e.id !== 'unsorted';
+  const stands = !real ? 'Nothing here is filed under an effort. Move a session to an effort and Slorp can remember its directory.'
+    : !sess.length ? 'No open sessions are filed here right now.'
+    : e.stands || (summarizer.model ? 'Not written yet.' : 'No local model is available to write this.');
+  return `<div class="inner">
+    <div class="crumb"><span class="mono">${esc(e.raw)}</span></div>
+    <h1>${esc(e.name)}</h1>
+    ${e.about ? `<p class="lede" style="margin-bottom:0">${esc(e.about)}</p>` : ''}
+    <div class="sec"><div class="label"><span>${real && e.stands && sess.length ? spark : ''}Where this stands</span></div><p class="prose">${esc(stands)}</p></div>
+    <div class="sec"><div class="label"><span>Needs you (${needs.length})</span></div>
+      ${needs.length ? `<div style="margin:0 -18px">${needs.map(i => rowHtml(i, 'openItem')).join('')}</div>` : '<div class="none">Nothing. This is moving without you, or not moving at all.</div>'}</div>
+    <div class="sec"><div class="label"><span>Sessions (${sess.length})</span></div>
+      ${sess.length ? sess.map(x => `<div class="srow"><span class="dot ${(LIVE_STATUS[x.status] || LIVE_STATUS.idle)[0]}"></span>
+        <div class="body"><div class="ttl">${esc(clip(x.insight?.title || x.title || x.name, 90))}</div>
+          <div class="sub">${(LIVE_STATUS[x.status] || LIVE_STATUS.idle)[1]} · <span class="mono">${esc(shortPath(x.cwd))}</span>${x.effortVia ? ` · ${VIA[x.effortVia]}` : ''}</div></div>
+        ${moveSelect(x)}</div>`).join('') : '<div class="none">None.</div>'}</div>
+    ${real ? `<div class="sec"><div class="label"><span>Directories filed here automatically</span></div>
+      ${e.dirs.length ? e.dirs.map(d => `<div class="none mono">${esc(tilde(d))}</div>`).join('') : '<div class="none">None yet. Move a session here and choose to remember its directory.</div>'}</div>
+    <div class="bar" style="margin-top:34px"><button class="btn quiet" data-act="effortDelete" data-id="${e.id}">Delete this effort</button></div>` : ''}
+  </div>`;
+}
+
+function viewEffortsLive() {
+  const all = liveEfforts.concat(live.some(s => !s.effort) || !liveEfforts.length ? [LIVE_UNSORTED] : []);
+  if (!all.some(e => e.id === state.effortSel)) state.effortSel = all[0].id;
+  const rows = all.map(e => {
+    const n = activeItems().filter(i => i.effort === e.id).length, total = live.filter(s => (s.effort || 'unsorted') === e.id).length;
+    return `<button class="erow ${e.id === state.effortSel ? 'sel' : ''}" data-act="effortSel" data-id="${e.id}">
+      ${title(e, 't')}${state.fluent && e.line && total ? `<span class="l">${esc(e.line)}</span>` : ''}
+      <span class="m">${n ? `<b>${n} need${n === 1 ? 's' : ''} you</b>` : '<span>nothing needs you</span>'}<span>${total} session${total === 1 ? '' : 's'}</span></span>
+    </button>`;
+  }).join('');
+  return `<div class="split">
+    <section class="pane list" data-scroll="eff-list"><div class="listbar"><span class="label">Work efforts</span></div>${rows}
+      <form class="add" data-form="effort" style="padding:16px 18px;border-top:0">
+        <input name="name" placeholder="New effort, e.g. Snapshot store" required style="flex-basis:100%">
+        <input name="about" placeholder="One line on what it covers" style="flex-basis:100%">
+        <button class="btn go">Add effort</button>
+        <p class="none" style="width:100%">${liveEfforts.length ? 'The description is what the model reads when it files sessions.' : 'Declare an effort and Slorp will start filing sessions under it.'}</p>
+      </form></section>
+    <section class="pane detail" data-scroll="eff-${state.effortSel}">${effortDetailLive(effortById(state.effortSel))}</section>
+  </div>`;
+}
+
 function viewEfforts() {
+  if (live) return viewEffortsLive();
   const all = EFFORTS.concat(UNSORTED);
   const rows = all.map(e => {
     const n = activeMockItems().filter(i => effortOf(i) === e.id).length;
@@ -762,7 +821,7 @@ function viewActivity() {
    Present only when the page is served by the slorp service. `live` is the
    service's session list; everything outside Activity is still mock data. */
 
-let live = null, liveItems = [], summarizer = {}, isOffline = false;
+let live = null, liveItems = [], liveEfforts = [], summarizer = {}, isOffline = false;
 const LIVE_STATUS = { waiting: ['waiting', 'waiting on you'], failed: ['error', 'failed'], working: ['running', 'working'], idle: ['idle', 'idle'], done: ['done', 'finished'] };
 const minsSince = iso => Math.max(0, (Date.now() - new Date(iso).getTime()) / 60000);
 const tilde = p => p.replace(/^\/Users\/[^/]+/, '~');
@@ -775,11 +834,12 @@ async function refresh(force) {
     if (!res.ok) throw new Error(res.status);
     const data = await res.json();
     live = data.sessions;
+    liveEfforts = (data.efforts || []).map(e => ({ ...e, raw: e.dirs.length ? e.dirs.map(tilde).join(', ') : `effort ${e.id}` }));
     liveItems = toItems(data);
     summarizer = data.summarizer || {};
     isOffline = false;
   } catch (e) { isOffline = live !== null; }
-  if (force || state.view === 'activity' || state.view === 'attention') render();
+  if (force || state.view !== 'knowledge') render();
 }
 
 const projectOf = s => s.cwd.split('/').filter(Boolean).pop() || s.cwd;
@@ -789,10 +849,16 @@ function toItems(data) {
   const byId = Object.fromEntries(data.sessions.map(s => [s.id, s]));
   return (data.items || []).filter(i => byId[i.sessionId]).map(i => {
     const s = byId[i.sessionId];
-    return { ...i, live: true, session: s, effort: projectOf(s), kind: s.agent, itemKind: i.kind,
+    return { ...i, live: true, session: s, effort: s.effort || 'unsorted', kind: s.agent, itemKind: i.kind,
       src: s.kind === 'background' ? 'Claude background session' : 'Claude session',
       raw: `${s.agent} · ${shortPath(s.cwd)} · ${s.id.slice(0, 8)}` };
   });
+}
+
+function api(method, path, body, done) {
+  fetch(path, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body && JSON.stringify(body) })
+    .then(res => { if (!res.ok) throw new Error(res.status); if (done) done(); refresh(true); })
+    .catch(() => toast('Could not reach the Slorp service'));
 }
 
 function sendReply(sessionId, text, done) {
@@ -819,24 +885,25 @@ function liveItemDetail(it) {
   } else {
     answer = `<div class="none">This session isn't running the Slorp mod, so answer it in its terminal: <span class="mono">${esc(shortPath(s.cwd))}</span></div>`;
   }
-  const siblings = live.filter(x => x.id !== s.id && projectOf(x) === it.effort);
+  const siblings = live.filter(x => x.id !== s.id && (x.effort || 'unsorted') === it.effort);
   return `<div class="inner">
-    <div class="crumb"><span class="eff">${esc(it.effort)}</span>${kindBadge(it.kind, it.src)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span>${s.branch ? `<span class="mono">${esc(s.branch)}</span>` : ''}</div>
+    <div class="crumb">${s.effort ? `<button class="eff" data-act="effort" data-id="${s.effort}">${esc(effortById(s.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${s.effortVia === 'guess' ? `<span>${spark}filed by the model</span>` : ''}${kindBadge(it.kind, it.src)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span>${s.branch ? `<span class="mono">${esc(s.branch)}</span>` : ''}</div>
     <h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>
     <div class="need"><div class="label">${it.summary ? spark : ''}What's needed from you</div><p class="ask">${esc(it.ask)}</p>${answer}</div>
     <div class="bar">
       <button class="btn" data-act="snooze" data-id="${it.id}" data-for="hour">Snooze 1h</button>
       <button class="btn" data-act="snooze" data-id="${it.id}" data-for="tomorrow">Until tomorrow</button>
       <button class="btn" data-act="dismiss" data-id="${it.id}">Dismiss</button>
+      ${moveSelect(s)}
     </div>
     <div class="sec"><div class="label"><span>${it.summary ? spark : ''}What's going on</span></div>
       <p class="prose">${it.summary ? esc(it.summary) : `<span class="none">${summarizer.model ? 'Not summarized yet.' : 'No local model is available to summarize this.'}</span>`}</p></div>
     <div class="sec"><div class="label"><span>From the source, verbatim</span><button data-act="toggleRaw" data-id="${it.id}">${rawOpen ? 'Hide' : 'Show'}</button></div>
       ${rawOpen ? (lines.length ? rawBlock(lines) : '<div class="none">No transcript found for this session.</div>') : `<div class="none mono">${esc(it.raw)}</div>`}</div>
-    <div class="sec"><div class="label"><span>Also open in ${esc(it.effort)}</span></div>
+    <div class="sec"><div class="label"><span>Also going on in ${esc(effortById(it.effort).name)}</span></div>
       ${siblings.length ? siblings.map(x => `<div class="srow"><span class="dot ${(LIVE_STATUS[x.status] || LIVE_STATUS.idle)[0]}"></span>
         <div class="body"><div class="ttl">${esc(clip(x.insight?.title || x.title || x.name, 90))}</div></div>
-        <span class="side">${kindBadge(x.agent)} · ${(LIVE_STATUS[x.status] || LIVE_STATUS.idle)[1]}</span></div>`).join('') : '<div class="none">No other sessions in this project.</div>'}</div>
+        <span class="side">${kindBadge(x.agent)} · ${(LIVE_STATUS[x.status] || LIVE_STATUS.idle)[1]}</span></div>`).join('') : '<div class="none">No other sessions here.</div>'}</div>
   </div>`;
 }
 
@@ -879,7 +946,7 @@ function viewActivityLive() {
         <td class="st"><span class="dot ${dot}"></span>${label}${s.waitingFor ? `<div class="dim">${esc(s.waitingFor)}</div>` : ''}</td>
         <td><div>${what}</div>${state.fluent && sub ? `<div class="doing">${esc(clip(sub, 220))}</div>` : ''}</td>
         <td class="dim">${kindBadge(s.agent)}${s.kind === 'background' ? ' · background' : ''}${s.canReply ? ' · connected' : ''}</td>
-        <td class="dim hide mono">${esc(s.branch || '')}</td>
+        <td class="dim hide">${s.effort ? esc(effortById(s.effort).name) : ''}</td>
         <td class="dim hide mono" title="${esc(s.cwd)}">${esc(shortPath(s.cwd))}</td>
         <td class="dim hide">${span(minsSince(s.startedAt))}</td>
         <td class="dim">${ago(minsSince(s.activeAt))}</td>
@@ -888,7 +955,7 @@ function viewActivityLive() {
   return `<div class="page">
     <h1>Everything that's running</h1>
     <p class="prose" style="margin:10px 0 18px">${esc(lede)}${isOffline ? ' <b>The Slorp service stopped responding; this is the last thing it reported.</b>' : ''}</p>
-    <table class="tbl"><thead><tr><th class="label">Status</th><th class="label">What</th><th class="label">Agent</th><th class="label hide">Branch</th><th class="label hide">Where</th><th class="label hide">Age</th><th class="label">Last activity</th></tr></thead>
+    <table class="tbl"><thead><tr><th class="label">Status</th><th class="label">What</th><th class="label">Agent</th><th class="label hide">Effort</th><th class="label hide">Where</th><th class="label hide">Age</th><th class="label">Last activity</th></tr></thead>
     <tbody>${rows}</tbody></table>
   </div>`;
 }
@@ -941,7 +1008,7 @@ function render() {
   document.documentElement.dataset.theme = state.theme;
   const main = RENDER[state.view]();  // first: it may settle the selection
   const n = activeItems().length;
-  $('#nav').innerHTML = VIEWS.map(v => `<button class="${state.view === v ? 'on' : ''}" data-act="view" data-view="${v}">${cap(v)}${v === 'attention' && n ? `<span class="count">${n}</span>` : ''}${live && (v === 'efforts' || v === 'knowledge') ? '<span class="mocktag">mock</span>' : ''}</button>`).join('');
+  $('#nav').innerHTML = VIEWS.map(v => `<button class="${state.view === v ? 'on' : ''}" data-act="view" data-view="${v}">${cap(v)}${v === 'attention' && n ? `<span class="count">${n}</span>` : ''}${live && v === 'knowledge' ? '<span class="mocktag">mock</span>' : ''}</button>`).join('');
   $('#tools').innerHTML = `
     <span class="model"><span class="dot ${live && isOffline ? 'error' : 'running'}"></span>${live ? (isOffline ? 'service offline' : `live · ${summarizer.model ? summarizer.model.split('/').pop() : summarizer.error || 'no local model'}`) : 'qwen3:14b · local · caught up'}</span>
     <span class="seg" role="group" aria-label="Voice" title="Fluent shows what the model wrote. Raw shows what the sources said. (r)">
@@ -1016,6 +1083,10 @@ const actions = {
     const list = state.kb[d.sec], i = list.findIndex(x => x.id === d.id), gone = list.splice(i, 1)[0];
     toast('Removed', () => { state.kb[d.sec].splice(i, 0, gone); });
   },
+  effortDelete: d => {
+    toast(`Delete "${effortById(d.id).name}" and its filings?`, () => { api('DELETE', `/api/efforts/${d.id}`); }, 'Delete');
+    return false;
+  },
   liveSuggest: d => {
     const ta = document.querySelector(`textarea[data-keep="item-${d.id}"]`);
     ta.value = d.text; ta.focus();
@@ -1044,6 +1115,17 @@ const actions = {
   reset: () => { const { view, theme } = state; state = Object.assign(fresh(), { view, theme }); toast('Demo reset'); },
 };
 const changes = {
+  liveMove: (d, el) => {
+    const to = el.value, s = live.find(x => x.id === d.id);
+    if (!to) return false;
+    if (to === '__new') { go('efforts'); return; }
+    const effort = to === 'unsorted' ? '' : to;
+    api('POST', `/api/sessions/${d.id}/effort`, { effort }, () => {
+      if (effort) toast(`Filed under ${effortById(effort).name}`, () => { api('POST', `/api/efforts/${effort}/dirs`, { dir: s.cwd }); }, `Always file ${shortPath(s.cwd)} here`);
+      else toast('Left unsorted');
+    });
+    return false;
+  },
   move: (d, el) => {
     if (!el.value) return false;
     const prev = state.moved[d.id];
@@ -1071,6 +1153,7 @@ document.addEventListener('submit', e => {
   if (!form) return;
   e.preventDefault();
   const f = Object.fromEntries(new FormData(form)), sec = form.dataset.form, id = sec[0] + (++state.seq);
+  if (sec === 'effort') { api('POST', '/api/efforts', { name: f.name, about: f.about }); form.reset(); return; }
   if (sec === 'watch') state.kb.watch.push({ id, type: f.type, name: f.name, why: f.why, efforts: [f.effort], cadence: 'daily', seen: '', seenAge: 0 });
   else if (sec === 'questions') state.kb.questions.unshift({ id, text: f.text, effort: f.effort, age: 0, origin: 'you wrote this down' });
   else state.kb[sec].push({ id, text: f.text });

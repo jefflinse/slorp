@@ -8,8 +8,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
+
+	"github.com/jefflinse/slorp/internal/kb"
 )
 
 type Status string
@@ -48,11 +51,46 @@ type Session struct {
 	CanReply   bool      `json:"canReply"`
 	Replies    []Reply   `json:"replies,omitempty"`
 	Insight    *Insight  `json:"insight,omitempty"`
+	// Effort is the effort this session is filed under, empty when unsorted.
+	Effort    string `json:"effort"`
+	EffortVia string `json:"effortVia,omitempty"`
 
 	bridgeSeen time.Time
 	key        string
 	keySince   time.Time
 	insightKey string
+	guess      string
+	guessKey   string
+}
+
+// ViaGuess marks a filing the model chose, as opposed to the user or a rule.
+const ViaGuess = "guess"
+
+// Effort is a declared effort with the model's account of where it stands.
+type Effort struct {
+	kb.Effort
+	Line   string `json:"line"`
+	Stands string `json:"stands"`
+}
+
+// Note is a model-written status for one effort.
+type Note struct {
+	Line   string `json:"line"`
+	Stands string `json:"stands"`
+}
+
+// Unrouted is a described session that neither the user nor a rule has filed.
+type Unrouted struct {
+	Session Session
+	Key     string
+	Efforts []kb.Effort
+}
+
+// Unnoted is an effort whose sessions have changed since its note was written.
+type Unnoted struct {
+	Effort  kb.Effort
+	Members []Session
+	Key     string
 }
 
 // Insight is a model-written description of a session's current state.
@@ -130,10 +168,17 @@ type Hub struct {
 	subs     map[chan struct{}]struct{}
 	last     string
 	summ     Summarizer
+	kb       *kb.Store
+	notes    map[string]note
 }
 
-func New() *Hub {
-	return &Hub{sessions: map[string]*Session{}, subs: map[chan struct{}]struct{}{}}
+type note struct {
+	key string
+	Note
+}
+
+func New(k *kb.Store) *Hub {
+	return &Hub{sessions: map[string]*Session{}, subs: map[chan struct{}]struct{}{}, kb: k, notes: map[string]note{}}
 }
 
 // SetRoster replaces the known sessions of one agent with the live set an
@@ -148,6 +193,7 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 		if old, ok := h.sessions[s.ID]; ok {
 			s.bridgeSeen = old.bridgeSeen
 			s.key, s.keySince, s.insightKey, s.Insight = old.key, old.keySince, old.insightKey, old.Insight
+			s.guess, s.guessKey = old.guess, old.guessKey
 			if s.Status != Idle {
 				s.Pending = old.Pending
 			}
@@ -196,12 +242,102 @@ func (h *Hub) Sessions() []Session {
 	return h.snapshot()
 }
 
-// State returns the sessions, the items derived from them, and the summarizer.
-func (h *Hub) State() ([]Session, []Item, Summarizer) {
+// State returns the sessions, the items derived from them, the declared
+// efforts, and the summarizer.
+func (h *Hub) State() ([]Session, []Item, []Effort, Summarizer) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	sessions := h.snapshot()
-	return sessions, items(sessions), h.summ
+	return sessions, items(sessions), h.efforts(sessions), h.summ
+}
+
+func (h *Hub) efforts(sessions []Session) []Effort {
+	out := []Effort{}
+	for _, e := range h.kb.Efforts() {
+		v := Effort{Effort: e}
+		for _, s := range sessions {
+			if s.Effort == e.ID {
+				v.Line, v.Stands = h.notes[e.ID].Line, h.notes[e.ID].Stands
+				break
+			}
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// Touch republishes state after the knowledge base changed.
+func (h *Hub) Touch() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.changed()
+}
+
+// routeKey identifies what a model's filing guess was based on.
+func (h *Hub) routeKey(s *Session) string {
+	return s.insightKey + ":" + strconv.Itoa(h.kb.Revision())
+}
+
+// Unrouted lists described sessions that still need the model to guess an effort.
+func (h *Hub) Unrouted() []Unrouted {
+	efforts := h.kb.Efforts()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []Unrouted
+	if len(efforts) == 0 {
+		return out
+	}
+	for _, s := range h.sessions {
+		if s.Insight == nil || s.insightKey != s.key || s.guessKey == h.routeKey(s) {
+			continue
+		}
+		if _, _, ok := h.kb.Resolve(s.ID, s.Cwd); !ok {
+			out = append(out, Unrouted{Session: *s, Key: h.routeKey(s), Efforts: efforts})
+		}
+	}
+	return out
+}
+
+// SetGuess records the model's filing for a session; an empty effortID means
+// it found no effort the session clearly belongs to.
+func (h *Hub) SetGuess(sessionID, key, effortID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if s, ok := h.sessions[sessionID]; ok {
+		s.guess, s.guessKey = effortID, key
+		h.changed()
+	}
+}
+
+// Unnoted lists efforts with described sessions whose note is out of date.
+func (h *Hub) Unnoted() []Unnoted {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	sessions := h.snapshot()
+	var out []Unnoted
+	for _, e := range h.kb.Efforts() {
+		var members []Session
+		key := e.Name + "\x00" + e.About
+		for _, s := range sessions {
+			if s.Effort == e.ID && s.Insight != nil {
+				members = append(members, s)
+				key += "\x00" + s.ID + ":" + s.insightKey
+			}
+		}
+		sum := sha1.Sum([]byte(key))
+		if k := hex.EncodeToString(sum[:]); len(members) > 0 && h.notes[e.ID].key != k {
+			out = append(out, Unnoted{Effort: e, Members: members, Key: k})
+		}
+	}
+	return out
+}
+
+func (h *Hub) SetNote(effortID, key string, n Note) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.notes[effortID] = note{key: key, Note: n}
+	h.last = ""
+	h.changed()
 }
 
 // Undescribed lists sessions that have settled on content no insight covers.
@@ -308,6 +444,12 @@ func (h *Hub) snapshot() []Session {
 	for _, s := range h.sessions {
 		c := *s
 		c.CanReply = time.Since(s.bridgeSeen) < bridgeTTL
+		if id, via, ok := h.kb.Resolve(s.ID, s.Cwd); ok {
+			c.Effort, c.EffortVia = id, via
+		} else if s.guess != "" && h.kb.Has(s.guess) {
+			// A guess made on older content stands until a newer one replaces it.
+			c.Effort, c.EffortVia = s.guess, ViaGuess
+		}
 		for _, r := range h.replies {
 			if r.SessionID == s.ID {
 				c.Replies = append(c.Replies, *r)
@@ -396,7 +538,7 @@ func (h *Hub) changed() {
 		}
 	}
 	snap := h.snapshot()
-	b, _ := json.Marshal(map[string]any{"s": snap, "i": items(snap), "m": h.summ})
+	b, _ := json.Marshal(map[string]any{"s": snap, "i": items(snap), "e": h.efforts(snap), "m": h.summ})
 	if string(b) == h.last {
 		return
 	}

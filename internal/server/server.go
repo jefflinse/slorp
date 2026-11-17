@@ -12,10 +12,11 @@ import (
 
 	"github.com/jefflinse/slorp/internal/claude"
 	"github.com/jefflinse/slorp/internal/hub"
+	"github.com/jefflinse/slorp/internal/kb"
 )
 
 // New returns the handler. uiPath is the page served at /.
-func New(h *hub.Hub, uiPath string) http.Handler {
+func New(h *hub.Hub, k *kb.Store, uiPath string) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
@@ -24,8 +25,8 @@ func New(h *hub.Hub, uiPath string) http.Handler {
 	})
 
 	mux.HandleFunc("GET /api/sessions", func(w http.ResponseWriter, r *http.Request) {
-		sessions, items, summarizer := h.State()
-		writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions, "items": items, "summarizer": summarizer})
+		sessions, items, efforts, summarizer := h.State()
+		writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions, "items": items, "efforts": efforts, "summarizer": summarizer})
 	})
 
 	mux.HandleFunc("GET /api/events", func(w http.ResponseWriter, r *http.Request) {
@@ -67,6 +68,52 @@ func New(h *hub.Hub, uiPath string) http.Handler {
 			return
 		}
 		writeJSON(w, http.StatusAccepted, reply)
+	})
+
+	// edited reports a knowledge-base change, republishing state on success.
+	edited := func(w http.ResponseWriter, err error) {
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		h.Touch()
+		w.WriteHeader(http.StatusNoContent)
+	}
+
+	mux.HandleFunc("POST /api/efforts", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Name  string `json:"name"`
+			About string `json:"about"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		_, err := k.Create(in.Name, in.About)
+		edited(w, err)
+	})
+
+	mux.HandleFunc("DELETE /api/efforts/{id}", func(w http.ResponseWriter, r *http.Request) {
+		edited(w, k.Delete(r.PathValue("id")))
+	})
+
+	mux.HandleFunc("POST /api/efforts/{id}/dirs", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Dir string `json:"dir"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		edited(w, k.AddDir(r.PathValue("id"), in.Dir))
+	})
+
+	mux.HandleFunc("POST /api/sessions/{id}/effort", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Effort string `json:"effort"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		edited(w, k.Assign(r.PathValue("id"), in.Effort))
 	})
 
 	mux.HandleFunc("POST /api/bridge/poll", func(w http.ResponseWriter, r *http.Request) {
@@ -158,6 +205,10 @@ func localOnly(next http.Handler) http.Handler {
 			return
 		}
 		if origin := r.Header.Get("Origin"); origin != "" && origin != "http://"+r.Host {
+			http.Error(w, "forbidden origin", http.StatusForbidden)
+			return
+		}
+		if r.Method != http.MethodGet && r.Header.Get("Origin") == "" && r.Header.Get("Sec-Fetch-Site") != "" && r.Header.Get("Sec-Fetch-Site") != "same-origin" {
 			http.Error(w, "forbidden origin", http.StatusForbidden)
 			return
 		}

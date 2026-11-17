@@ -10,11 +10,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"time"
 
 	"github.com/jefflinse/slorp/internal/claude"
 	"github.com/jefflinse/slorp/internal/enrich"
 	"github.com/jefflinse/slorp/internal/hub"
+	"github.com/jefflinse/slorp/internal/kb"
 	"github.com/jefflinse/slorp/internal/server"
 )
 
@@ -24,6 +26,7 @@ func main() {
 	claudeBin := flag.String("claude", "claude", "Claude Code executable")
 	llm := flag.String("llm", "http://localhost:1234", "OpenAI-compatible local model server; empty disables summaries")
 	model := flag.String("model", "", "model to summarize with (default: whichever one is loaded)")
+	data := flag.String("data", "", "directory for the knowledge base (default: ~/.slorp)")
 	flag.Parse()
 
 	host, _, err := net.SplitHostPort(*addr)
@@ -38,13 +41,21 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	h := hub.New()
+	if *data == "" {
+		*data = filepath.Join(home, ".slorp")
+	}
+	k, err := kb.Open(filepath.Join(*data, "kb.json"))
+	if err != nil {
+		log.Fatalf("knowledge base: %v", err)
+	}
+
+	h := hub.New(k)
 	go (&claude.Adapter{Hub: h, Bin: *claudeBin, Home: home, Interval: 2 * time.Second}).Run(ctx)
 	if *llm != "" {
 		go (&enrich.Enricher{Hub: h, BaseURL: *llm, Model: *model}).Run(ctx)
 	}
 
-	srv := &http.Server{Addr: *addr, Handler: server.New(h, *ui)}
+	srv := &http.Server{Addr: *addr, Handler: server.New(h, k, *ui)}
 	go func() {
 		<-ctx.Done()
 		srv.Close()
