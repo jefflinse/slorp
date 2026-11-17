@@ -109,7 +109,11 @@ func TestFeedPicksOutYourPullRequestsThatNeedYou(t *testing.T) {
 		{"a failing draft", both(set("isDraft", true), checks("FAILURE")), "", ""},
 		{"still waiting on a review", set("reviewDecision", "REVIEW_REQUIRED"), "", ""},
 		{"checks still running", checks("PENDING"), "", ""},
-		{"conflicts with its base", set("mergeable", "CONFLICTING"), "", ""},
+		{"conflicts with its base", set("mergeable", "CONFLICTING"), FeedConflicts, "soon"},
+		{"conflicts while a review is outstanding", both(set("mergeable", "CONFLICTING"), set("reviewDecision", "REVIEW_REQUIRED")), FeedConflicts, "soon"},
+		{"conflicts where you cannot merge", both(set("mergeable", "CONFLICTING"), permission("READ")), FeedConflicts, "soon"},
+		{"conflicts and changes requested", both(set("mergeable", "CONFLICTING"), set("reviewDecision", "CHANGES_REQUESTED")), FeedChanges, "soon"},
+		{"a conflicting draft", both(set("mergeable", "CONFLICTING"), set("isDraft", true)), "", ""},
 		{"mergeability not worked out yet", set("mergeable", "UNKNOWN"), "", ""},
 		{"a repository you cannot merge into", permission("READ"), "", ""},
 		{"checks failed", checks("FAILURE"), FeedChecks, "soon"},
@@ -162,6 +166,14 @@ func TestFeedItemSaysWhatItIsAbout(t *testing.T) {
 	}
 }
 
+func TestFeedItemForConflictsSaysWhatToDo(t *testing.T) {
+	got := collect(t, []node{own(both(set("mergeable", "CONFLICTING"), set("reviewDecision", "REVIEW_REQUIRED")))}, nil)[0]
+	if got.Title != "Conflicts: Add a thing" || !strings.Contains(got.Ask, "Resolve the conflicts") || got.Key != "Acme/Widgets#7:abc123:conflicts" ||
+		got.Summary != "Acme/Widgets#7, opened by you. Review: review required. Checks: passing. It conflicts with its base branch." {
+		t.Errorf("conflicts item = %+v", got)
+	}
+}
+
 func TestFeedKeyChangesWhenTheNeedIsNew(t *testing.T) {
 	key := func(edit func(node)) string { return collect(t, []node{own(edit)}, nil)[0].Key }
 
@@ -180,6 +192,10 @@ func TestFeedKeyChangesWhenTheNeedIsNew(t *testing.T) {
 	}
 	if key(failing) == key(both(failing, set("headRefOid", "def456"))) {
 		t.Error("checks failing on a new commit kept the old key, so a dismissal would hide the new failure")
+	}
+	conflicting := set("mergeable", "CONFLICTING")
+	if key(conflicting) == key(both(conflicting, set("headRefOid", "def456"))) {
+		t.Error("conflicts on a new commit kept the old key, so a dismissal would hide conflicts that came back")
 	}
 	if key(nil) != key(set("headRefOid", "def456")) {
 		t.Error("a ready pull request got a new key from a new commit")
@@ -305,7 +321,7 @@ func TestFeedReportsFailure(t *testing.T) {
 
 func TestGitHubDescribesItsFeed(t *testing.T) {
 	in := GitHub((&recorder{}).run)
-	if len(in.Watches) != 4 || in.Clones == nil {
+	if len(in.Watches) != 5 || in.Clones == nil {
 		t.Errorf("Watches = %q, Clones set = %v", in.Watches, in.Clones != nil)
 	}
 }

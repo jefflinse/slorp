@@ -14,10 +14,11 @@ import (
 
 // Kinds of feed item GitHub produces.
 const (
-	FeedReview  = "review-requested"
-	FeedChecks  = "checks-failing"
-	FeedChanges = "changes-requested"
-	FeedReady   = "ready-to-merge"
+	FeedReview    = "review-requested"
+	FeedChecks    = "checks-failing"
+	FeedChanges   = "changes-requested"
+	FeedConflicts = "conflicts"
+	FeedReady     = "ready-to-merge"
 )
 
 // feedQuery asks, in one read-only request, for the user's open pull
@@ -37,6 +38,7 @@ var githubWatches = []string{
 	"Pull requests where your review is requested.",
 	"Your pull requests whose checks are failing.",
 	"Your pull requests where a reviewer asked for changes.",
+	"Your pull requests that conflict with their base branch.",
 	"Your pull requests that are ready to merge.",
 }
 
@@ -110,8 +112,8 @@ func githubFeed(run Runner) func(ctx context.Context) (Found, error) {
 }
 
 // survey lists every pull request and picks out, as items, those waiting on
-// the user. Drafts, a pull request of the user's that conflicts with its
-// base, and one still waiting on someone else are listed but are not items.
+// the user. Drafts, and a pull request of the user's still waiting on
+// someone else, are listed but are not items.
 func survey(mine, review []feedPR) Found {
 	found := Found{Items: []FeedItem{}, PullRequests: []PullRequest{}}
 	for _, p := range mine {
@@ -138,7 +140,9 @@ func survey(mine, review []feedPR) Found {
 			it.Kind, it.Urgency, pr.Needs = FeedChanges, "soon", "A reviewer asked for changes."
 			it.Title, it.Ask = "Changes requested: "+p.Title, "A reviewer asked for changes on your pull request."
 		case pr.Conflicts:
-			pr.OnYou, pr.Needs = true, "It conflicts with its base branch."
+			it.Kind, it.Urgency, pr.Needs = FeedConflicts, "soon", "It conflicts with its base branch."
+			it.Title, it.Ask = "Conflicts: "+p.Title, "Your pull request conflicts with its base branch. Resolve the conflicts so it can merge."
+			it.Key += ":" + p.Head
 		case passing && approved && canMerge && p.Mergeable == "MERGEABLE":
 			it.Kind, it.Urgency, pr.Needs = FeedReady, "whenever", "Ready to merge."
 			it.Title, it.Ask = "Ready to merge: "+p.Title, "Your pull request has nothing left in its way. Merge it when you are ready."
