@@ -937,8 +937,9 @@ func contentKey(s *Session) string {
 // items derives what needs the user from the sessions. Permission prompts,
 // blocked and failed sessions are items on their state alone; a question or
 // finished work is an item only once an insight written for the current
-// content says so. A role the user gave a session can keep it from asking:
-// altogether, or unless it is stopped.
+// content says so. An insight that calls for permission when no prompt is
+// pending is taken as a question. A role the user gave a session can keep it
+// from asking: altogether, or unless it is stopped.
 func items(sessions []Session) []Item {
 	out := []Item{}
 	for _, s := range sessions {
@@ -976,7 +977,7 @@ func items(sessions []Session) []Item {
 			}
 		case s.attention == kb.AttentionStopped:
 			continue
-		case fresh && s.Status != Working && s.Insight.Kind == KindQuestion:
+		case fresh && s.Status != Working && (s.Insight.Kind == KindQuestion || s.Insight.Kind == KindPermission):
 			it.Kind, it.Urgency, it.Replies = KindQuestion, "awaiting", s.Insight.Replies
 		case fresh && s.Status != Working && s.Insight.Kind == KindReview:
 			it.Kind, it.Urgency, it.Replies = KindReview, "whenever", s.Insight.Replies

@@ -86,6 +86,8 @@ func TestItems(t *testing.T) {
 		{"model says nothing is needed", with(func(s *Session) { s.Insight = insight(KindNone) }), "", "", ""},
 		{"model says it asked a question", with(func(s *Session) { s.Insight = insight(KindQuestion) }), KindQuestion, "awaiting", "model title"},
 		{"model says it finished something", with(func(s *Session) { s.Insight = insight(KindReview) }), KindReview, "whenever", "model title"},
+		{"model says permission is wanted, with no prompt pending", with(func(s *Session) { s.Insight = insight(KindPermission) }), KindQuestion, "awaiting", "model title"},
+		{"still working, though the model said permission is wanted", with(func(s *Session) { s.Insight, s.Status = insight(KindPermission), Working }), "", "", ""},
 		{"still working, whatever the model said earlier", with(func(s *Session) { s.Insight, s.Status = insight(KindQuestion), Working }), "", "", ""},
 		{"insight is about earlier content", with(func(s *Session) { s.Insight, s.insightKey = insight(KindQuestion), "older:1" }), "", "", ""},
 		{"insight predates a context edit only", with(func(s *Session) { s.Insight, s.insightKey = insight(KindQuestion), "content:0" }), KindQuestion, "awaiting", "model title"},
