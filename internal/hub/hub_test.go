@@ -357,7 +357,7 @@ func TestEffortNoteFollowsItsSessions(t *testing.T) {
 		t.Fatalf("a new open question did not queue the note again: %+v", again)
 	}
 
-	h.SetRoster(agent, nil)
+	h.SetRoster(agent, []Session{idle("unrelated", "/elsewhere", "x")})
 	if e := h.State().Efforts[0]; e.Line != "" || e.Stands != "" {
 		t.Errorf("an effort with no open sessions still shows a status: %+v", e)
 	}
