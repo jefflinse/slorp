@@ -184,6 +184,8 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 18px 0 14px; }
 .chip { padding: 3px 11px; border-radius: 99px; border: 1px solid var(--line); background: var(--raised); font-size: 12.5px; color: var(--ink2); }
 .chip.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.chip .n { opacity: .6; margin-left: 2px; }
+.list .chips { margin: 0; padding: 0 18px 4px; }
 .tbl { width: 100%; border-collapse: collapse; }
 .tbl th { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .tbl td { padding: 11px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -501,7 +503,7 @@ const KB_SECTIONS = {
 
 const KEY = 'slorp.proto.v1';
 const VIEWS = ['attention', 'efforts', 'activity', 'knowledge'];
-const fresh = () => ({ view: 'attention', sel: null, effortSel: 'snap', kbSel: 'watch', groupBy: 'effort', fluent: true, theme: 'auto',
+const fresh = () => ({ view: 'attention', sel: null, effortSel: 'snap', kbSel: 'watch', groupBy: 'effort', srcFilter: 'all', fluent: true, theme: 'auto',
   handled: {}, moved: {}, sessMoved: {}, extra: [], arrived: {}, collapsed: {}, showHandled: false, variant: {}, rawOpen: {},
   actFilter: 'all', expanded: {}, kb: structuredClone(KB_SEED), seq: 100 });
 let state = fresh();
@@ -549,7 +551,10 @@ function groupItems(items) {
   else defs = (live ? liveEfforts.concat(LIVE_UNSORTED) : EFFORTS.concat(UNSORTED)).map(e => ({ key: 'e:' + e.id, effort: e, name: e.name, test: i => effortOf(i) === e.id }));
   return defs.map(d => ({ ...d, items: sorted.filter(d.test) })).filter(g => g.items.length);
 }
-const visibleOrder = () => groupItems(activeItems()).filter(g => !state.collapsed[g.key]).flatMap(g => g.items.map(i => i.id));
+/* The one source the list is narrowed to, which it can be only while grouped by source. */
+const sourceShown = items => state.groupBy === 'source' && items.some(i => i.kind === state.srcFilter) ? state.srcFilter : 'all';
+const shownItems = (items = activeItems()) => { const src = sourceShown(items); return src === 'all' ? items : items.filter(i => i.kind === src); };
+const visibleOrder = () => groupItems(shownItems()).filter(g => !state.collapsed[g.key]).flatMap(g => g.items.map(i => i.id));
 
 let toastTimer;
 function toast(msg, undo, label = 'Undo') {
@@ -569,9 +574,14 @@ function resolve(id, how, note, opts = {}) {
   toast(msg, () => { delete state.handled[id]; state.sel = id; if (opts.undo) opts.undo(); });
 }
 
+/* What is selected in each view, kept with a history entry so Back restores it. */
+const place = () => ({ sel: state.sel, effortSel: state.effortSel, kbSel: state.kbSel });
+
 function go(view) {
+  if (view === state.view) return;
+  history.replaceState(place(), '');
   state.view = view;
-  history.replaceState(null, '', '#' + view);
+  history.pushState(place(), '', '#' + view);
 }
 
 /* ───────────────────────── Attention ───────────────────────── */
@@ -660,8 +670,13 @@ function itemDetail(it) {
 }
 
 function viewAttention() {
-  const items = activeItems();
+  const all = activeItems(), items = shownItems(all), src = sourceShown(all);
   if (!items.some(i => i.id === state.sel)) state.sel = visibleOrder()[0] || null;
+  const present = Object.keys(KINDS).filter(k => all.some(i => i.kind === k));
+  const chips = state.groupBy === 'source' && present.length > 1
+    ? `<div class="chips">${[['all', 'All', all.length]].concat(present.map(k => [k, KINDS[k], all.filter(i => i.kind === k).length]))
+        .map(([k, name, n]) => `<button class="chip ${src === k ? 'on' : ''}" data-act="srcFilter" data-src="${k}">${esc(name)} <span class="n">${n}</span></button>`).join('')}</div>`
+    : '';
   const groups = groupItems(items).map(g => {
     const shut = state.collapsed[g.key];
     const name = g.effort ? title(g.effort) : esc(g.name);
@@ -677,8 +692,9 @@ function viewAttention() {
   const sel = state.sel && itemById(state.sel);
   return `<div class="split">
     <section class="pane list" data-scroll="att-list">
-      ${briefing(items)}
+      ${briefing(all)}
       <div class="listbar"><span class="label">Needs you</span><span class="seg" role="group" aria-label="Group by">${seg}</span></div>
+      ${chips}
       ${groups}
       ${handledFooter()}
     </section>
@@ -923,6 +939,8 @@ function liveItemDetail(it) {
   let answer;
   if (s.pending) {
     answer = pendingBox(s);
+  } else if (s.waitingFor === 'permission prompt') {
+    answer = `<div class="none">Slorp was not shown this permission prompt, so answer it in the session's terminal: <span class="mono">${esc(shortPath(s.cwd))}</span></div>`;
   } else if (s.canReply) {
     const quick = it.replies.map(r => `<button class="btn" data-act="liveSuggest" data-id="${it.id}" data-text="${esc(r)}">${esc(r)}</button>`).join('');
     answer = `${quick ? `<div class="replies">${quick}</div>` : ''}
@@ -1119,6 +1137,7 @@ const actions = {
   view: d => go(d.view),
   select: d => { state.sel = d.id; },
   group: d => { state.groupBy = d.by; },
+  srcFilter: d => { state.srcFilter = d.src; },
   collapse: d => { state.collapsed[d.key] = !state.collapsed[d.key]; },
   fluent: d => { state.fluent = d.on === '1'; },
   theme: () => {
@@ -1293,12 +1312,15 @@ document.addEventListener('keydown', e => {
   save(); render();
   $('.row.sel')?.scrollIntoView({ block: 'nearest' });
 });
-window.addEventListener('hashchange', () => {
+window.addEventListener('popstate', () => {
   const v = location.hash.slice(1);
-  if (VIEWS.includes(v) && v !== state.view) { state.view = v; render(); }
+  if (!VIEWS.includes(v)) return;
+  Object.assign(state, history.state, { view: v });
+  save(); render();
 });
 
 if (VIEWS.includes(location.hash.slice(1))) state.view = location.hash.slice(1);
+else history.replaceState(null, '', '#' + state.view);
 render();
 connect();
 </script>
