@@ -195,6 +195,14 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
 .tbl tr.s.open td { border-bottom-color: transparent; }
 .st { white-space: nowrap; font-size: 12.5px; color: var(--ink2); }
 
+.mocktag { margin-left: 6px; padding: 0 5px; border: 1px solid var(--line); border-radius: 4px; font-size: 10px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink3); }
+.livebox { margin: 12px 0 16px; max-width: 760px; }
+.livebox textarea { display: block; width: 100%; min-height: 60px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); resize: vertical; line-height: 1.45; }
+.livebox .send { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; color: var(--ink3); font-size: 12px; }
+.livebox .sent { margin-top: 10px; font-size: 12.5px; color: var(--ink2); }
+.livebox .sent b { font-weight: 600; color: var(--accent); }
+.pend { margin: 4px 0 10px; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 8px; max-width: 760px; }
+
 /* Knowledge base */
 .kbnav button { display: flex; justify-content: space-between; width: 100%; padding: 9px 18px; color: var(--ink2); border-left: 3px solid transparent; }
 .kbnav button:hover { background: color-mix(in srgb, var(--sel) 55%, transparent); }
@@ -619,7 +627,7 @@ function itemDetail(it) {
   } else {
     const quick = (it.replies || []).map((r, i) => `<button class="btn ${i === 0 ? 'go' : ''}" data-act="reply" data-id="${it.id}" data-text="${esc(r)}">${esc(r)}</button>`).join('');
     answer = `${quick ? `<div class="replies">${quick}</div>` : ''}
-      <textarea id="reply" data-id="${it.id}" class="${it.draft ? 'drafted' : ''}" placeholder="Or say something else…">${esc(it.draft || '')}</textarea>
+      <textarea id="reply" data-id="${it.id}" data-keep="item-${it.id}" class="${it.draft ? 'drafted' : ''}" placeholder="Or say something else…">${esc(it.draft || '')}</textarea>
       <div class="send"><span>${it.draft ? `${spark}Drafted for you. Edit before sending.` : `Goes back to the ${esc(it.src.toLowerCase())}.`}</span>
       <button class="btn ${quick ? '' : 'go'}" data-act="send" data-id="${it.id}">Send</button></div>`;
   }
@@ -716,6 +724,7 @@ function viewEfforts() {
 /* ───────────────────────── Activity ───────────────────────── */
 
 function viewActivity() {
+  if (live) return viewActivityLive();
   const order = Object.keys(STATUS);
   const count = k => SESSIONS.filter(s => s.status === k).length;
   const lede = `${cap(num(SESSIONS.length))} things are running or recently finished. ${cap(num(count('waiting')))} are stopped waiting on you, ${num(count('error'))} failed overnight, and the rest are getting on with it.`;
@@ -742,6 +751,80 @@ function viewActivity() {
     <p class="prose" style="margin-top:10px">${spark}${esc(lede)}</p>
     <div class="chips">${filters}</div>
     <table class="tbl"><thead><tr><th class="label">Status</th><th class="label">What</th><th class="label">Kind</th><th class="label hide">Effort</th><th class="label hide">Where</th><th class="label hide">Age</th><th class="label">Last activity</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+  </div>`;
+}
+
+/* ───────────────────────── Live sessions ─────────────────────────
+   Present only when the page is served by the slorp service. `live` is the
+   service's session list; everything outside Activity is still mock data. */
+
+let live = null, isOffline = false;
+const LIVE_STATUS = { waiting: ['waiting', 'waiting on you'], failed: ['error', 'failed'], working: ['running', 'working'], idle: ['idle', 'idle'], done: ['done', 'finished'] };
+const minsSince = iso => Math.max(0, (Date.now() - new Date(iso).getTime()) / 60000);
+const tilde = p => p.replace(/^\/Users\/[^/]+/, '~');
+const shortPath = p => { const t = tilde(p); return t.length > 44 ? '…/' + t.split('/').slice(-2).join('/') : t; };
+const clip = (t, n) => t.length > n ? t.slice(0, n) + '…' : t;
+
+async function refresh(force) {
+  try {
+    const res = await fetch('/api/sessions');
+    if (!res.ok) throw new Error(res.status);
+    live = (await res.json()).sessions;
+    isOffline = false;
+  } catch (e) { isOffline = live !== null; }
+  if (force || state.view === 'activity') render();
+}
+
+function connect() {
+  if (location.protocol === 'file:') return;
+  refresh(true);
+  const events = new EventSource('/api/events');
+  events.onmessage = () => refresh(false);
+  events.onerror = () => { if (live && !isOffline) { isOffline = true; render(); } };
+}
+
+function liveDetail(s) {
+  const pending = s.pending ? `<div class="pend"><div class="label">Waiting for your permission · ${esc(s.pending.tool)}</div>
+    <div class="mono" style="margin-top:6px;word-break:break-word">${esc(s.pending.summary)}</div>
+    <div class="none" style="padding-top:6px">Answer this one in its terminal. Slorp can see it but can't approve it yet.</div></div>` : '';
+  const lines = [];
+  if (s.lastPrompt) lines.push(['you', s.lastPrompt]);
+  if (s.lastReply) lines.push([s.agent, s.lastReply]);
+  const sent = (s.replies || []).map(r => `<div><b>${esc(r.state)}</b> · ${esc(r.text)}</div>`).join('');
+  const box = s.canReply
+    ? `<div class="livebox"><textarea data-keep="live-${s.id}" placeholder="Reply to this session…"></textarea>
+        <div class="send"><span>Arrives as your next message once the session is idle.</span>
+        <button class="btn go" data-act="liveSend" data-id="${s.id}">Send</button></div>
+        ${sent ? `<div class="sent">${sent}</div>` : ''}</div>`
+    : `<div class="none" style="margin:10px 0 16px">This session isn't running the Slorp mod, so it can be watched but not replied to.</div>`;
+  return `${pending}${lines.length ? rawBlock(lines) : '<div class="none">No transcript found for this session.</div>'}${box}`;
+}
+
+function viewActivityLive() {
+  const n = k => live.filter(s => s.status === k).length;
+  const lede = live.length
+    ? `${cap(num(live.length))} Claude Code session${live.length === 1 ? ' is' : 's are'} open on this machine: ${n('waiting')} waiting on you, ${n('working')} working, ${n('idle') + n('done') + n('failed')} quiet.`
+    : 'No Claude Code sessions are open on this machine.';
+  const rows = live.map(s => {
+    const open = state.expanded[s.id], [dot, label] = LIVE_STATUS[s.status] || LIVE_STATUS.idle;
+    const name = clip(s.title || s.name || s.id.slice(0, 8), 90);
+    const what = state.fluent ? `<span class="ttl">${esc(name)}</span>` : `<span class="mono ttl">${esc(`${s.agent} · ${tilde(s.cwd)} · ${s.id.slice(0, 8)}`)}</span>`;
+    const sub = s.pending ? `Wants to run ${s.pending.tool}: ${s.pending.summary}` : s.lastPrompt ? `You last said: ${s.lastPrompt}` : '';
+    return `<tr class="s ${open ? 'open' : ''}" data-act="expand" data-id="${s.id}">
+        <td class="st"><span class="dot ${dot}"></span>${label}${s.waitingFor ? `<div class="dim">${esc(s.waitingFor)}</div>` : ''}</td>
+        <td><div>${what}</div>${state.fluent && sub ? `<div class="doing">${esc(clip(sub, 160))}</div>` : ''}</td>
+        <td class="dim">${kindBadge(s.agent)}${s.kind === 'background' ? ' · background' : ''}${s.canReply ? ' · connected' : ''}</td>
+        <td class="dim hide mono">${esc(s.branch || '')}</td>
+        <td class="dim hide mono" title="${esc(s.cwd)}">${esc(shortPath(s.cwd))}</td>
+        <td class="dim hide">${span(minsSince(s.startedAt))}</td>
+        <td class="dim">${ago(minsSince(s.activeAt))}</td>
+      </tr>${open ? `<tr class="x"><td></td><td colspan="6">${liveDetail(s)}</td></tr>` : ''}`;
+  }).join('');
+  return `<div class="page">
+    <h1>Everything that's running</h1>
+    <p class="prose" style="margin:10px 0 18px">${esc(lede)}${isOffline ? ' <b>The Slorp service stopped responding; this is the last thing it reported.</b>' : ''}</p>
+    <table class="tbl"><thead><tr><th class="label">Status</th><th class="label">What</th><th class="label">Agent</th><th class="label hide">Branch</th><th class="label hide">Where</th><th class="label hide">Age</th><th class="label">Last activity</th></tr></thead>
     <tbody>${rows}</tbody></table>
   </div>`;
 }
@@ -786,15 +869,17 @@ const RENDER = { attention: viewAttention, efforts: viewEfforts, activity: viewA
 function render() {
   const scrolls = {};
   document.querySelectorAll('[data-scroll]').forEach(el => { scrolls[el.dataset.scroll] = el.scrollTop; });
-  const draft = $('#reply') && { id: $('#reply').dataset.id, value: $('#reply').value };
+  const drafts = {};
+  document.querySelectorAll('textarea[data-keep]').forEach(el => { drafts[el.dataset.keep] = el.value; });
+  const focused = document.activeElement?.dataset?.keep, caret = focused && [document.activeElement.selectionStart, document.activeElement.selectionEnd];
   const menuOpen = $('#menu')?.open;
 
   document.documentElement.dataset.theme = state.theme;
   const main = RENDER[state.view]();  // first: it may settle the selection
   const n = activeItems().length;
-  $('#nav').innerHTML = VIEWS.map(v => `<button class="${state.view === v ? 'on' : ''}" data-act="view" data-view="${v}">${cap(v)}${v === 'attention' && n ? `<span class="count">${n}</span>` : ''}</button>`).join('');
+  $('#nav').innerHTML = VIEWS.map(v => `<button class="${state.view === v ? 'on' : ''}" data-act="view" data-view="${v}">${cap(v)}${v === 'attention' && n ? `<span class="count">${n}</span>` : ''}${live && v !== 'activity' ? '<span class="mocktag">mock</span>' : ''}</button>`).join('');
   $('#tools').innerHTML = `
-    <span class="model"><span class="dot running"></span>qwen3:14b · local · caught up</span>
+    <span class="model"><span class="dot ${live && isOffline ? 'error' : 'running'}"></span>${live ? (isOffline ? 'service offline' : 'live · no summarizer yet') : 'qwen3:14b · local · caught up'}</span>
     <span class="seg" role="group" aria-label="Voice" title="Fluent shows what the model wrote. Raw shows what the sources said. (r)">
       <button class="${state.fluent ? 'on' : ''}" data-act="fluent" data-on="1">Fluent</button><button class="${state.fluent ? '' : 'on'}" data-act="fluent" data-on="0">Raw</button></span>
     <button class="icon" data-act="theme" title="Light or dark" aria-label="Toggle theme">◐</button>
@@ -806,8 +891,10 @@ function render() {
   $('#main').innerHTML = main;
 
   document.querySelectorAll('[data-scroll]').forEach(el => { if (scrolls[el.dataset.scroll]) el.scrollTop = scrolls[el.dataset.scroll]; });
-  const ta = $('#reply');
-  if (ta && draft && draft.id === ta.dataset.id) ta.value = draft.value;
+  document.querySelectorAll('textarea[data-keep]').forEach(el => {
+    if (el.dataset.keep in drafts) el.value = drafts[el.dataset.keep];
+    if (el.dataset.keep === focused) { el.focus(); el.setSelectionRange(caret[0], caret[1]); }
+  });
   freshId = null;
 }
 
@@ -864,6 +951,14 @@ const actions = {
   kbRemove: d => {
     const list = state.kb[d.sec], i = list.findIndex(x => x.id === d.id), gone = list.splice(i, 1)[0];
     toast('Removed', () => { state.kb[d.sec].splice(i, 0, gone); });
+  },
+  liveSend: d => {
+    const ta = document.querySelector(`textarea[data-keep="live-${d.id}"]`), text = ta.value.trim();
+    if (!text) { ta.focus(); return false; }
+    fetch(`/api/sessions/${d.id}/reply`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) })
+      .then(res => { if (!res.ok) throw new Error(res.status); ta.value = ''; toast('Queued for the session'); refresh(true); })
+      .catch(() => toast('Could not reach the Slorp service'));
+    return false;
   },
   simulate: () => {
     const next = POOL.find(p => !state.extra.includes(p.id));
@@ -931,6 +1026,7 @@ window.addEventListener('hashchange', () => {
 
 if (VIEWS.includes(location.hash.slice(1))) state.view = location.hash.slice(1);
 render();
+connect();
 </script>
 </body>
 </html>
