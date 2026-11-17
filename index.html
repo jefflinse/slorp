@@ -1,0 +1,939 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>slorp</title>
+<style>
+:root {
+  --bg: #f3f1ea; --panel: #faf9f4; --raised: #ffffff; --sel: #e9e7db;
+  --ink: #1b1c18; --ink2: #55574e; --ink3: #8b8d82; --line: #e1ded3;
+  --accent: #4f6b00; --fill: #c8f05a; --fill-ink: #1c2700;
+  --warn: #a85a09; --err: #b3261e; --toast-act: #c8f05a;
+  --k-claude: #d97757; --k-opencode: #3b82c4; --k-slack: #8e5bb5;
+  --k-worker: #5f8a8b; --k-local: #6a9a23; --k-kb: #b8930f;
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --serif: Charter, "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --top: 52px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121310; --panel: #181a15; --raised: #20221c; --sel: #272a21;
+    --ink: #ecebe4; --ink2: #b0b2a6; --ink3: #7b7d72; --line: #2d2f27;
+    --accent: #c3ee5c; --fill: #c3ee5c; --fill-ink: #172000;
+    --warn: #f0a35e; --err: #f2857c; --toast-act: #4f6b00;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121310; --panel: #181a15; --raised: #20221c; --sel: #272a21;
+  --ink: #ecebe4; --ink2: #b0b2a6; --ink3: #7b7d72; --line: #2d2f27;
+  --accent: #c3ee5c; --fill: #c3ee5c; --fill-ink: #172000;
+  --warn: #f0a35e; --err: #f2857c; --toast-act: #4f6b00;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 var(--sans); -webkit-font-smoothing: antialiased; }
+button, select, input, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; background: none; border: 0; padding: 0; text-align: inherit; }
+h1, h2, h3, p { margin: 0; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* The three voices: sans is chrome, serif is model-written, mono is verbatim. */
+.gen { font-family: var(--serif); }
+.mono { font-family: var(--mono); font-size: 0.86em; letter-spacing: -0.01em; }
+.spark { color: var(--accent); font-family: var(--sans); font-size: 11px; margin-right: 6px; }
+.label { font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--ink3); }
+
+/* Top bar */
+.top { height: var(--top); display: flex; align-items: center; gap: 20px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 18px; letter-spacing: -0.03em; }
+.blob { width: 22px; height: 20px; background: var(--fill); border-radius: 60% 40% 55% 45% / 55% 50% 50% 45%; position: relative; display: inline-block; }
+.blob::before, .blob::after { content: ""; position: absolute; top: 7px; width: 3px; height: 4px; border-radius: 50%; background: var(--fill-ink); }
+.blob::before { left: 6px; } .blob::after { right: 6px; }
+.nav { display: flex; gap: 2px; }
+.nav button { white-space: nowrap; padding: 6px 12px; border-radius: 7px; color: var(--ink2); font-weight: 500; }
+.nav button:hover { background: var(--sel); }
+.nav button.on { color: var(--ink); background: var(--sel); }
+.count { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 6px; border-radius: 9px; background: var(--fill); color: var(--fill-ink); font-size: 11px; font-weight: 700; text-align: center; line-height: 18px; }
+.tools { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+.model { color: var(--ink3); font-size: 12px; white-space: nowrap; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ink3); margin-right: 6px; vertical-align: 1px; flex: none; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; background: var(--raised); }
+.seg button { padding: 3px 10px; font-size: 12px; color: var(--ink2); }
+.seg button.on { background: var(--ink); color: var(--bg); }
+.icon { width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; color: var(--ink2); border: 1px solid var(--line); background: var(--raised); list-style: none; cursor: pointer; }
+.icon::-webkit-details-marker { display: none; }
+.menu { position: relative; }
+.menu .pop { position: absolute; right: 0; top: 34px; width: 230px; background: var(--raised); border: 1px solid var(--line); border-radius: 9px; padding: 6px; box-shadow: 0 8px 28px rgb(0 0 0 / 0.16); }
+.menu .pop button { display: block; width: 100%; padding: 7px 9px; border-radius: 6px; }
+.menu .pop button:hover { background: var(--sel); }
+.menu .pop p { padding: 6px 9px 4px; color: var(--ink3); font-size: 12px; }
+
+/* Panes */
+.split { display: grid; grid-template-columns: minmax(320px, 410px) 1fr; height: calc(100vh - var(--top)); }
+.split.narrow { grid-template-columns: 250px 1fr; }
+.pane { overflow-y: auto; min-width: 0; }
+.pane.list { border-right: 1px solid var(--line); background: var(--panel); }
+.pane.detail { padding: 28px 36px 60px; }
+.inner { max-width: 740px; }
+.page { padding: 28px 36px 60px; max-width: 1240px; margin: 0 auto; }
+
+/* Briefing */
+.brief { padding: 18px 18px 16px; border-bottom: 1px solid var(--line); }
+.brief .when { display: flex; justify-content: space-between; margin-bottom: 8px; }
+.brief p { font-family: var(--serif); font-size: 16.5px; line-height: 1.45; }
+.listbar { display: flex; align-items: center; justify-content: space-between; padding: 10px 18px; }
+
+/* Groups and rows */
+.ghead { display: flex; align-items: baseline; gap: 8px; padding: 14px 18px 4px; }
+.ghead .name { font-weight: 650; font-size: 13px; flex: 1; min-width: 0; }
+.ghead .name:hover { color: var(--accent); }
+.ghead .n { color: var(--ink3); font-size: 12px; }
+.ghead .open { color: var(--ink3); font-size: 12px; }
+.ghead .open:hover { color: var(--accent); }
+.gline { padding: 0 18px 6px 18px; color: var(--ink3); font-family: var(--serif); font-size: 13px; font-style: italic; }
+.chev { display: inline-block; width: 10px; color: var(--ink3); font-size: 10px; transition: transform 0.12s; }
+.chev.shut { transform: rotate(-90deg); }
+.row { display: block; width: 100%; padding: 9px 18px 10px 16px; border-left: 3px solid transparent; }
+.row:hover { background: color-mix(in srgb, var(--sel) 55%, transparent); }
+.row.sel { background: var(--sel); border-left-color: var(--ink); }
+.row.blocking { border-left-color: var(--fill); }
+.row.sel.blocking { border-left-color: var(--accent); }
+.row .t { display: block; font-size: 15px; line-height: 1.3; }
+.row .t.mono { font-size: 12px; line-height: 1.45; word-break: break-word; }
+.row .m { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin-top: 4px; color: var(--ink3); font-size: 12px; }
+.row.fresh { animation: arrive 1.6s ease-out; }
+@keyframes arrive { 0% { background: var(--fill); } 100% { background: transparent; } }
+.kind { display: inline-flex; align-items: center; white-space: nowrap; }
+.kind i { width: 7px; height: 7px; border-radius: 2px; margin-right: 5px; }
+.tag { font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 1px 6px; border-radius: 4px; }
+.tag.blocking { background: var(--fill); color: var(--fill-ink); }
+.tag.soon { color: var(--warn); border: 1px solid currentColor; }
+.tag.whenever { color: var(--ink3); border: 1px solid var(--line); }
+.foot { padding: 16px 18px 24px; color: var(--ink3); font-size: 12px; border-top: 1px solid var(--line); margin-top: 14px; }
+.foot .link, .link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.handled { margin: 8px 0 12px; }
+.handled div { display: flex; gap: 8px; justify-content: space-between; padding: 4px 0; }
+.handled .gen { color: var(--ink2); font-size: 13.5px; }
+
+/* Detail */
+.crumb { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; color: var(--ink3); font-size: 12.5px; margin-bottom: 10px; }
+.crumb .eff { color: var(--ink2); font-weight: 600; }
+.crumb .eff:hover { color: var(--accent); }
+h1 { font-family: var(--serif); font-weight: 600; font-size: 29px; line-height: 1.18; letter-spacing: -0.01em; }
+h1.mono { font-family: var(--mono); font-size: 16px; font-weight: 500; line-height: 1.5; word-break: break-word; }
+.bar { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 0; }
+.btn { padding: 6px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--raised); font-size: 13px; white-space: nowrap; }
+.btn:hover { border-color: var(--ink3); }
+.btn.go { background: var(--fill); color: var(--fill-ink); border-color: transparent; font-weight: 600; }
+.btn.go:hover { filter: brightness(0.95); }
+.btn.quiet { border-color: transparent; background: none; color: var(--ink2); }
+.btn.quiet:hover { background: var(--sel); }
+select.btn { appearance: none; padding-right: 24px; background-image: linear-gradient(45deg, transparent 50%, var(--ink3) 50%), linear-gradient(135deg, var(--ink3) 50%, transparent 50%); background-position: calc(100% - 13px) 50%, calc(100% - 9px) 50%; background-size: 4px 4px; background-repeat: no-repeat; }
+.need { margin-top: 22px; padding: 16px 18px; background: var(--raised); border: 1px solid var(--line); border-radius: 11px; }
+.need .ask { font-family: var(--serif); font-size: 18px; line-height: 1.4; margin: 4px 0 14px; }
+.need .replies { display: flex; flex-wrap: wrap; gap: 8px; }
+.need textarea { display: block; width: 100%; min-height: 64px; margin-top: 12px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); resize: vertical; line-height: 1.45; }
+.need textarea.drafted { font-family: var(--serif); font-size: 15px; min-height: 104px; }
+.need .send { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; color: var(--ink3); font-size: 12px; }
+.sec { margin-top: 30px; }
+.sec > .label { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.sec > .label button { text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--ink3); font-size: 12px; }
+.sec > .label button:hover { color: var(--accent); }
+.prose { font-family: var(--serif); font-size: 16.5px; line-height: 1.55; max-width: 66ch; }
+.prose.thinking { color: transparent; border-radius: 6px; background: linear-gradient(90deg, var(--sel) 25%, var(--line) 50%, var(--sel) 75%); background-size: 200% 100%; animation: shimmer 0.9s linear infinite; }
+@keyframes shimmer { to { background-position: -200% 0; } }
+.rawblock { font-family: var(--mono); font-size: 12px; line-height: 1.55; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px; overflow-x: auto; }
+.rawblock .ln { display: grid; grid-template-columns: 150px 1fr; gap: 12px; padding: 2px 0; }
+.rawblock .who { color: var(--ink3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rawblock .tx { white-space: pre-wrap; word-break: break-word; }
+.srow { display: flex; align-items: baseline; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
+.srow .body { flex: 1; min-width: 0; }
+.srow .ttl { font-size: 15px; }
+.srow .ttl.mono { font-size: 12px; }
+.srow .sub { color: var(--ink2); font-family: var(--serif); font-size: 14px; }
+.srow .side { color: var(--ink3); font-size: 12px; white-space: nowrap; }
+.empty { color: var(--ink3); font-family: var(--serif); font-size: 17px; padding: 60px 0; text-align: center; }
+.none { color: var(--ink3); font-size: 13px; padding: 4px 0; }
+
+/* Session status dots */
+.dot.running { background: var(--k-local); animation: pulse 1.8s ease-in-out infinite; }
+.dot.waiting { background: var(--fill); box-shadow: 0 0 0 1.5px var(--accent); }
+.dot.idle { background: transparent; box-shadow: inset 0 0 0 1.5px var(--ink3); }
+.dot.done { background: var(--ink3); }
+.dot.error { background: var(--err); }
+@keyframes pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* Efforts list */
+.erow { display: block; width: 100%; padding: 13px 18px; border-left: 3px solid transparent; border-bottom: 1px solid var(--line); }
+.erow:hover { background: color-mix(in srgb, var(--sel) 55%, transparent); }
+.erow.sel { background: var(--sel); border-left-color: var(--ink); }
+.erow .t { display: block; font-size: 16px; font-weight: 600; }
+.erow .t.mono { font-size: 12px; font-weight: 500; }
+.erow .l { display: block; color: var(--ink2); font-family: var(--serif); font-size: 14px; margin-top: 2px; }
+.erow .m { display: flex; gap: 10px; margin-top: 7px; font-size: 12px; color: var(--ink3); }
+.erow .m b { color: var(--accent); font-weight: 600; }
+.time { display: grid; grid-template-columns: 62px 1fr; gap: 4px 12px; }
+.time .a { color: var(--ink3); font-size: 12px; padding-top: 3px; }
+.time .what { font-family: var(--serif); font-size: 15px; }
+
+/* Activity table */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 18px 0 14px; }
+.chip { padding: 3px 11px; border-radius: 99px; border: 1px solid var(--line); background: var(--raised); font-size: 12.5px; color: var(--ink2); }
+.chip.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.tbl { width: 100%; border-collapse: collapse; }
+.tbl th { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.tbl td { padding: 11px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.tbl tr.s { cursor: pointer; }
+.tbl tr.s:hover td { background: var(--panel); }
+.tbl .ttl { font-size: 15.5px; }
+.tbl .ttl.mono { font-size: 12px; }
+.tbl .doing { color: var(--ink2); font-family: var(--serif); font-size: 14px; margin-top: 1px; }
+.tbl .dim { color: var(--ink3); font-size: 12.5px; white-space: nowrap; }
+.tbl tr.x td { padding-top: 0; border-bottom: 1px solid var(--line); }
+.tbl tr.s.open td { border-bottom-color: transparent; }
+.st { white-space: nowrap; font-size: 12.5px; color: var(--ink2); }
+
+/* Knowledge base */
+.kbnav button { display: flex; justify-content: space-between; width: 100%; padding: 9px 18px; color: var(--ink2); border-left: 3px solid transparent; }
+.kbnav button:hover { background: color-mix(in srgb, var(--sel) 55%, transparent); }
+.kbnav button.on { background: var(--sel); color: var(--ink); border-left-color: var(--ink); font-weight: 600; }
+.kbnav span { color: var(--ink3); font-weight: 400; }
+.kbnav .label { padding: 18px 18px 8px; }
+.lede { color: var(--ink2); font-size: 14.5px; margin: 6px 0 22px; max-width: 62ch; }
+.card { display: flex; gap: 14px; align-items: flex-start; padding: 14px 0; border-top: 1px solid var(--line); }
+.card .glyph { width: 30px; height: 30px; border-radius: 8px; background: var(--sel); display: grid; place-items: center; font-family: var(--mono); font-weight: 600; flex: none; }
+.card .body { flex: 1; min-width: 0; }
+.card .nm { font-weight: 600; font-size: 15px; }
+.card .why { color: var(--ink2); margin-top: 1px; }
+.card .seen { color: var(--ink2); font-family: var(--serif); font-size: 14px; margin-top: 6px; }
+.card .meta { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 6px; color: var(--ink3); font-size: 12px; }
+.card .q { font-size: 16.5px; font-family: var(--sans); }
+.card.fact .q { font-size: 15px; }
+.card input[type="checkbox"] { width: 17px; height: 17px; margin: 4px 0 0 6px; accent-color: var(--accent); flex: none; }
+.x { color: var(--ink3); padding: 2px 8px; border-radius: 6px; font-size: 16px; line-height: 1.2; }
+.x:hover { background: var(--sel); color: var(--err); }
+.add { display: flex; flex-wrap: wrap; gap: 8px; padding: 16px 0; border-top: 1px solid var(--line); }
+.add input, .add select { padding: 7px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--raised); }
+.add input { flex: 1; min-width: 180px; }
+
+/* Toast */
+#toast { position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 80px); background: var(--ink); color: var(--bg); padding: 9px 14px; border-radius: 9px; display: flex; gap: 14px; align-items: center; transition: transform 0.18s; z-index: 20; max-width: calc(100vw - 32px); }
+#toast.show { transform: translate(-50%, 0); }
+#toast button { color: var(--toast-act); font-weight: 600; }
+
+@media (max-width: 860px) {
+  .top { gap: 10px; overflow-x: auto; }
+  .model { display: none; }
+  .split, .split.narrow { grid-template-columns: 1fr; height: auto; }
+  .pane.list { border-right: 0; border-bottom: 1px solid var(--line); max-height: 48vh; }
+  .pane.detail, .page { padding: 20px 16px 48px; }
+  h1 { font-size: 24px; }
+  .rawblock .ln { grid-template-columns: 1fr; gap: 0; }
+  .tbl .hide { display: none; }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="blob"></span>slorp</div>
+  <nav class="nav" id="nav"></nav>
+  <div class="tools" id="tools"></div>
+</header>
+<main id="main"></main>
+<div id="toast" role="status"></div>
+
+<script>
+'use strict';
+
+/* ───────────────────────── Mock data ─────────────────────────
+   Everything below is invented. `title`, `summary`, `line`, `stands`, `doing`
+   stand in for what a local model would write; `raw` and `lines` stand in for
+   what the source actually said. */
+
+const KINDS = { claude: 'Claude', opencode: 'OpenCode', slack: 'Slack', worker: 'Worker', local: 'Local LLM', kb: 'Knowledge base' };
+const URGENCY = { blocking: 'Holding work up', soon: 'Soon', whenever: 'Whenever' };
+const STATUS = { waiting: 'waiting on you', error: 'failed', running: 'running', done: 'finished', idle: 'idle' };
+
+const EFFORTS = [
+  { id: 'snap', name: 'Estoria snapshot store', raw: 'go-estoria/estoria @ feat/snapshot-store',
+    line: 'Two-thirds built. Paused on a retention decision.',
+    stands: "The design is settled and the Postgres implementation is about two-thirds built. Saving and loading work; pruning is paused on a retention decision only you can make. The benchmark harness landed this morning and its first numbers look healthy, though last night's scheduled run died when the disk filled up. Nothing here is urgent beyond the one blocked session.",
+    lately: [[12, 'The store session stopped to ask about retention.'], [95, 'The benchmark harness finished: loading 10,000 events takes 1.8 ms with a snapshot.'], [540, 'The nightly benchmark failed with a full disk.'], [1500, 'You approved the table layout: one row per snapshot, keyed by stream and version.']] },
+  { id: 'fork', name: 'Work fork catch-up', raw: 'ledger-platform @ chore/estoria-v0.14',
+    line: 'Builds on v0.14. Tests still to run, and Priya wants a date.',
+    stands: "The fork is three minor versions behind and the upgrade branch now compiles against v0.14. The agent wants to run the integration suite and is waiting for permission. Meanwhile Priya's team is blocked on the stream iterator and wants a date, and a thread in #platform-eng is drifting toward pinning the fork for the quarter, which would cut against this whole effort.",
+    lately: [[6, 'The upgrade session asked to run integration tests on local Postgres.'], [38, 'Priya asked again for a date.'], [170, 'Marcus proposed pinning the fork for the quarter.'], [260, 'Compile errors from the v0.14 API changes were fixed.']] },
+  { id: 'docs', name: 'estoria.dev docs refresh', raw: 'go-estoria/go-estoria.github.io @ main (dirty)',
+    line: 'Concept pages rewritten. Quickstart waiting on one choice.',
+    stands: "Three concept pages have been rewritten and build cleanly, and are waiting for you to read them. The quickstart rewrite has an outline but cannot go further until you choose which event store it is written around. Nothing has been committed.",
+    lately: [[52, 'The quickstart session asked whether to use the in-memory store or Postgres.'], [210, 'Aggregates, Event streams and Projections were rewritten; Hugo build is clean.']] },
+  { id: 'slorp', name: 'Slorp', raw: 'jefflinse/slorp @ proto/web-ui-mock',
+    line: 'Prototype stage. Ingest is being sketched.',
+    stands: "This is the tool you are looking at. An OpenCode session is working out how to tail Claude Code transcripts, and the summarizer is running against a local model. One old question, where the knowledge base should live, is about to start mattering.",
+    lately: [[20, 'The ingest sketch found that transcript files can be tailed as JSON lines.'], [44, 'The summarizer titled 11 sessions in 6.2 seconds.']] },
+];
+const UNSORTED = { id: 'unsorted', name: 'Unsorted', raw: '(no effort matched)',
+  line: "Things the model couldn't place with confidence.",
+  stands: "These did not match any routing hint and the model was not confident enough to guess. File them under an effort and it will learn from the choice.", lately: [] };
+
+const SESSIONS = [
+  { id: 's1', effort: 'snap', kind: 'claude', status: 'waiting', started: 140, last: 12, where: '~/dev/estoria',
+    title: 'Building the Postgres snapshot store', raw: 'claude · ~/dev/estoria · 7c1e02',
+    doing: 'Paused before the pruning query, waiting on your retention decision.',
+    tail: ['ok  	github.com/go-estoria/estoria/snapshotstore/postgres	1.204s', '? Which retention policy should the Postgres snapshot store use?'] },
+  { id: 's2', effort: 'snap', kind: 'opencode', status: 'done', started: 205, last: 95, where: '~/dev/estoria',
+    title: 'Benchmark harness for snapshot loads', raw: 'opencode · ~/dev/estoria · bench-harness',
+    doing: 'Finished. Results are in bench/RESULTS.md.',
+    tail: ['BenchmarkLoad/10k/snapshot-12   650   1.8 ms/op', 'Wrote bench/RESULTS.md'] },
+  { id: 's3', effort: 'snap', kind: 'worker', status: 'error', started: 560, last: 540, where: 'launchd',
+    title: 'Nightly snapshot benchmarks', raw: 'launchd · dev.slorp.bench-nightly',
+    doing: 'Died at 02:14 writing the baseline dataset: no space left on device.',
+    tail: ['write /var/tmp/bench/baseline.dump: no space left on device', 'bench-nightly: exit status 1'] },
+  { id: 's4', effort: 'fork', kind: 'claude', status: 'waiting', started: 270, last: 6, where: '~/work/ledger-platform',
+    title: 'Bringing the work fork up to v0.14', raw: 'claude · ~/work/ledger-platform · 19ab44',
+    doing: 'Wants permission to run the integration suite against local Postgres.',
+    tail: ['go build ./... ok', 'Bash: make test-integration PG_DSN=postgres://localhost:5432/ledger_dev  [permission required]'] },
+  { id: 's12', effort: 'fork', kind: 'worker', status: 'running', started: 14, last: 0, where: 'GitHub Actions',
+    title: 'Fork CI on the upgrade branch', raw: 'gh run watch · ledger-platform #4412',
+    doing: 'In the integration stage, 14 minutes into a run that usually takes 22.',
+    tail: ['✓ lint (48s)', '✓ unit (3m12s)', '* integration (running 10m)'] },
+  { id: 's5', effort: 'fork', kind: 'worker', status: 'running', started: 4300, last: 9, where: 'cron',
+    title: 'Watching upstream for new releases', raw: 'cron · estoria-release-watch · */15',
+    doing: 'Polling every 15 minutes. Last saw v0.14.2 two days ago.',
+    tail: ['latest tag: v0.14.2 (unchanged)'] },
+  { id: 's6', effort: 'docs', kind: 'claude', status: 'waiting', started: 80, last: 52, where: '~/dev/go-estoria.github.io',
+    title: 'Rewriting the quickstart', raw: 'claude · ~/dev/go-estoria.github.io · e03d7a',
+    doing: 'Stopped to ask which event store the quickstart should use.',
+    tail: ['? Should the quickstart use the in-memory store or Postgres?'] },
+  { id: 's7', effort: 'docs', kind: 'claude', status: 'done', started: 320, last: 210, where: '~/dev/go-estoria.github.io',
+    title: 'Refreshing the concepts pages', raw: 'claude · ~/dev/go-estoria.github.io · 5f21c9',
+    doing: 'Three pages rewritten; the local Hugo build is clean.',
+    tail: ['hugo: Total in 412 ms · 0 errors · 0 warnings'] },
+  { id: 's8', effort: 'slorp', kind: 'opencode', status: 'running', started: 47, last: 1, where: '~/dev/slorp',
+    title: 'Sketching the Slorp ingest pipeline', raw: 'opencode · ~/dev/slorp · ingest-sketch',
+    doing: 'Reading Claude Code transcript files to see what can be tailed.',
+    tail: ['read ~/.claude/projects/-Users-…/7c1e02.jsonl (1,204 lines)', 'each line is one JSON event; tailing looks feasible'] },
+  { id: 's9', effort: 'slorp', kind: 'local', status: 'running', started: 610, last: 1, where: 'localhost:11434',
+    title: 'The summarizer', raw: 'ollama · qwen3:14b · :11434',
+    doing: 'Idle between passes. The last pass titled 11 sessions in 6.2 seconds.',
+    tail: ['pass 212: 11 sessions, 3 slack threads, 6.2s, 4,118 tokens out'] },
+  { id: 's10', effort: 'unsorted', kind: 'local', status: 'idle', started: 400, last: 185, where: 'open-webui',
+    title: 'A scratch chat about event versioning', raw: 'ollama · llama3.3 · open-webui tab',
+    doing: 'Quiet for three hours. You were comparing upcasting strategies.',
+    tail: ['…so lazy upcasting on read keeps old events immutable, at the cost of carrying every upcaster forever.'] },
+  { id: 's11', effort: 'unsorted', kind: 'claude', status: 'idle', started: 130, last: 75, where: '~/dev/scratch',
+    title: 'A JSON diff script in the scratch directory', raw: 'claude · ~/dev/scratch · b7730e',
+    doing: 'Wrote a script that diffs two event envelopes, then went quiet.',
+    tail: ['Wrote envdiff.go (84 lines)', 'Diff of v0.13 and v0.14 envelopes: 2 fields renamed, 1 added.'] },
+];
+
+const ITEMS = [
+  { id: 'a1', effort: 'snap', session: 's1', kind: 'claude', src: 'Claude session', urgency: 'blocking', age: 12,
+    title: 'Keep every snapshot, or only the newest few?',
+    raw: 'claude 7c1e02 · AskUserQuestion · "Retention policy?"',
+    ask: 'Pick a retention policy so the pruning query can be written.',
+    summary: ['The session building the Postgres snapshot store has reached pruning and stopped. It sees three options: keep every snapshot forever, keep the newest few per stream, or prune by age. It leans toward keeping the newest three, because that bounds the table without needing a background job, but it will not write the query until you choose.',
+      'Pruning is blocked on a retention choice. The agent recommends keeping the newest three snapshots per stream.'],
+    replies: ['Keep the newest 3 per stream', 'Keep everything', 'Prune by age'],
+    lines: [['claude', 'Save and Load are passing against Postgres 17. Before I write Prune I need a retention policy.'],
+      ['claude', 'Options: (1) keep all snapshots, (2) keep newest N per stream, default N=3, (3) delete snapshots older than a configured duration. I recommend (2): bounded growth, no background job, one DELETE per save.'],
+      ['claude', 'Which retention policy should the Postgres snapshot store use?']] },
+  { id: 'a2', effort: 'snap', session: 's2', kind: 'opencode', src: 'OpenCode session', urgency: 'soon', age: 95,
+    title: 'The benchmark harness is finished and wants a look',
+    raw: 'opencode bench-harness · exited 0 · bench/RESULTS.md (+212)',
+    ask: 'Skim the numbers and decide whether loads are fast enough to stop optimizing.',
+    summary: ['The harness runs save and load against streams of 100, 1,000 and 10,000 events, with and without a snapshot. With a snapshot, loading a 10,000-event stream takes 1.8 ms, down from 41 ms. Saves cost about 0.3 ms more. The agent thinks this is good enough and suggests moving on to pruning.',
+      'Snapshots cut a 10,000-event load from 41 ms to 1.8 ms. Saves cost 0.3 ms more. The agent suggests calling it done.'],
+    replies: ['Good enough, move on', 'Dig into the save overhead'],
+    lines: [['opencode', 'BenchmarkLoad/10k/no-snapshot-12      28   41.2 ms/op'],
+      ['opencode', 'BenchmarkLoad/10k/snapshot-12        650    1.8 ms/op'],
+      ['opencode', 'BenchmarkSave/10k/snapshot-12       3100    0.71 ms/op  (+0.29 vs none)'],
+      ['opencode', 'Wrote bench/RESULTS.md. Load is ~23x faster with snapshots at 10k events. I would stop here unless save overhead matters to you.']] },
+  { id: 'a3', effort: 'snap', session: 's3', kind: 'worker', src: 'Background worker', urgency: 'whenever', age: 540,
+    title: "Last night's benchmark run died on a full disk",
+    raw: 'launchd dev.slorp.bench-nightly · exit 1 · ENOSPC',
+    ask: 'Free some space or point the run at another volume, then restart it.',
+    summary: ['The nightly benchmark copies a 38 GB baseline dataset into /var/tmp before it starts, and the disk filled up partway through. No results were recorded for last night. It will try again tonight at 2:00 and fail the same way unless something changes.',
+      'Nightly benchmarks failed: the disk filled while copying the 38 GB baseline. Tonight will fail too.'],
+    replies: ['Rerun on /Volumes/scratch', 'Skip it until tonight'],
+    lines: [['02:14:07', 'pg_restore: loading baseline dataset (38 GB)'],
+      ['02:14:52', 'write /var/tmp/bench/baseline.dump: no space left on device'],
+      ['02:14:52', 'bench-nightly: exit status 1']] },
+  { id: 'a4', effort: 'fork', kind: 'slack', src: 'Slack DM · Priya Raman', urgency: 'blocking', age: 38,
+    title: 'Priya wants a date for the stream iterator',
+    raw: 'slack D04PRIYA · 2 unread · "any eta on the estoria bump?"',
+    ask: 'Reply with a date, or say what is in the way.',
+    summary: ["Priya's team is waiting on the stream iterator that arrives with the v0.14 upgrade of the fork. Priya asked yesterday and again this morning, and says they will write a workaround on Wednesday if there is no date. The upgrade branch compiles and the integration suite has not run yet, so an honest answer is probably Thursday, if nothing surprising turns up.",
+      'Priya needs a date for v0.14 in the fork. Her team writes a workaround on Wednesday otherwise.'],
+    draft: "Hey Priya, the upgrade branch builds on v0.14 and I'm about to run the integration suite. If nothing surprising turns up, the fork is on v0.14 by Thursday. I'll confirm tomorrow afternoon either way, so hold off on the workaround until then.",
+    lines: [['Priya Raman · yesterday 4:12 PM', 'any eta on the estoria bump? we want the iterator for the reconciliation job'],
+      ['Priya Raman · 9:41 AM', "no pressure but if we don't have a date by wed we'll just write the paging loop ourselves and rip it out later"]] },
+  { id: 'a5', effort: 'fork', session: 's4', kind: 'claude', src: 'Claude session', urgency: 'blocking', age: 6,
+    title: 'Wants to run the integration suite against your local Postgres',
+    raw: 'claude 19ab44 · permission · Bash(make test-integration PG_DSN=…)',
+    ask: 'Allow or deny the command.',
+    summary: ['The upgrade session fixed the compile errors from v0.14 and wants to confirm the change with the integration suite. The suite creates and drops its own schema in whatever database it is pointed at, which here is your local development Postgres. This command has not been approved before in this project.',
+      'The agent wants to run integration tests on local Postgres. The suite creates and drops its own schema.'],
+    replies: ['Allow once', 'Always allow for this effort', 'Deny'],
+    lines: [['claude', "The build is clean on v0.14.2. I'd like to run the integration suite to confirm the append path."],
+      ['tool', 'Bash: make test-integration PG_DSN=postgres://localhost:5432/ledger_dev'],
+      ['harness', 'Permission required. This command has not been approved in ~/work/ledger-platform.']] },
+  { id: 'a6', effort: 'fork', kind: 'slack', src: 'Slack · #platform-eng', urgency: 'soon', age: 170,
+    title: '#platform-eng is debating whether to pin the fork',
+    raw: 'slack C02PLATENG · thread · 14 replies · matched "estoria", "fork"',
+    ask: 'Worth weighing in before Thursday planning. Nobody has asked you directly.',
+    summary: ["A thread started by Marcus proposes pinning the fork to a fixed upstream version for the quarter, so that upgrades stop landing mid-sprint. Several people agree; Priya objects because her team needs v0.14. You have not been mentioned, but you maintain the fork and the thread is heading toward a decision at Thursday planning.",
+      'Marcus proposes pinning the fork for the quarter. Priya objects. A decision is likely Thursday and you are not in the thread yet.'],
+    draft: "I maintain the fork, so weighing in: it only ever lags upstream and never diverges, which is what keeps each bump small. Pinning for a quarter turns that into one large jump. Could we agree on a bump window instead, say the first week of each sprint?",
+    lines: [['Marcus Oyelaran · 11:02 AM', "proposal: pin our estoria fork for Q1. every bump seems to land the week we're trying to ship"],
+      ['Dee Castellanos · 11:09 AM', '+1, the last one broke the outbox tests for a day'],
+      ['Priya Raman · 11:20 AM', 'we need 0.14 for the iterator though. can we pin after that?'],
+      ['Marcus Oyelaran · 11:31 AM', "let's decide at planning thurs"]] },
+  { id: 'a7', effort: 'docs', session: 's6', kind: 'claude', src: 'Claude session', urgency: 'blocking', age: 52,
+    title: 'Should the quickstart use the in-memory store or Postgres?',
+    raw: 'claude e03d7a · AskUserQuestion · "Quickstart backend?"',
+    ask: 'Choose the event store the quickstart is written around.',
+    summary: ['The session rewriting the estoria.dev quickstart needs to know which event store to build it on. In-memory means a reader can paste and run with no setup. Postgres is what people will really use, but adds a Docker step before the first line of Go. It suggests in-memory for the quickstart, with a Postgres page straight after.',
+      'The quickstart rewrite is blocked on a backend choice. The agent suggests in-memory first, with Postgres as the follow-up page.'],
+    replies: ['In-memory, then a Postgres page', 'Postgres from the start'],
+    lines: [['claude', "I've outlined the new quickstart. One decision changes the whole page: which event store it uses."],
+      ['claude', 'In-memory: zero setup, 30 lines, runs anywhere. Postgres: realistic, but needs docker compose before any Go code. I suggest in-memory here and a follow-up page for Postgres.']] },
+  { id: 'a8', effort: 'docs', session: 's7', kind: 'claude', src: 'Claude session', urgency: 'whenever', age: 210,
+    title: 'Three concept pages are rewritten and the site builds',
+    raw: 'claude 5f21c9 · stopped · 3 files changed · hugo ok',
+    ask: 'Read the diff and say whether it can be committed.',
+    summary: ['Aggregates, Event streams and Projections have been rewritten to match the current API; the old pages still used method names from before v0.12. A local Hugo build is clean and nothing has been committed. Projections is the page most worth reading closely, since most of it is new writing.',
+      'Three concept pages rewritten, local build clean, nothing committed. Projections is mostly new text.'],
+    replies: ['Looks fine, commit locally', "Hold, I'll read it tonight"],
+    lines: [['claude', 'Rewrote content/concepts/aggregates.md, event-streams.md and projections.md.'],
+      ['tool', 'hugo: Total in 412 ms · 0 errors · 0 warnings'],
+      ['claude', "Nothing is committed. Projections is ~70% new text, so that's the one to review."]] },
+  { id: 'a9', effort: 'unsorted', session: 's11', kind: 'local', src: 'Summarizer', urgency: 'whenever', age: 75, route: true,
+    title: "A session in ~/dev/scratch doesn't belong to anything",
+    raw: 'summarizer · route confidence 0.41 · claude b7730e',
+    ask: 'Say which effort this belongs to, or leave it unsorted.',
+    summary: ['A Claude session in ~/dev/scratch wrote a script that diffs two JSON event envelopes and then went quiet. It could be tooling for the fork upgrade, since it compares v0.13 and v0.14 envelopes, or a one-off. The summarizer is 41% sure it belongs to the work fork and did not want to guess.',
+      'An unplaced session wrote a JSON diff script for event envelopes. Best guess is the work fork, at 41%.'],
+    lines: [['summarizer', 'candidates: fork 0.41 · snap 0.22 · slorp 0.08 · none 0.29'],
+      ['summarizer', 'evidence: mentions "envelope", "v0.13", "v0.14"; cwd matches no routing hint']] },
+  { id: 'a10', effort: 'slorp', kind: 'kb', src: 'Knowledge base', urgency: 'whenever', age: 12960,
+    title: 'A question you parked nine days ago is about to matter',
+    raw: 'kb open-question q3 · age 9d · no activity',
+    ask: 'Decide where the knowledge base lives, or let it sit a little longer.',
+    summary: ['You wrote down that the knowledge base could be flat Markdown files, SQLite, or an event stream, and never came back to it. It has not mattered until now, but the ingest sketch that is running will need somewhere to write within a day or two.',
+      'An open question from nine days ago: the ingest sketch will soon need a place to write.'],
+    replies: ['Flat files for now', 'SQLite', 'Keep it open'],
+    lines: [['you · 7 Nov', 'where does the KB live? md files are greppable + diffable. sqlite is queryable. event stream is very on brand but probably silly']] },
+];
+
+/* Arrive one at a time via "Simulate an incoming item". */
+const POOL = [
+  { id: 'p1', effort: 'snap', session: 's1', kind: 'claude', src: 'Claude session', urgency: 'soon', age: 0,
+    title: 'The pruning migration is written; can it drop the old index?',
+    raw: 'claude 7c1e02 · AskUserQuestion · "Drop idx_snapshots_stream?"',
+    ask: 'Say whether the old index can go.',
+    summary: ['The new migration adds a composite index on stream and version that makes the old single-column index redundant. Dropping it saves a little write cost. Keeping it is harmless. The agent would drop it.',
+      'New composite index makes the old one redundant. The agent would drop it.'],
+    replies: ['Drop it', 'Keep it for now'],
+    lines: [['claude', 'idx_snapshots_stream is now covered by idx_snapshots_stream_version. OK to drop it in the same migration?']] },
+  { id: 'p2', effort: 'fork', kind: 'slack', src: 'Slack DM · Marcus Oyelaran', urgency: 'soon', age: 0,
+    title: 'Marcus asks whether the fork needs the outbox change',
+    raw: 'slack D07MARCUS · 1 unread · "does 0.14 touch outbox?"',
+    ask: 'Tell him whether v0.14 changes anything the outbox depends on.',
+    summary: ['Marcus owns the outbox service and wants to know whether the v0.14 upgrade changes the append hooks it relies on. From the upgrade session so far, the hook signature is unchanged but the envelope gained a field.',
+      'Marcus wants to know if v0.14 affects the outbox. Hooks unchanged; envelope gained one field.'],
+    draft: 'Hook signature is the same in v0.14. The envelope gains one optional field, which the outbox can ignore. I can send you the diff if useful.',
+    lines: [['Marcus Oyelaran · just now', 'does 0.14 touch outbox? trying to work out if i need to block time for it']] },
+  { id: 'p3', effort: 'docs', kind: 'worker', src: 'Background worker', urgency: 'whenever', age: 0,
+    title: 'The link checker found four dead links on estoria.dev',
+    raw: 'cron docs-linkcheck · exit 1 · 4 broken / 212 checked',
+    ask: 'Fix them now or fold them into the docs refresh.',
+    summary: ['All four dead links point at pages the concepts rewrite renamed. They will resolve themselves once that work is committed, provided the old paths get aliases.',
+      'Four dead links, all caused by pages the rewrite renamed.'],
+    replies: ['Fold into the docs refresh', 'Add aliases now'],
+    lines: [['linkcheck', '404 /concepts/event-stream/  (linked from /quickstart/)'], ['linkcheck', '404 /concepts/aggregate-store/  (linked from /concepts/aggregates/)'], ['linkcheck', '4 broken of 212 checked']] },
+];
+
+const KB_SEED = {
+  watch: [
+    { id: 'w1', type: 'person', name: 'Priya Raman', why: 'Leads the team that consumes the fork. Asks about release timing.', efforts: ['fork'], cadence: 'on every message', seen: 'Asked again for a date on the stream iterator.', seenAge: 38 },
+    { id: 'w2', type: 'channel', name: '#platform-eng', why: 'Where dependency and fork policy gets argued out.', efforts: ['fork'], cadence: 'twice a day', seen: 'A thread about pinning the fork for the quarter is still going.', seenAge: 170 },
+    { id: 'w3', type: 'dm', name: 'Marcus Oyelaran', why: 'Owns the outbox service. Decisions there change what the fork needs.', efforts: ['fork'], cadence: 'on every message', seen: 'Nothing new since Friday.', seenAge: 4200 },
+    { id: 'w4', type: 'channel', name: '#incidents', why: 'Only matters if the event store is named.', efforts: ['fork'], cadence: 'hourly', seen: 'Quiet. No mention of the event store this week.', seenAge: 55 },
+    { id: 'w5', type: 'channel', name: '#es-go (Gophers Slack)', why: 'Occasional Estoria questions from strangers.', efforts: ['snap', 'docs'], cadence: 'daily', seen: 'Someone asked whether snapshots are supported yet.', seenAge: 1300 },
+  ],
+  questions: [
+    { id: 'q1', text: 'Is keeping the newest three snapshots per stream the right default, or should retention be opt-in?', effort: 'snap', age: 12, origin: 'raised by a Claude session' },
+    { id: 'q2', text: 'Do I want a bump window for the fork instead of ad hoc upgrades?', effort: 'fork', age: 170, origin: 'from the #platform-eng thread' },
+    { id: 'q3', text: 'Where does the knowledge base live: Markdown files, SQLite, or an event stream?', effort: 'slorp', age: 12960, origin: 'you wrote this down' },
+    { id: 'q4', text: 'Should Slorp ever act on my behalf, or only draft?', effort: 'slorp', age: 2900, origin: 'you wrote this down' },
+  ],
+  context: [
+    { id: 'c1', text: 'The work fork never diverges from upstream. It only lags.' },
+    { id: 'c2', text: 'At work, only the Postgres event store matters.' },
+    { id: 'c3', text: 'Agents prepare changes locally. Nothing gets pushed without me saying so.' },
+    { id: 'c4', text: 'Thursday is planning. Anything that needs a team decision should be ready by Wednesday night.' },
+  ],
+  routing: [
+    { id: 'r1', text: 'Anything under ~/dev/estoria belongs to an Estoria effort. Use the branch name to pick which one.' },
+    { id: 'r2', text: 'Messages from Priya, or in #platform-eng, are about the work fork unless they say otherwise.' },
+    { id: 'r3', text: 'Sessions in ~/dev/scratch stay unsorted until I file them.' },
+  ],
+};
+const KB_SECTIONS = {
+  watch: { name: 'Slack watchlist', lede: 'People, channels and DMs worth checking now and then. The reason you give is what the model uses to decide whether a message is worth surfacing.' },
+  questions: { name: 'Open questions', lede: 'Things you have not decided yet. They resurface under Attention when something starts depending on the answer.' },
+  context: { name: 'Standing context', lede: 'Facts the summarizer should always know. Plain sentences; it reads them before every pass.' },
+  routing: { name: 'Routing hints', lede: 'How things get filed under efforts. Written in plain language, and added to whenever you correct a guess.' },
+};
+
+/* ───────────────────────── State ───────────────────────── */
+
+const KEY = 'slorp.proto.v1';
+const VIEWS = ['attention', 'efforts', 'activity', 'knowledge'];
+const fresh = () => ({ view: 'attention', sel: null, effortSel: 'snap', kbSel: 'watch', groupBy: 'effort', fluent: true, theme: 'auto',
+  handled: {}, moved: {}, sessMoved: {}, extra: [], arrived: {}, collapsed: {}, showHandled: false, variant: {}, rawOpen: {},
+  actFilter: 'all', expanded: {}, kb: structuredClone(KB_SEED), seq: 100 });
+let state = fresh();
+try { Object.assign(state, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch (e) { /* storage unavailable: run in memory */ }
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* ignore */ } };
+let freshId = null;
+
+/* ───────────────────────── Helpers ───────────────────────── */
+
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+const num = n => WORDS[n] ?? String(n);
+const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+const listOf = a => a.length < 2 ? a.join('') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1];
+const ago = m => m < 1 ? 'just now' : m < 60 ? `${Math.round(m)}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`;
+const span = m => m < 60 ? `${Math.round(m)}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`;
+
+const allItems = () => ITEMS.concat(state.extra.map(id => POOL.find(p => p.id === id)).filter(Boolean));
+const itemById = id => allItems().find(i => i.id === id);
+const effortById = id => EFFORTS.find(e => e.id === id) || UNSORTED;
+const effortOf = it => state.moved[it.id] || it.effort;
+const sessEffort = s => state.sessMoved[s.id] || s.effort;
+const ageOf = it => state.arrived[it.id] ? (Date.now() - state.arrived[it.id]) / 60000 : it.age;
+const isActive = it => { const h = state.handled[it.id]; return !h || (h.how === 'snoozed' && h.until < Date.now()); };
+const activeItems = () => allItems().filter(isActive);
+const URG_W = { blocking: 0, soon: 1, whenever: 2 };
+const byUrgency = (a, b) => URG_W[a.urgency] - URG_W[b.urgency] || ageOf(a) - ageOf(b);
+
+/* A title in whichever voice is switched on: the model's, or the source's. */
+const title = (x, cls = '') => state.fluent
+  ? `<span class="gen ${cls}">${esc(x.title || x.name)}</span>`
+  : `<span class="mono ${cls}">${esc(x.raw)}</span>`;
+const kindBadge = (kind, label) => `<span class="kind"><i style="background:var(--k-${kind})"></i>${esc(label || KINDS[kind])}</span>`;
+const spark = '<span class="spark" title="Written by the local model">✦</span>';
+
+function groupItems(items) {
+  const sorted = items.slice().sort(byUrgency);
+  let defs;
+  if (state.groupBy === 'urgency') defs = Object.keys(URGENCY).map(k => ({ key: 'u:' + k, name: URGENCY[k], test: i => i.urgency === k }));
+  else if (state.groupBy === 'source') defs = Object.keys(KINDS).map(k => ({ key: 'k:' + k, name: KINDS[k], test: i => i.kind === k }));
+  else defs = EFFORTS.concat(UNSORTED).map(e => ({ key: 'e:' + e.id, effort: e, name: e.name, test: i => effortOf(i) === e.id }));
+  return defs.map(d => ({ ...d, items: sorted.filter(d.test) })).filter(g => g.items.length);
+}
+const visibleOrder = () => groupItems(activeItems()).filter(g => !state.collapsed[g.key]).flatMap(g => g.items.map(i => i.id));
+
+let toastTimer;
+function toast(msg, undo) {
+  const t = $('#toast');
+  t.innerHTML = `<span>${esc(msg)}</span>${undo ? '<button id="undo">Undo</button>' : ''}`;
+  t.classList.add('show');
+  if (undo) $('#undo').onclick = () => { undo(); save(); render(); t.classList.remove('show'); };
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 5000);
+}
+
+function resolve(id, how, note, opts = {}) {
+  const order = visibleOrder(), i = order.indexOf(id), it = itemById(id);
+  state.handled[id] = { how, note: note || '', at: Date.now(), until: opts.until || 0 };
+  if (state.sel === id) state.sel = order[i + 1] || order[i - 1] || null;
+  const msg = opts.msg || { answered: `Sent to ${it.src}`, dismissed: 'Dismissed', snoozed: `Snoozed ${note}` }[how];
+  toast(msg, () => { delete state.handled[id]; state.sel = id; if (opts.undo) opts.undo(); });
+}
+
+function go(view) {
+  state.view = view;
+  history.replaceState(null, '', '#' + view);
+}
+
+/* ───────────────────────── Attention ───────────────────────── */
+
+function briefing(items) {
+  let text;
+  if (!items.length) text = 'Nothing needs you. Everything that is running can keep running without you.';
+  else {
+    const efforts = new Set(items.map(effortOf));
+    const blocking = items.filter(i => i.urgency === 'blocking');
+    const where = [...new Set(blocking.map(i => effortById(effortOf(i)).name))];
+    const one = items.length === 1;
+    text = `${cap(num(items.length))} thing${one ? '' : 's'} need${one ? 's' : ''} you across ${num(efforts.size)} effort${efforts.size === 1 ? '' : 's'}. `;
+    text += blocking.length
+      ? `${cap(num(blocking.length))} ${blocking.length === 1 ? 'is' : 'are'} holding work up right now, in ${listOf(where)}.${items.length > blocking.length ? ' The rest will keep.' : ''}`
+      : 'Nothing is stopped waiting on you, so all of it will keep.';
+  }
+  const day = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+  return `<div class="brief"><div class="when"><span class="label">${day}</span><span class="label">${spark}briefing</span></div><p>${esc(text)}</p></div>`;
+}
+
+function rowHtml(it, act = 'select') {
+  const meta = state.groupBy === 'effort' || act !== 'select' ? kindBadge(it.kind, it.src) : `<span>${esc(effortById(effortOf(it)).name)}</span>`;
+  return `<button class="row ${it.urgency} ${state.view === 'attention' && it.id === state.sel ? 'sel' : ''} ${it.id === freshId ? 'fresh' : ''}" data-act="${act}" data-id="${it.id}">
+    ${title(it, 't')}
+    <span class="m">${meta}<span>${ago(ageOf(it))}</span>${it.urgency === 'blocking' ? '<span class="tag blocking">blocking</span>' : ''}</span>
+  </button>`;
+}
+
+function handledFooter() {
+  const done = allItems().filter(i => !isActive(i));
+  const legend = `<p>${spark}Serif is written by the local model. <span class="mono">Mono</span> is verbatim from the source.</p>`;
+  if (!done.length) return `<div class="foot">${legend}</div>`;
+  const list = state.showHandled ? `<div class="handled">${done.map(i => `<div><span class="gen">${esc(i.title)}</span><span style="white-space:nowrap">${esc(state.handled[i.id].how)} · <button class="link" data-act="restore" data-id="${i.id}">restore</button></span></div>`).join('')}</div>` : '';
+  return `<div class="foot"><p style="margin-bottom:8px">${done.length} handled or snoozed · <button class="link" data-act="toggleHandled">${state.showHandled ? 'hide' : 'show'}</button></p>${list}${legend}</div>`;
+}
+
+function rawBlock(lines) {
+  return `<div class="rawblock">${lines.map(([who, tx]) => `<div class="ln"><span class="who">${esc(who)}</span><span class="tx">${esc(tx)}</span></div>`).join('')}</div>`;
+}
+
+function sessionRow(s) {
+  return `<div class="srow"><span class="dot ${s.status}" title="${STATUS[s.status]}"></span>
+    <div class="body"><div>${title(s, 'ttl')}</div>${state.fluent ? `<div class="sub">${esc(s.doing)}</div>` : ''}</div>
+    <span class="side">${kindBadge(s.kind)} · ${STATUS[s.status]}</span></div>`;
+}
+
+function itemDetail(it) {
+  const eff = effortById(effortOf(it));
+  const v = (state.variant[it.id] || 0) % it.summary.length;
+  const siblings = SESSIONS.filter(s => sessEffort(s) === eff.id && s.id !== it.session);
+  const rawOpen = state.rawOpen[it.id] ?? !state.fluent;
+  let answer;
+  if (it.route) {
+    answer = `<div class="replies">${EFFORTS.map(e => `<button class="btn" data-act="route" data-id="${it.id}" data-effort="${e.id}">${esc(e.name)}</button>`).join('')}
+      <button class="btn quiet" data-act="dismiss" data-id="${it.id}">Leave unsorted</button></div>`;
+  } else {
+    const quick = (it.replies || []).map((r, i) => `<button class="btn ${i === 0 ? 'go' : ''}" data-act="reply" data-id="${it.id}" data-text="${esc(r)}">${esc(r)}</button>`).join('');
+    answer = `${quick ? `<div class="replies">${quick}</div>` : ''}
+      <textarea id="reply" data-id="${it.id}" class="${it.draft ? 'drafted' : ''}" placeholder="Or say something else…">${esc(it.draft || '')}</textarea>
+      <div class="send"><span>${it.draft ? `${spark}Drafted for you. Edit before sending.` : `Goes back to the ${esc(it.src.toLowerCase())}.`}</span>
+      <button class="btn ${quick ? '' : 'go'}" data-act="send" data-id="${it.id}">Send</button></div>`;
+  }
+  return `<div class="inner">
+    <div class="crumb"><button class="eff" data-act="effort" data-id="${eff.id}">${esc(eff.name)} ›</button>${kindBadge(it.kind, it.src)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span></div>
+    <h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>
+    <div class="need"><div class="label">${spark}What's needed from you</div><p class="ask">${esc(it.ask)}</p>${answer}</div>
+    <div class="bar">
+      <button class="btn" data-act="snooze" data-id="${it.id}" data-for="hour">Snooze 1h</button>
+      <button class="btn" data-act="snooze" data-id="${it.id}" data-for="tomorrow">Until tomorrow</button>
+      <button class="btn" data-act="dismiss" data-id="${it.id}">Dismiss</button>
+      <button class="btn" data-act="park" data-id="${it.id}">Park as open question</button>
+      <select class="btn" data-change="move" data-id="${it.id}" aria-label="Move to another effort">
+        <option value="">Move to…</option>
+        ${EFFORTS.concat(UNSORTED).filter(e => e.id !== eff.id).map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="sec"><div class="label"><span>${spark}What's going on</span><button data-act="rephrase" data-id="${it.id}">↻ ${v === 0 ? 'Shorter' : 'Fuller'}</button></div>
+      <p class="prose" id="summary">${esc(it.summary[v])}</p></div>
+    <div class="sec"><div class="label"><span>From the source, verbatim</span><button data-act="toggleRaw" data-id="${it.id}">${rawOpen ? 'Hide' : 'Show'}</button></div>
+      ${rawOpen ? rawBlock(it.lines) : `<div class="none mono">${esc(it.raw)}</div>`}</div>
+    <div class="sec"><div class="label"><span>Also going on in ${esc(eff.name)}</span></div>
+      ${siblings.length ? siblings.map(sessionRow).join('') : '<div class="none">Nothing else is running here.</div>'}</div>
+  </div>`;
+}
+
+function viewAttention() {
+  const items = activeItems();
+  if (!items.some(i => i.id === state.sel)) state.sel = visibleOrder()[0] || null;
+  const groups = groupItems(items).map(g => {
+    const shut = state.collapsed[g.key];
+    const name = g.effort ? title(g.effort) : esc(g.name);
+    return `<div class="ghead">
+        <button class="name" data-act="collapse" data-key="${g.key}"><span class="chev ${shut ? 'shut' : ''}">▼</span> ${name}</button>
+        <span class="n">${g.items.length}</span>
+        ${g.effort ? `<button class="open" data-act="effort" data-id="${g.effort.id}" title="Open this effort">open ›</button>` : ''}
+      </div>
+      ${g.effort && state.fluent && !shut ? `<div class="gline">${esc(g.effort.line)}</div>` : ''}
+      ${shut ? '' : g.items.map(i => rowHtml(i)).join('')}`;
+  }).join('');
+  const seg = ['effort', 'urgency', 'source'].map(b => `<button class="${state.groupBy === b ? 'on' : ''}" data-act="group" data-by="${b}">${cap(b)}</button>`).join('');
+  const sel = state.sel && itemById(state.sel);
+  return `<div class="split">
+    <section class="pane list" data-scroll="att-list">
+      ${briefing(items)}
+      <div class="listbar"><span class="label">Needs you</span><span class="seg" role="group" aria-label="Group by">${seg}</span></div>
+      ${groups}
+      ${handledFooter()}
+    </section>
+    <section class="pane detail" data-scroll="att-${state.sel}">${sel ? itemDetail(sel) : `<div class="empty">${spark}All clear. Go make something.</div>`}</section>
+  </div>`;
+}
+
+/* ───────────────────────── Efforts ───────────────────────── */
+
+function effortDetail(e) {
+  const needs = activeItems().filter(i => effortOf(i) === e.id).sort(byUrgency);
+  const sess = SESSIONS.filter(s => sessEffort(s) === e.id);
+  const qs = state.kb.questions.filter(q => q.effort === e.id);
+  const watch = state.kb.watch.filter(w => w.efforts.includes(e.id));
+  return `<div class="inner">
+    <div class="crumb"><span class="mono">${esc(e.raw)}</span></div>
+    <h1>${esc(e.name)}</h1>
+    <div class="sec"><div class="label"><span>${spark}Where this stands</span></div><p class="prose">${esc(e.stands)}</p></div>
+    <div class="sec"><div class="label"><span>Needs you (${needs.length})</span></div>
+      ${needs.length ? `<div style="margin:0 -18px">${needs.map(i => rowHtml(i, 'openItem')).join('')}</div>` : '<div class="none">Nothing. This effort is moving without you.</div>'}</div>
+    <div class="sec"><div class="label"><span>Sessions and workers (${sess.length})</span></div>
+      ${sess.length ? sess.map(sessionRow).join('') : '<div class="none">Nothing running.</div>'}</div>
+    <div class="sec"><div class="label"><span>Open questions (${qs.length})</span><button data-act="kbGo" data-s="questions">Manage ›</button></div>
+      ${qs.length ? qs.map(q => `<div class="srow"><div class="body">${esc(q.text)}</div><span class="side">${ago(q.age)}</span></div>`).join('') : '<div class="none">None recorded.</div>'}</div>
+    <div class="sec"><div class="label"><span>Watching</span><button data-act="kbGo" data-s="watch">Manage ›</button></div>
+      ${watch.length ? watch.map(w => `<div class="srow"><div class="body"><b>${esc(w.name)}</b><div class="sub">${esc(w.seen)}</div></div><span class="side">${ago(w.seenAge)}</span></div>`).join('') : '<div class="none">No people or channels tied to this effort.</div>'}</div>
+    ${e.lately.length ? `<div class="sec"><div class="label"><span>${spark}Lately</span></div><div class="time">${e.lately.map(([a, x]) => `<span class="a">${ago(a)}</span><span class="what">${esc(x)}</span>`).join('')}</div></div>` : ''}
+  </div>`;
+}
+
+function viewEfforts() {
+  const all = EFFORTS.concat(UNSORTED);
+  const rows = all.map(e => {
+    const n = activeItems().filter(i => effortOf(i) === e.id).length;
+    const live = SESSIONS.filter(s => sessEffort(s) === e.id && s.status === 'running').length;
+    const total = SESSIONS.filter(s => sessEffort(s) === e.id).length;
+    return `<button class="erow ${e.id === state.effortSel ? 'sel' : ''}" data-act="effortSel" data-id="${e.id}">
+      ${title(e, 't')}${state.fluent ? `<span class="l">${esc(e.line)}</span>` : ''}
+      <span class="m">${n ? `<b>${n} need${n === 1 ? 's' : ''} you</b>` : '<span>nothing needs you</span>'}<span>${total} session${total === 1 ? '' : 's'}, ${live ? live : 'none'} running</span></span>
+    </button>`;
+  }).join('');
+  return `<div class="split">
+    <section class="pane list" data-scroll="eff-list"><div class="listbar"><span class="label">Work efforts</span></div>${rows}</section>
+    <section class="pane detail" data-scroll="eff-${state.effortSel}">${effortDetail(effortById(state.effortSel))}</section>
+  </div>`;
+}
+
+/* ───────────────────────── Activity ───────────────────────── */
+
+function viewActivity() {
+  const order = Object.keys(STATUS);
+  const count = k => SESSIONS.filter(s => s.status === k).length;
+  const lede = `${cap(num(SESSIONS.length))} things are running or recently finished. ${cap(num(count('waiting')))} are stopped waiting on you, ${num(count('error'))} failed overnight, and the rest are getting on with it.`;
+  const filters = [['all', 'Everything']].concat(Object.entries(KINDS).filter(([k]) => SESSIONS.some(s => s.kind === k)))
+    .map(([k, n]) => `<button class="chip ${state.actFilter === k ? 'on' : ''}" data-act="actFilter" data-f="${k}">${esc(n)}</button>`).join('');
+  const rows = SESSIONS.filter(s => state.actFilter === 'all' || s.kind === state.actFilter)
+    .sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status) || a.last - b.last)
+    .map(s => {
+      const open = state.expanded[s.id];
+      const it = activeItems().find(i => i.session === s.id);
+      return `<tr class="s ${open ? 'open' : ''}" data-act="expand" data-id="${s.id}">
+        <td class="st"><span class="dot ${s.status}"></span>${STATUS[s.status]}</td>
+        <td><div>${title(s, 'ttl')}</div>${state.fluent ? `<div class="doing">${esc(s.doing)}</div>` : ''}</td>
+        <td class="dim">${kindBadge(s.kind)}</td>
+        <td class="dim hide">${esc(effortById(sessEffort(s)).name)}</td>
+        <td class="dim hide mono">${esc(s.where)}</td>
+        <td class="dim hide">${span(s.started)}</td>
+        <td class="dim">${ago(s.last)}</td>
+      </tr>${open ? `<tr class="x"><td></td><td colspan="6">${rawBlock(s.tail.map(t => ['last output', t]))}
+        <div class="bar" style="margin:10px 0 14px">${it ? `<button class="btn go" data-act="openItem" data-id="${it.id}">See what it needs ›</button>` : ''}<button class="btn" data-act="effort" data-id="${sessEffort(s)}">Open effort ›</button></div></td></tr>` : ''}`;
+    }).join('');
+  return `<div class="page">
+    <h1>Everything that's running</h1>
+    <p class="prose" style="margin-top:10px">${spark}${esc(lede)}</p>
+    <div class="chips">${filters}</div>
+    <table class="tbl"><thead><tr><th class="label">Status</th><th class="label">What</th><th class="label">Kind</th><th class="label hide">Effort</th><th class="label hide">Where</th><th class="label hide">Age</th><th class="label">Last activity</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+  </div>`;
+}
+
+/* ───────────────────────── Knowledge base ───────────────────────── */
+
+const effortOptions = () => EFFORTS.map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join('');
+const GLYPH = { person: '@', channel: '#', dm: '✉' };
+
+function kbBody(sec) {
+  const list = state.kb[sec];
+  const rm = id => `<button class="x" data-act="kbRemove" data-sec="${sec}" data-id="${id}" title="Remove" aria-label="Remove">×</button>`;
+  if (sec === 'watch') return list.map(w => `<div class="card"><span class="glyph">${GLYPH[w.type]}</span>
+      <div class="body"><div class="nm">${esc(w.name)}</div><div class="why">${esc(w.why)}</div>
+      ${w.seen ? `<div class="seen">${spark}${esc(w.seen)} <span class="dim" style="color:var(--ink3)">${ago(w.seenAge)}</span></div>` : ''}
+      <div class="meta"><span>checked ${esc(w.cadence)}</span>${w.efforts.map(id => `<button class="link" data-act="effort" data-id="${id}">${esc(effortById(id).name)}</button>`).join('')}</div></div>${rm(w.id)}</div>`).join('')
+    + `<form class="add" data-form="watch"><select name="type" aria-label="Type"><option value="person">Person</option><option value="channel">Channel</option><option value="dm">DM</option></select>
+      <input name="name" placeholder="Name or #channel" required><input name="why" placeholder="Why it's worth watching" required>
+      <select name="effort" aria-label="Effort">${effortOptions()}</select><button class="btn go">Add</button></form>`;
+  if (sec === 'questions') return list.map(q => `<div class="card"><input type="checkbox" data-change="kbResolve" data-id="${q.id}" aria-label="Mark resolved">
+      <div class="body"><div class="q">${esc(q.text)}</div>
+      <div class="meta"><button class="link" data-act="effort" data-id="${q.effort}">${esc(effortById(q.effort).name)}</button><span>${ago(q.age)}</span><span>${esc(q.origin)}</span></div></div>${rm(q.id)}</div>`).join('')
+    + `<form class="add" data-form="questions"><input name="text" placeholder="Something you haven't decided yet" required>
+      <select name="effort" aria-label="Effort">${effortOptions()}</select><button class="btn go">Add</button></form>`;
+  return list.map(c => `<div class="card fact"><div class="body"><div class="q">${esc(c.text)}</div></div>${rm(c.id)}</div>`).join('')
+    + `<form class="add" data-form="${sec}"><input name="text" placeholder="${sec === 'context' ? 'A fact the summarizer should always know' : 'A rule for filing things under efforts'}" required><button class="btn go">Add</button></form>`;
+}
+
+function viewKnowledge() {
+  const nav = Object.entries(KB_SECTIONS).map(([k, s]) => `<button class="${state.kbSel === k ? 'on' : ''}" data-act="kbSel" data-s="${k}">${s.name}<span>${state.kb[k].length}</span></button>`).join('');
+  const s = KB_SECTIONS[state.kbSel];
+  return `<div class="split narrow">
+    <section class="pane list kbnav"><div class="label">Knowledge base</div>${nav}</section>
+    <section class="pane detail" data-scroll="kb-${state.kbSel}"><div class="inner"><h1>${s.name}</h1><p class="lede">${s.lede}</p>${kbBody(state.kbSel)}</div></section>
+  </div>`;
+}
+
+/* ───────────────────────── Shell ───────────────────────── */
+
+const RENDER = { attention: viewAttention, efforts: viewEfforts, activity: viewActivity, knowledge: viewKnowledge };
+
+function render() {
+  const scrolls = {};
+  document.querySelectorAll('[data-scroll]').forEach(el => { scrolls[el.dataset.scroll] = el.scrollTop; });
+  const draft = $('#reply') && { id: $('#reply').dataset.id, value: $('#reply').value };
+  const menuOpen = $('#menu')?.open;
+
+  document.documentElement.dataset.theme = state.theme;
+  const main = RENDER[state.view]();  // first: it may settle the selection
+  const n = activeItems().length;
+  $('#nav').innerHTML = VIEWS.map(v => `<button class="${state.view === v ? 'on' : ''}" data-act="view" data-view="${v}">${cap(v)}${v === 'attention' && n ? `<span class="count">${n}</span>` : ''}</button>`).join('');
+  $('#tools').innerHTML = `
+    <span class="model"><span class="dot running"></span>qwen3:14b · local · caught up</span>
+    <span class="seg" role="group" aria-label="Voice" title="Fluent shows what the model wrote. Raw shows what the sources said. (r)">
+      <button class="${state.fluent ? 'on' : ''}" data-act="fluent" data-on="1">Fluent</button><button class="${state.fluent ? '' : 'on'}" data-act="fluent" data-on="0">Raw</button></span>
+    <button class="icon" data-act="theme" title="Light or dark" aria-label="Toggle theme">◐</button>
+    <details class="menu" id="menu" ${menuOpen ? 'open' : ''}><summary class="icon" title="Prototype controls" aria-label="Prototype controls">⋯</summary>
+      <div class="pop"><p>Prototype controls</p>
+        <button data-act="simulate">Simulate an incoming item</button>
+        <button data-act="reset">Reset the demo</button>
+        <p>Keys: j/k move · e dismiss · s snooze · r fluent/raw · 1–4 views</p></div></details>`;
+  $('#main').innerHTML = main;
+
+  document.querySelectorAll('[data-scroll]').forEach(el => { if (scrolls[el.dataset.scroll]) el.scrollTop = scrolls[el.dataset.scroll]; });
+  const ta = $('#reply');
+  if (ta && draft && draft.id === ta.dataset.id) ta.value = draft.value;
+  freshId = null;
+}
+
+const actions = {
+  view: d => go(d.view),
+  select: d => { state.sel = d.id; },
+  group: d => { state.groupBy = d.by; },
+  collapse: d => { state.collapsed[d.key] = !state.collapsed[d.key]; },
+  fluent: d => { state.fluent = d.on === '1'; },
+  theme: () => {
+    const dark = state.theme === 'dark' || (state.theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+    state.theme = dark ? 'light' : 'dark';
+  },
+  reply: d => resolve(d.id, 'answered', d.text),
+  send: d => {
+    const ta = $('#reply'), text = ta.value.trim();
+    if (!text) { ta.focus(); return false; }
+    ta.value = '';
+    resolve(d.id, 'answered', text);
+  },
+  dismiss: d => resolve(d.id, 'dismissed'),
+  snooze: d => {
+    const until = new Date();
+    if (d.for === 'tomorrow') { until.setDate(until.getDate() + 1); until.setHours(9, 0, 0, 0); } else until.setHours(until.getHours() + 1);
+    const note = d.for === 'tomorrow' ? 'until tomorrow at 9:00' : `until ${until.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+    resolve(d.id, 'snoozed', note, { until: until.getTime() });
+  },
+  park: d => {
+    const it = itemById(d.id), qid = 'q' + (++state.seq);
+    state.kb.questions.unshift({ id: qid, text: it.title, effort: effortOf(it) === 'unsorted' ? 'slorp' : effortOf(it), age: 0, origin: `parked from a ${it.src.toLowerCase()}` });
+    resolve(d.id, 'parked', '', { msg: 'Parked as an open question', undo: () => { state.kb.questions = state.kb.questions.filter(q => q.id !== qid); } });
+  },
+  route: d => {
+    const it = itemById(d.id), name = effortById(d.effort).name;
+    state.moved[it.id] = d.effort;
+    if (it.session) state.sessMoved[it.session] = d.effort;
+    resolve(d.id, 'filed', '', { msg: `Filed under ${name}`, undo: () => { delete state.moved[it.id]; delete state.sessMoved[it.session]; } });
+  },
+  restore: d => { delete state.handled[d.id]; state.sel = d.id; },
+  toggleHandled: () => { state.showHandled = !state.showHandled; },
+  toggleRaw: d => { state.rawOpen[d.id] = !(state.rawOpen[d.id] ?? !state.fluent); },
+  rephrase: d => {
+    $('#summary').classList.add('thinking');  // stand-in for local model latency
+    setTimeout(() => { state.variant[d.id] = (state.variant[d.id] || 0) + 1; save(); render(); }, 650);
+    return false;
+  },
+  effort: d => { state.effortSel = d.id; go('efforts'); },
+  effortSel: d => { state.effortSel = d.id; },
+  openItem: d => { state.sel = d.id; go('attention'); },
+  expand: d => { state.expanded[d.id] = !state.expanded[d.id]; },
+  actFilter: d => { state.actFilter = d.f; },
+  kbSel: d => { state.kbSel = d.s; },
+  kbGo: d => { state.kbSel = d.s; go('knowledge'); },
+  kbRemove: d => {
+    const list = state.kb[d.sec], i = list.findIndex(x => x.id === d.id), gone = list.splice(i, 1)[0];
+    toast('Removed', () => { state.kb[d.sec].splice(i, 0, gone); });
+  },
+  simulate: () => {
+    const next = POOL.find(p => !state.extra.includes(p.id));
+    if (!next) { toast('No more canned items. Reset the demo to replay them.'); return false; }
+    state.extra.push(next.id);
+    state.arrived[next.id] = Date.now();
+    freshId = next.id;
+    toast(`New in ${effortById(next.effort).name}: ${next.title}`);
+  },
+  reset: () => { const { view, theme } = state; state = Object.assign(fresh(), { view, theme }); toast('Demo reset'); },
+};
+const changes = {
+  move: (d, el) => {
+    if (!el.value) return false;
+    const prev = state.moved[d.id];
+    state.moved[d.id] = el.value;
+    toast(`Moved to ${effortById(el.value).name}`, () => { if (prev) state.moved[d.id] = prev; else delete state.moved[d.id]; });
+  },
+  kbResolve: d => {
+    const i = state.kb.questions.findIndex(q => q.id === d.id), gone = state.kb.questions.splice(i, 1)[0];
+    toast('Resolved', () => { state.kb.questions.splice(i, 0, gone); });
+  },
+};
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('#menu')) $('#menu')?.removeAttribute('open');
+  const el = e.target.closest('[data-act]');
+  if (!el) return;
+  if (actions[el.dataset.act](el.dataset, el) !== false) { save(); render(); }
+});
+document.addEventListener('change', e => {
+  const el = e.target.closest('[data-change]');
+  if (el && changes[el.dataset.change](el.dataset, el) !== false) { save(); render(); }
+});
+document.addEventListener('submit', e => {
+  const form = e.target.closest('[data-form]');
+  if (!form) return;
+  e.preventDefault();
+  const f = Object.fromEntries(new FormData(form)), sec = form.dataset.form, id = sec[0] + (++state.seq);
+  if (sec === 'watch') state.kb.watch.push({ id, type: f.type, name: f.name, why: f.why, efforts: [f.effort], cadence: 'daily', seen: '', seenAge: 0 });
+  else if (sec === 'questions') state.kb.questions.unshift({ id, text: f.text, effort: f.effort, age: 0, origin: 'you wrote this down' });
+  else state.kb[sec].push({ id, text: f.text });
+  save(); render();
+});
+document.addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  const att = state.view === 'attention';
+  if (/^[1-4]$/.test(e.key)) go(VIEWS[e.key - 1]);
+  else if (e.key === 'r') state.fluent = !state.fluent;
+  else if (att && (e.key === 'j' || e.key === 'k')) {
+    const order = visibleOrder(), i = order.indexOf(state.sel) + (e.key === 'j' ? 1 : -1);
+    if (order[i]) state.sel = order[i];
+  }
+  else if (att && state.sel && e.key === 'e') actions.dismiss({ id: state.sel });
+  else if (att && state.sel && e.key === 's') actions.snooze({ id: state.sel, for: 'hour' });
+  else return;
+  e.preventDefault();
+  save(); render();
+  $('.row.sel')?.scrollIntoView({ block: 'nearest' });
+});
+window.addEventListener('hashchange', () => {
+  const v = location.hash.slice(1);
+  if (VIEWS.includes(v) && v !== state.view) { state.view = v; render(); }
+});
+
+if (VIEWS.includes(location.hash.slice(1))) state.view = location.hash.slice(1);
+render();
+</script>
+</body>
+</html>
