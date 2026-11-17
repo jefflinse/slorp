@@ -12,11 +12,12 @@ import (
 
 	"github.com/jefflinse/slorp/internal/claude"
 	"github.com/jefflinse/slorp/internal/hub"
+	"github.com/jefflinse/slorp/internal/integrations"
 	"github.com/jefflinse/slorp/internal/kb"
 )
 
 // New returns the handler. uiPath is the page served at /.
-func New(h *hub.Hub, k *kb.Store, uiPath string) http.Handler {
+func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, uiPath string) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
@@ -25,7 +26,10 @@ func New(h *hub.Hub, k *kb.Store, uiPath string) http.Handler {
 	})
 
 	mux.HandleFunc("GET /api/sessions", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, h.State())
+		writeJSON(w, http.StatusOK, struct {
+			hub.State
+			Integrations []integrations.Status `json:"integrations"`
+		}{h.State(), m.Status(r.Context())})
 	})
 
 	mux.HandleFunc("GET /api/events", func(w http.ResponseWriter, r *http.Request) {
@@ -237,6 +241,22 @@ func New(h *hub.Hub, k *kb.Store, uiPath string) http.Handler {
 			http.Error(w, "that request is no longer waiting for an answer here", http.StatusConflict)
 			return
 		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("POST /api/integrations/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Enabled bool `json:"enabled"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		if !m.Has(r.PathValue("id")) {
+			http.Error(w, "no such integration", http.StatusNotFound)
+			return
+		}
+		m.Recheck()
+		h.SetIntegration(r.PathValue("id"), in.Enabled)
 		w.WriteHeader(http.StatusNoContent)
 	})
 

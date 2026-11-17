@@ -127,6 +127,7 @@ h1.mono { font-family: var(--mono); font-size: 16px; font-weight: 500; line-heig
 .btn:hover { border-color: var(--ink3); }
 .btn.go { background: var(--fill); color: var(--fill-ink); border-color: transparent; font-weight: 600; }
 .btn.go:hover { filter: brightness(0.95); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn.quiet { border-color: transparent; background: none; color: var(--ink2); }
 .btn.quiet:hover { background: var(--sel); }
 select.btn { appearance: none; padding-right: 24px; background-image: linear-gradient(45deg, transparent 50%, var(--ink3) 50%), linear-gradient(135deg, var(--ink3) 50%, transparent 50%); background-position: calc(100% - 13px) 50%, calc(100% - 9px) 50%; background-size: 4px 4px; background-repeat: no-repeat; }
@@ -825,7 +826,7 @@ function viewActivity() {
    service's session list; everything outside Activity is still mock data. */
 
 let live = null, liveItems = [], liveEfforts = [], summarizer = {}, settings = {}, isOffline = false;
-let knowledge = { watch: [], questions: [], context: [], routing: [] };
+let knowledge = { watch: [], questions: [], context: [], routing: [] }, integrations = [], lookups = [];
 const LIVE_STATUS = { waiting: ['waiting', 'waiting on you'], failed: ['error', 'failed'], working: ['running', 'working'], idle: ['idle', 'idle'], done: ['done', 'finished'] };
 const minsSince = iso => Math.max(0, (Date.now() - new Date(iso).getTime()) / 60000);
 const tilde = p => p.replace(/^\/Users\/[^/]+/, '~');
@@ -843,6 +844,8 @@ async function refresh(force) {
     summarizer = data.summarizer || {};
     settings = data.settings || {};
     knowledge = data.knowledge || knowledge;
+    integrations = data.integrations || [];
+    lookups = data.lookups || [];
     isOffline = false;
   } catch (e) { isOffline = live !== null; }
   render();
@@ -901,7 +904,8 @@ function liveItemDetail(it) {
       ${moveSelect(s)}
     </div>
     <div class="sec"><div class="label"><span>${it.summary ? spark : ''}What's going on</span></div>
-      <p class="prose">${it.summary ? esc(it.summary) : `<span class="none">${summarizer.model ? 'Not summarized yet.' : 'No local model is available to summarize this.'}</span>`}</p></div>
+      <p class="prose">${it.summary ? esc(it.summary) : `<span class="none">${summarizer.model ? 'Not summarized yet.' : 'No local model is available to summarize this.'}</span>`}</p>
+      ${(s.insight?.lookups || []).length ? `<div class="none" style="margin-top:8px">${spark}Checked ${esc(listOf(s.insight.lookups))} to write this.</div>` : ''}</div>
     <div class="sec"><div class="label"><span>From the source, verbatim</span><button data-act="toggleRaw" data-id="${it.id}">${rawOpen ? 'Hide' : 'Show'}</button></div>
       ${rawOpen ? (lines.length ? rawBlock(lines) : '<div class="none">No transcript found for this session.</div>') : `<div class="none mono">${esc(it.raw)}</div>`}</div>
     <div class="sec"><div class="label"><span>Also going on in ${esc(effortById(it.effort).name)}</span></div>
@@ -983,10 +987,29 @@ const KB_LIVE_LEDE = {
   questions: 'Things you have not decided yet. They show under their effort, and the model reads them when it writes that effort\'s status.',
   context: 'Facts the model should always know. It reads them before describing any session, so changing one re-describes everything.',
   routing: 'Plain-language notes on how to file things, read by the model when it guesses an effort. Directories that file automatically are listed under each effort.',
+  integrations: 'Tools the local model may look things up in while it describes a session. It picks from the lookups listed and supplies only a number and, where there are several, which repository. It cannot run anything else or change anything.',
 };
 const kbData = () => live ? knowledge : state.kb;
+const kbSections = () => live ? { ...KB_SECTIONS, integrations: { name: 'Integrations' } } : KB_SECTIONS;
+const kbCount = k => k === 'integrations' ? integrations.filter(i => i.enabled).length : kbData()[k].length;
+
+function integrationsBody() {
+  const cards = integrations.map(i => `<div class="card"><span class="glyph">${esc(i.name[0])}</span>
+      <div class="body"><div class="nm">${esc(i.name)} <span class="tag ${i.enabled && i.available ? 'blocking' : 'whenever'}">${i.enabled ? (i.available ? 'on' : 'on, but unavailable') : 'off'}</span></div>
+      <div class="why">${esc(i.about)}</div>
+      <div class="meta"><span>${esc(i.detail)}</span></div>
+      <div class="seen">While it is on, the model may:</div>
+      ${i.lookups.map(l => `<div class="seen">· ${esc(l)}</div>`).join('')}</div>
+      <button class="btn ${i.enabled ? '' : 'go'}" data-act="integrationToggle" data-id="${i.id}" data-on="${i.enabled ? '0' : '1'}" ${!i.enabled && !i.available ? 'disabled' : ''}>${i.enabled ? 'Turn off' : 'Turn on'}</button></div>`).join('');
+  const recent = lookups.slice().reverse().map(l => `<div class="srow"><span class="dot ${l.ok ? 'done' : 'error'}"></span>
+      <div class="body"><div class="ttl">${esc(l.what)}${l.ok ? '' : ' · failed'}</div><div class="sub mono" style="font-size:12px">${esc(clip(l.detail, 260))}</div></div>
+      <span class="side">${esc(clip(l.session, 28))} · ${ago(minsSince(l.at))}</span></div>`).join('');
+  return `${cards}<div class="sec"><div class="label"><span>What the model looked up recently</span></div>
+    ${recent || '<div class="none">Nothing yet. Lookups appear here as the model makes them, and are forgotten when the service restarts.</div>'}</div>`;
+}
 
 function kbBody(sec) {
+  if (sec === 'integrations') return integrationsBody();
   const list = kbData()[sec];
   const rm = id => `<button class="x" data-act="kbRemove" data-sec="${sec}" data-id="${id}" title="Remove" aria-label="Remove">×</button>`;
   if (sec === 'watch') return list.map(w => `<div class="card"><span class="glyph">${GLYPH[w.type]}</span>
@@ -1006,8 +1029,9 @@ function kbBody(sec) {
 }
 
 function viewKnowledge() {
-  const nav = Object.entries(KB_SECTIONS).map(([k, s]) => `<button class="${state.kbSel === k ? 'on' : ''}" data-act="kbSel" data-s="${k}">${s.name}<span>${kbData()[k].length}</span></button>`).join('');
-  const s = KB_SECTIONS[state.kbSel];
+  const nav = Object.entries(kbSections()).map(([k, s]) => `<button class="${state.kbSel === k ? 'on' : ''}" data-act="kbSel" data-s="${k}">${s.name}<span>${kbCount(k)}</span></button>`).join('');
+  if (!kbSections()[state.kbSel]) state.kbSel = 'watch';
+  const s = kbSections()[state.kbSel];
   return `<div class="split narrow">
     <section class="pane list kbnav"><div class="label">Knowledge base</div>${nav}</section>
     <section class="pane detail" data-scroll="kb-${state.kbSel}"><div class="inner"><h1>${s.name}</h1><p class="lede">${live ? KB_LIVE_LEDE[state.kbSel] : s.lede}</p>${kbBody(state.kbSel)}</div></section>
@@ -1123,6 +1147,7 @@ const actions = {
       .catch(() => toast('Could not reach the Slorp service'));
     return false;
   },
+  integrationToggle: d => { api('POST', `/api/integrations/${d.id}`, { enabled: d.on === '1' }); return false; },
   toggleHold: () => { api('POST', '/api/settings', { answerPermissions: !settings.answerPermissions }); return false; },
   effortDelete: d => {
     toast(`Delete "${effortById(d.id).name}" and its filings?`, () => { api('DELETE', `/api/efforts/${d.id}`); }, 'Delete');

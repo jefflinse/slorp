@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/jefflinse/slorp/internal/hub"
+	"github.com/jefflinse/slorp/internal/integrations"
 	"github.com/jefflinse/slorp/internal/kb"
 	"github.com/jefflinse/slorp/internal/testdb"
 )
@@ -31,7 +33,13 @@ func newFixture(t *testing.T) *fixture {
 	if err := os.WriteFile(page, []byte("<title>slorp</title>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(New(h, k, page))
+	tools := integrations.NewManager(func() map[string]bool { return h.Settings().Integrations }, integrations.Integration{
+		ID: "fake", Name: "Fake", About: "A stand-in.",
+		Check: func(context.Context) (bool, string) { return true, "Ready." },
+		Scope: func(string) (string, bool) { return "", true },
+		Tools: []integrations.Tool{{Name: "fake_lookup", Description: "Look something up."}},
+	})
+	srv := httptest.NewServer(New(h, k, tools, page))
 	t.Cleanup(srv.Close)
 	return &fixture{t, srv, h, k}
 }
@@ -124,7 +132,7 @@ func TestRefusesRequestsAWebPageElsewhereCouldCause(t *testing.T) {
 func TestStateIsShapedForTheUI(t *testing.T) {
 	f := newFixture(t)
 	_, body := f.do("GET", "/api/sessions", "", nil)
-	for _, field := range []string{`"sessions":[]`, `"items":[]`, `"efforts":[]`, `"watch":[]`, `"questions":[]`, `"context":[]`, `"routing":[]`, `"answerPermissions":true`} {
+	for _, field := range []string{`"sessions":[]`, `"items":[]`, `"efforts":[]`, `"watch":[]`, `"questions":[]`, `"context":[]`, `"routing":[]`, `"answerPermissions":true`, `"lookups":[]`, `"integrations":[{`} {
 		if !strings.Contains(body, field) {
 			t.Errorf("empty state lacks %s, which the page reads without checking: %s", field, body)
 		}
@@ -304,6 +312,37 @@ func TestEffortsOverHTTP(t *testing.T) {
 	}
 	if st := f.state(); len(st.Efforts) != 0 || st.Sessions[0].Effort != "" {
 		t.Errorf("after delete: %d efforts, session filed under %q", len(st.Efforts), st.Sessions[0].Effort)
+	}
+}
+
+func TestIntegrationsOverHTTP(t *testing.T) {
+	f := newFixture(t)
+	list := func() []integrations.Status {
+		_, body := f.do("GET", "/api/sessions", "", nil)
+		var out struct{ Integrations []integrations.Status }
+		if err := json.Unmarshal([]byte(body), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.Integrations
+	}
+	if got := list(); len(got) != 1 || got[0].ID != "fake" || got[0].Enabled || !got[0].Available || got[0].Lookups[0] != "Look something up." {
+		t.Fatalf("integrations = %+v; want the one integration, off until the user turns it on", got)
+	}
+	if code := f.post("/api/integrations/nope", `{"enabled":true}`); code != 404 {
+		t.Errorf("unknown integration = %d, want 404", code)
+	}
+	if code := f.post("/api/integrations/fake", `{"enabled":true}`); code != 204 {
+		t.Fatalf("turn on = %d", code)
+	}
+	if !list()[0].Enabled {
+		t.Error("the integration did not turn on")
+	}
+	if code := f.post("/api/settings", `{"answerPermissions":false}`); code != 204 || !list()[0].Enabled {
+		t.Error("changing another setting turned the integration off")
+	}
+	f.post("/api/integrations/fake", `{"enabled":false}`)
+	if list()[0].Enabled {
+		t.Error("the integration did not turn off")
 	}
 }
 

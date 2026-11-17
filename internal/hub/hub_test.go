@@ -415,6 +415,80 @@ func TestSettingsPersist(t *testing.T) {
 	}
 }
 
+func TestIntegrationSettings(t *testing.T) {
+	h, k, st := newHub(t)
+	h.SetRoster(agent, []Session{idle("s1", "/w", "done")})
+	describe(h, "s1", KindReview)
+	quieten(h, "s1")
+	if len(h.Undescribed()) != 0 {
+		t.Fatal("setup: the session should be described")
+	}
+
+	h.SetIntegration("github", true)
+	quieten(h, "s1")
+	if len(h.Undescribed()) != 1 {
+		t.Error("turning an integration on did not queue sessions to be described again with it")
+	}
+	if len(h.State().Items) != 1 {
+		t.Error("the item vanished while its session is described again")
+	}
+	describe(h, "s1", KindReview)
+
+	h.SetIntegration("github", true)
+	quieten(h, "s1")
+	if len(h.Undescribed()) != 0 {
+		t.Error("setting an integration to what it already was queued everything again")
+	}
+
+	h.SetSettings(Settings{AnswerPermissions: false})
+	if got := h.Settings(); !got.Integrations["github"] || got.AnswerPermissions {
+		t.Errorf("changing another setting disturbed the integrations: %+v", got)
+	}
+	if got := New(k, st).Settings(); !got.Integrations["github"] {
+		t.Errorf("after restart: %+v", got)
+	}
+	if New(testdb.KB(t, testdb.Open(t)), testdb.Open(t)).Settings().Integrations == nil {
+		t.Error("a new hub should have an empty set of integrations, not none")
+	}
+}
+
+func TestInsightBuiltOnALookupExpires(t *testing.T) {
+	h, _, _ := newHub(t)
+	h.SetRoster(agent, []Session{idle("plain", "/w", "done"), idle("looked", "/w", "PR 59 was pending")})
+	h.SetInsight("plain", h.sessions["plain"].key, Insight{Title: "t", Kind: KindNone})
+	h.SetInsight("looked", h.sessions["looked"].key, Insight{Title: "t", Kind: KindNone, Lookups: []string{"GitHub PR #59"}})
+	quieten(h, "plain")
+	quieten(h, "looked")
+	if len(h.Undescribed()) != 0 {
+		t.Fatal("fresh insights were queued again")
+	}
+
+	old := time.Now().Add(-lookupTTL - time.Minute)
+	h.sessions["plain"].insightAt, h.sessions["looked"].insightAt = old, old
+	work := h.Undescribed()
+	if len(work) != 1 || work[0].Session.ID != "looked" {
+		t.Fatalf("Undescribed = %+v; want only the session whose insight relied on a lookup", work)
+	}
+	h.SetInsight("looked", work[0].Key, Insight{Title: "t", Kind: KindNone, Lookups: []string{"GitHub PR #59"}})
+	if len(h.Undescribed()) != 0 {
+		t.Error("a refreshed insight is still queued")
+	}
+}
+
+func TestRecentLookupsAreKept(t *testing.T) {
+	h, _, _ := newHub(t)
+	if h.State().Lookups == nil {
+		t.Error("lookups should be an empty list, which the UI reads, not null")
+	}
+	for i := 0; i < keptLookups+5; i++ {
+		h.Looked(Lookup{What: strings.Repeat("x", i+1), OK: true})
+	}
+	got := h.State().Lookups
+	if len(got) != keptLookups || len(got[len(got)-1].What) != keptLookups+5 || len(got[0].What) != 6 {
+		t.Errorf("kept %d lookups, first of length %d, last of length %d; want the newest %d, oldest first", len(got), len(got[0].What), len(got[len(got)-1].What), keptLookups)
+	}
+}
+
 func TestAskDecidesWhoMayAnswer(t *testing.T) {
 	tests := []struct {
 		name               string

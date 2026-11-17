@@ -20,7 +20,20 @@ type fakeLLM struct {
 	content string
 	status  int
 	models  string
-	request struct {
+	// calls is what the model asks to look up when it is offered tools.
+	calls []call
+	// plan is the request that offered tools, when there was one.
+	plan struct {
+		Messages []struct{ Role, Content string }
+		Tools    []struct {
+			Function struct {
+				Name       string
+				Parameters json.RawMessage
+			}
+		}
+	}
+	requests int
+	request  struct {
 		Model           string `json:"model"`
 		ReasoningEffort string `json:"reasoning_effort"`
 		Messages        []struct{ Role, Content string }
@@ -42,6 +55,18 @@ func (f *fakeLLM) enricher(t *testing.T) *Enricher {
 			io.WriteString(w, f.models)
 		case "/v1/chat/completions":
 			body, _ := io.ReadAll(r.Body)
+			f.requests++
+			if strings.Contains(string(body), `"tools"`) {
+				if err := json.Unmarshal(body, &f.plan); err != nil {
+					t.Errorf("planning request is not JSON: %v", err)
+				}
+				var calls []any
+				for _, c := range f.calls {
+					calls = append(calls, map[string]any{"type": "function", "function": map[string]string{"name": c.name, "arguments": c.args}})
+				}
+				json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": "", "tool_calls": calls}}}})
+				return
+			}
 			if err := json.Unmarshal(body, &f.request); err != nil {
 				t.Errorf("request is not JSON: %v", err)
 			}
@@ -56,6 +81,8 @@ func (f *fakeLLM) enricher(t *testing.T) *Enricher {
 	t.Cleanup(srv.Close)
 	return &Enricher{BaseURL: srv.URL, client: srv.Client(), failed: map[string]time.Time{}}
 }
+
+type call struct{ name, args string }
 
 func (f *fakeLLM) user() string   { return f.request.Messages[len(f.request.Messages)-1].Content }
 func (f *fakeLLM) system() string { return f.request.Messages[0].Content }

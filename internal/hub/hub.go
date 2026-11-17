@@ -35,6 +35,11 @@ const (
 	quiet = 3 * time.Second
 	// pendingGrace is how long a new permission request is trusted before the roster confirms it.
 	pendingGrace = 3 * time.Second
+	// lookupTTL is how long an insight that relied on a lookup is trusted
+	// before the lookup is worth repeating.
+	lookupTTL = 10 * time.Minute
+	// keptLookups is how many recent lookups the UI can show.
+	keptLookups = 30
 )
 
 // Session is one agent conversation, normalized across agents.
@@ -66,6 +71,7 @@ type Session struct {
 	insightKey string
 	guess      string
 	guessKey   string
+	insightAt  time.Time
 }
 
 // ViaGuess marks a filing the model chose, as opposed to the user or a rule.
@@ -110,6 +116,18 @@ type Insight struct {
 	Kind    string   `json:"kind"`
 	Ask     string   `json:"ask"`
 	Replies []string `json:"replies"`
+	// Lookups names what the model looked up through an integration to write this.
+	Lookups []string `json:"lookups"`
+}
+
+// Lookup is one thing the model looked up through an integration.
+type Lookup struct {
+	At      time.Time `json:"at"`
+	Session string    `json:"session"`
+	What    string    `json:"what"`
+	OK      bool      `json:"ok"`
+	// Detail is what came back, or why nothing did.
+	Detail string `json:"detail"`
 }
 
 // Insight kinds, and the item kinds the hub derives without a model.
@@ -180,6 +198,10 @@ type Settings struct {
 	// AnswerPermissions lets permission prompts be answered in Slorp as well
 	// as in the session's terminal.
 	AnswerPermissions bool `json:"answerPermissions"`
+	// Integrations are the ones the user has turned on, by ID.
+	Integrations map[string]bool `json:"integrations"`
+	// IntegrationsRevision counts changes to Integrations.
+	IntegrationsRevision int `json:"integrationsRevision"`
 }
 
 // Cache is where the hub keeps what should outlive a restart.
@@ -191,10 +213,11 @@ type Cache interface {
 
 // What the model wrote about one session, kept so a restart need not ask again.
 type sessionDoc struct {
-	Insight    *Insight `json:"insight"`
-	InsightKey string   `json:"insightKey"`
-	Guess      string   `json:"guess"`
-	GuessKey   string   `json:"guessKey"`
+	Insight    *Insight  `json:"insight"`
+	InsightKey string    `json:"insightKey"`
+	Guess      string    `json:"guess"`
+	GuessKey   string    `json:"guessKey"`
+	InsightAt  time.Time `json:"insightAt"`
 }
 
 type ReplyState string
@@ -227,6 +250,7 @@ type Hub struct {
 	cache    Cache
 	settings Settings
 	waiters  map[string]chan Decision
+	lookups  []Lookup
 }
 
 type note struct {
@@ -252,6 +276,9 @@ func New(k *kb.Store, c Cache) *Hub {
 	}))
 	_, err := c.Get("setting", "main", &h.settings)
 	h.warn(err)
+	if h.settings.Integrations == nil {
+		h.settings.Integrations = map[string]bool{}
+	}
 	return h
 }
 
@@ -268,11 +295,11 @@ func (h *Hub) restore(s *Session) {
 		h.warn(err)
 		return
 	}
-	s.Insight, s.insightKey, s.guess, s.guessKey = d.Insight, d.InsightKey, d.Guess, d.GuessKey
+	s.Insight, s.insightKey, s.guess, s.guessKey, s.insightAt = d.Insight, d.InsightKey, d.Guess, d.GuessKey, d.InsightAt
 }
 
 func (h *Hub) remember(s *Session) {
-	h.warn(h.cache.Put("session", s.ID, sessionDoc{Insight: s.Insight, InsightKey: s.insightKey, Guess: s.guess, GuessKey: s.guessKey}))
+	h.warn(h.cache.Put("session", s.ID, sessionDoc{Insight: s.Insight, InsightKey: s.insightKey, Guess: s.guess, GuessKey: s.guessKey, InsightAt: s.insightAt}))
 }
 
 // SetRoster replaces the known sessions of one agent with the live set an
@@ -287,7 +314,7 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 		if old, ok := h.sessions[s.ID]; ok {
 			s.bridgeSeen = old.bridgeSeen
 			s.key, s.keySince, s.insightKey, s.Insight = old.key, old.keySince, old.insightKey, old.Insight
-			s.guess, s.guessKey = old.guess, old.guessKey
+			s.guess, s.guessKey, s.insightAt = old.guess, old.guessKey, old.insightAt
 			// The roster stops saying "waiting" once the terminal's dialog is
 			// answered. A request it has not caught up with yet is kept.
 			if p := old.Pending; p != nil && (s.Status == Waiting || time.Since(p.At) < pendingGrace) {
@@ -434,11 +461,43 @@ func (h *Hub) Settings() Settings {
 	return h.settings
 }
 
+// SetSettings replaces the user's preferences, leaving which integrations
+// are on to SetIntegration.
 func (h *Hub) SetSettings(s Settings) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	s.Integrations, s.IntegrationsRevision = h.settings.Integrations, h.settings.IntegrationsRevision
 	h.settings = s
-	h.warn(h.cache.Put("setting", "main", s))
+	h.saveSettings()
+}
+
+// SetIntegration turns one integration on or off. Every session is then
+// described again, since what the model can look up has changed.
+func (h *Hub) SetIntegration(id string, on bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.settings.Integrations[id] == on {
+		return
+	}
+	h.settings.Integrations[id] = on
+	h.settings.IntegrationsRevision++
+	h.saveSettings()
+}
+
+func (h *Hub) saveSettings() {
+	h.warn(h.cache.Put("setting", "main", h.settings))
+	h.last = ""
+	h.changed()
+}
+
+// Looked records a lookup for the user to see.
+func (h *Hub) Looked(l Lookup) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.lookups = append(h.lookups, l)
+	if n := len(h.lookups); n > keptLookups {
+		h.lookups = h.lookups[n-keptLookups:]
+	}
 	h.last = ""
 	h.changed()
 }
@@ -464,13 +523,15 @@ type State struct {
 	Summarizer Summarizer   `json:"summarizer"`
 	Settings   Settings     `json:"settings"`
 	Knowledge  kb.Knowledge `json:"knowledge"`
+	// Lookups are the most recent ones, newest last.
+	Lookups []Lookup `json:"lookups"`
 }
 
 func (h *Hub) State() State {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	sessions := h.snapshot()
-	return State{sessions, items(sessions), h.efforts(sessions), h.summ, h.settings, h.kb.Knowledge()}
+	return State{sessions, items(sessions), h.efforts(sessions), h.summ, h.settings, h.kb.Knowledge(), append([]Lookup{}, h.lookups...)}
 }
 
 func (h *Hub) efforts(sessions []Session) []Effort {
@@ -581,7 +642,9 @@ func (h *Hub) Undescribed() []Undescribed {
 	var out []Undescribed
 	for _, s := range h.sessions {
 		hasContent := s.LastReply != "" || s.Pending != nil
-		if hasContent && s.key != s.insightKey && time.Since(s.keySince) >= quiet && (s.Status != Working || s.Pending != nil) {
+		outdated := s.key != s.insightKey ||
+			(s.Insight != nil && len(s.Insight.Lookups) > 0 && time.Since(s.insightAt) > lookupTTL)
+		if hasContent && outdated && time.Since(s.keySince) >= quiet && (s.Status != Working || s.Pending != nil) {
 			out = append(out, Undescribed{Session: *s, Key: s.key, Context: texts(h.kb.Knowledge().Context)})
 		}
 	}
@@ -594,7 +657,7 @@ func (h *Hub) SetInsight(sessionID, key string, in Insight) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if s, ok := h.sessions[sessionID]; ok {
-		s.Insight, s.insightKey = &in, key
+		s.Insight, s.insightKey, s.insightAt = &in, key, time.Now()
 		h.remember(s)
 		h.changed()
 	}
@@ -617,7 +680,8 @@ func (s *Session) described() bool {
 	return s.Insight != nil && contentOf(s.insightKey) == contentOf(s.key)
 }
 
-// contentOf strips the standing-context revision from a content key.
+// contentOf strips from a content key the revisions of what the model reads
+// besides the session: the standing context and the integrations turned on.
 func contentOf(key string) string {
 	if i := strings.LastIndexByte(key, ':'); i >= 0 {
 		return key[:i]
@@ -790,7 +854,7 @@ func (h *Hub) Subscribe() (<-chan struct{}, func()) {
 
 func (h *Hub) changed() {
 	now := time.Now()
-	context := ":" + strconv.Itoa(h.kb.ContextRevision())
+	context := ":" + strconv.Itoa(h.kb.ContextRevision()) + "." + strconv.Itoa(h.settings.IntegrationsRevision)
 	for _, s := range h.sessions {
 		if k := contentKey(s) + context; k != s.key {
 			s.key, s.keySince = k, now
