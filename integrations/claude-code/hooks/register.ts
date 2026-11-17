@@ -14,6 +14,8 @@ type Reply = { id: string; text: string }
 
 let base = ''
 let cwd = ''
+/** What the session's model can take, in tokens; zero until the engine says. */
+let contextWindow = 0
 let isPolling = false
 
 async function post($: EngineInterface, path: string, body: object) {
@@ -43,7 +45,7 @@ async function poll($: EngineInterface) {
   isPolling = true
   try {
     const sessionId = await $.session.id()
-    const claimed = await post($, '/api/bridge/poll', { agent: AGENT, sessionId, cwd })
+    const claimed = await post($, '/api/bridge/poll', { agent: AGENT, sessionId, cwd, contextWindow })
     for (const reply of (claimed?.replies ?? []) as Reply[]) {
       void deliver($, reply).catch(() => {})
     }
@@ -95,13 +97,23 @@ async function askSlorp($: EngineInterface, tool: string, input: unknown, abando
  * prompt; alongside, it reports turn events. A permission prompt is offered
  * to Slorp as well as the terminal's own dialog, and whichever the user
  * answers first decides it; a question is answered there with the options
- * the user picked.
+ * the user picked. Each poll also carries the size of the model's context
+ * window.
  */
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     base = ((await $.env.get('SLORP_URL')) || String(options.url)).replace(/\/+$/, '')
     cwd = e.cwd
+    void $.session
+      .usage()
+      .then(usage => void (contextWindow = usage.context.window))
+      .catch(() => {})
     $.clock.every(POLL_MS, () => void poll($))
+    return next(e)
+  })
+
+  on('session.measure', ($, e, next) => {
+    contextWindow = e.context.window
     return next(e)
   })
 

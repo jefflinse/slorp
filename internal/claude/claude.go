@@ -88,6 +88,7 @@ func (a *Adapter) poll(ctx context.Context) error {
 		if t := a.tail(r.SessionID); t != nil {
 			t.read()
 			s.Title, s.Branch, s.LastPrompt, s.LastReply = t.title, t.branch, t.lastPrompt, t.lastReply
+			s.Model, s.Reasoning, s.ContextTokens = t.model, t.reasoning, t.contextTokens
 			if !t.modTime.IsZero() {
 				s.ActiveAt = t.modTime
 			}
@@ -133,6 +134,9 @@ type tail struct {
 	modTime time.Time
 
 	title, branch, lastPrompt, lastReply string
+	model, reasoning                     string
+	// contextTokens is zero from a compaction until the next response.
+	contextTokens int
 }
 
 type entry struct {
@@ -142,14 +146,22 @@ type entry struct {
 	GitBranch   string `json:"gitBranch"`
 	IsSidechain bool   `json:"isSidechain"`
 	IsMeta      bool   `json:"isMeta"`
+	Subtype     string `json:"subtype"`
+	Effort      string `json:"effort"`
 	Message     struct {
 		Content json.RawMessage `json:"content"`
+		Model   string          `json:"model"`
+		Usage   struct {
+			Input      int `json:"input_tokens"`
+			CacheWrite int `json:"cache_creation_input_tokens"`
+			CacheRead  int `json:"cache_read_input_tokens"`
+		} `json:"usage"`
 	} `json:"message"`
 }
 
 var wanted = [][]byte{
 	[]byte(`"type":"ai-title"`), []byte(`"type":"last-prompt"`),
-	[]byte(`"type":"assistant"`), []byte(`"type":"user"`),
+	[]byte(`"type":"assistant"`), []byte(`"type":"user"`), []byte(`"subtype":"compact_boundary"`),
 }
 
 func (t *tail) read() {
@@ -225,6 +237,14 @@ func (t *tail) apply(line []byte) {
 	case "assistant":
 		if text := assistantText(e.Message.Content); text != "" {
 			t.lastReply = Tail(text, ReplyLimit)
+		}
+		// A notice the harness wrote in the model's place reports no tokens.
+		if u := e.Message.Usage; u.Input+u.CacheWrite+u.CacheRead > 0 {
+			t.model, t.reasoning, t.contextTokens = e.Message.Model, e.Effort, u.Input+u.CacheWrite+u.CacheRead
+		}
+	case "system":
+		if e.Subtype == "compact_boundary" {
+			t.contextTokens = 0
 		}
 	}
 }

@@ -201,6 +201,8 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, uiPath s
 			Cwd       string `json:"cwd"`
 			Title     string `json:"title"`
 			Branch    string `json:"branch"`
+			// ContextWindow is what the session's model can take, in tokens.
+			ContextWindow int `json:"contextWindow"`
 		}
 		if !readJSON(w, r, &in) || in.SessionID == "" {
 			return
@@ -210,6 +212,9 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, uiPath s
 			return
 		}
 		fresh := h.Apply(agent, in.SessionID, func(s *hub.Session) {
+			if in.ContextWindow > 0 {
+				s.ContextWindow = in.ContextWindow
+			}
 			if s.Cwd == "" {
 				s.Cwd = in.Cwd
 			}

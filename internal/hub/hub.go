@@ -70,6 +70,14 @@ type Session struct {
 	// Role is the role this session has, empty for none.
 	Role    string `json:"role"`
 	RoleVia string `json:"roleVia,omitempty"`
+	// Model is the model that gave the session's last response, as its agent
+	// names it, and Reasoning how hard it was asked to think.
+	Model     string `json:"model,omitempty"`
+	Reasoning string `json:"reasoning,omitempty"`
+	// ContextTokens is how much the last response was answered over, and
+	// ContextWindow how much the model can take. Zero is unknown.
+	ContextTokens int `json:"contextTokens,omitempty"`
+	ContextWindow int `json:"contextWindow,omitempty"`
 
 	bridgeSeen time.Time
 	key        string
@@ -426,6 +434,7 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 			s.key, s.keySince, s.insightKey, s.Insight = old.key, old.keySince, old.insightKey, old.Insight
 			s.guess, s.guessKey, s.insightAt = old.guess, old.guessKey, old.insightAt
 			s.roleGuess, s.roleKey = old.roleGuess, old.roleKey
+			s.ContextWindow = old.ContextWindow
 			// The roster stops saying "waiting" once the terminal's dialog is
 			// answered. A request it has not caught up with yet is kept.
 			if p := old.Pending; p != nil && (s.Status == Waiting || time.Since(p.At) < pendingGrace) {

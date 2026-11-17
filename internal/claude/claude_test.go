@@ -85,6 +85,50 @@ func TestTailReadsWhatMatters(t *testing.T) {
 	}
 }
 
+// answered is a response the model gave at an effort, over that many tokens
+// sent fresh, written to the cache and read from it.
+func answered(model, effort string, fresh, written, read int, blocks ...map[string]any) map[string]any {
+	e := assistant(blocks...)
+	e["effort"] = effort
+	m := e["message"].(map[string]any)
+	m["model"] = model
+	m["usage"] = map[string]any{"input_tokens": fresh, "cache_creation_input_tokens": written, "cache_read_input_tokens": read, "output_tokens": 900}
+	return e
+}
+
+func TestTailReadsWhatTheModelWasGiven(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	side := answered("claude-haiku-5-5", "low", 5, 0, 0, text("a subagent"))
+	side["isSidechain"] = true
+	notice := answered("<synthetic>", "", 0, 0, 0, text("API Error: overloaded"))
+
+	appendTo(t, path, line(t, answered("claude-opus-5-5", "medium", 1, 2, 3, text("first")))+
+		line(t, answered("claude-fable-5-2", "high", 2, 40000, 30000, text("second")))+
+		line(t, side)+line(t, notice))
+	tl := &tail{path: path}
+	tl.read()
+	if tl.model != "claude-fable-5-2" || tl.reasoning != "high" || tl.contextTokens != 70002 {
+		t.Errorf("model %q, reasoning %q, %d tokens; want the main thread's last real response, with everything it was sent counted",
+			tl.model, tl.reasoning, tl.contextTokens)
+	}
+	if tl.lastReply != "API Error: overloaded" {
+		t.Errorf("lastReply = %q; a notice is still the last thing said", tl.lastReply)
+	}
+
+	appendTo(t, path, line(t, map[string]any{"type": "system", "subtype": "compact_boundary", "compactMetadata": map[string]any{"postTokens": 20000}}))
+	tl.read()
+	if tl.contextTokens != 0 || tl.model != "claude-fable-5-2" {
+		t.Errorf("after a compaction: %d tokens, model %q; want the count unknown and the model kept", tl.contextTokens, tl.model)
+	}
+
+	appendTo(t, path, line(t, answered("claude-fable-5-2", "high", 0, 0, 25000, text("third")))+
+		line(t, map[string]any{"type": "system", "subtype": "turn_duration", "of": map[string]any{"type": "assistant"}}))
+	tl.read()
+	if tl.contextTokens != 25000 {
+		t.Errorf("after the next response and a notice that is no compaction: %d tokens", tl.contextTokens)
+	}
+}
+
 func TestTailReadsIncrementally(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	appendTo(t, path, line(t, assistant(text("first"))))
@@ -186,7 +230,7 @@ func TestPollBuildsTheRoster(t *testing.T) {
 	if err := os.MkdirAll(project, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	appendTo(t, filepath.Join(project, "aaa.jsonl"), line(t, map[string]any{"type": "ai-title", "aiTitle": "Session A"})+line(t, user("go"))+line(t, assistant(text("May I run this?"))))
+	appendTo(t, filepath.Join(project, "aaa.jsonl"), line(t, map[string]any{"type": "ai-title", "aiTitle": "Session A"})+line(t, user("go"))+line(t, answered("claude-fable-5-2", "high", 10, 20, 30, text("May I run this?"))))
 
 	st := testdb.Open(t)
 	h := hub.New(testdb.KB(t, st), st)
@@ -208,6 +252,9 @@ func TestPollBuildsTheRoster(t *testing.T) {
 	}
 	if sa.Title != "Session A" || sa.LastPrompt != "go" || sa.LastReply != "May I run this?" || sa.Branch != "feat/x" {
 		t.Errorf("session was not filled in from its transcript: %+v", sa)
+	}
+	if sa.Model != "claude-fable-5-2" || sa.Reasoning != "high" || sa.ContextTokens != 60 {
+		t.Errorf("model %q, reasoning %q, %d tokens; want them from the transcript", sa.Model, sa.Reasoning, sa.ContextTokens)
 	}
 	if sa.StartedAt.UnixMilli() != 1700000000000 || !sa.ActiveAt.After(sa.StartedAt) {
 		t.Errorf("times: started %v, active %v; want the roster's start and the transcript's last write", sa.StartedAt, sa.ActiveAt)

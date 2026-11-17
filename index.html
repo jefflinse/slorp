@@ -160,6 +160,12 @@ h1, h2, h3, p { margin: 0; }
 .crumb { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; color: var(--ink3); font-size: 12.5px; margin-bottom: 10px; }
 .crumb .eff { color: var(--ink2); font-weight: 600; }
 .crumb .eff:hover { color: var(--accent); }
+.ctx { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.meter { width: 60px; height: 6px; border-radius: 99px; background: var(--line); overflow: hidden; }
+.meter i { display: block; height: 100%; border-radius: 99px; background: var(--accent); }
+.ctx.high .meter i { background: var(--warn); }
+.ctx.full { color: var(--err); }
+.ctx.full .meter i { background: var(--err); }
 h1 { font-weight: 650; font-size: 25px; line-height: 1.2; letter-spacing: -0.02em; }
 h1.mono { font-family: var(--mono); font-size: 16px; font-weight: 500; line-height: 1.5; word-break: break-word; }
 .bar { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 0; }
@@ -819,6 +825,31 @@ function moveSelect(s) {
     <option value="__new">New effort…</option></select>`;
 }
 
+/* What a session runs on, and how full its context window is. */
+function modelName(id) {
+  const m = /claude-(.+?)(-v\d+(:\d+)?)?$/.exec(id);
+  if (!m) return id;
+  const out = [];
+  for (const part of m[1].split('-')) {
+    if (/^\d{8}$/.test(part)) continue;
+    const last = out.length - 1;
+    if (/^\d+$/.test(part) && /^[\d.]+$/.test(out[last] || '')) out[last] += '.' + part;
+    else out.push(part[0].toUpperCase() + part.slice(1));
+  }
+  return out.join(' ');
+}
+const tokens = n => n >= 999500 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
+function runsOn(s) {
+  return [s.model && esc(modelName(s.model)), s.reasoning && `<span title="Reasoning effort">${esc(s.reasoning)}</span>`].filter(Boolean).join(' · ');
+}
+function contextUse(s) {
+  if (!s.contextTokens) return '';
+  const about = 'How much the last response was answered over';
+  if (!s.contextWindow) return `<span class="ctx" title="${about}. This session has not said how much its model can take.">${tokens(s.contextTokens)} tokens</span>`;
+  const pct = Math.round(100 * s.contextTokens / s.contextWindow);
+  return `<span class="ctx ${pct >= 90 ? 'full' : pct >= 75 ? 'high' : ''}" title="${about}, of what the model can take"><span class="meter"><i style="width:${Math.min(100, pct)}%"></i></span>${tokens(s.contextTokens)} / ${tokens(s.contextWindow)} (${pct}%)</span>`;
+}
+
 /* A session's role: the kind of session it is, as the user named the kinds. */
 const ATTENTION = { all: 'Asks whenever it needs you', stopped: 'Asks only when it is stopped', none: 'Never asks' };
 const roleById = id => knowledge.roles.find(r => r.id === id);
@@ -1130,7 +1161,7 @@ function liveItemDetail(it) {
     answer = `<div class="none">This session isn't running the Slorp mod, so answer it in its terminal: <span class="mono">${esc(shortPath(s.cwd))}</span></div>`;
   }
   return `<div class="inner">
-    <div class="crumb">${s.effort ? `<button class="eff" data-act="effort" data-id="${s.effort}">${esc(effortById(s.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${s.effortVia === 'guess' ? `<span>${spark}filed by the model</span>` : ''}${kindBadge(it.kind, it.src)}${roleChip(s)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span>${s.branch ? `<span class="mono">${esc(s.branch)}</span>` : ''}</div>
+    <div class="crumb">${s.effort ? `<button class="eff" data-act="effort" data-id="${s.effort}">${esc(effortById(s.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${s.effortVia === 'guess' ? `<span>${spark}filed by the model</span>` : ''}${kindBadge(it.kind, it.src)}${roleChip(s)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span>${s.branch ? `<span class="mono">${esc(s.branch)}</span>` : ''}${s.model ? `<span>${runsOn(s)}</span>` : ''}${contextUse(s)}</div>
     <h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>
     <div class="need"><div class="label">${it.summary ? spark : ''}What's needed from you</div><p class="ask">${esc(it.ask)}</p>${answer}</div>
     ${barFor(it, `${s.pending ? '' : `<button class="btn" data-act="livePark" data-id="${it.id}">Park as open question</button>`}${moveSelect(s)}${roleSelect(s)}`)}
@@ -1225,17 +1256,18 @@ function viewActivityLive() {
     return `<tr class="s ${open ? 'open' : ''}" data-act="expand" data-id="${s.id}">
         <td class="st"><span class="dot ${dot}"></span>${label}${s.waitingFor ? `<div class="dim">${esc(s.waitingFor)}</div>` : ''}</td>
         <td><div>${what}</div>${state.fluent && sub ? `<div class="doing">${esc(clip(sub, 220))}</div>` : ''}</td>
-        <td class="dim">${kindBadge(s.agent)}${s.kind === 'background' ? ' · background' : ''}${s.canReply ? ' · connected' : ''}${s.role ? `<div style="margin-top:5px">${roleChip(s)}</div>` : ''}</td>
+        <td class="dim">${kindBadge(s.agent)}${s.kind === 'background' ? ' · background' : ''}${s.canReply ? ' · connected' : ''}${s.model ? `<div style="margin-top:5px">${runsOn(s)}</div>` : ''}${s.role ? `<div style="margin-top:5px">${roleChip(s)}</div>` : ''}</td>
+        <td class="dim hide">${contextUse(s)}</td>
         <td class="dim hide">${s.effort ? esc(effortById(s.effort).name) : ''}</td>
         <td class="dim hide mono" title="${esc(s.cwd)}">${esc(shortPath(s.cwd))}</td>
         <td class="dim hide">${span(minsSince(s.startedAt))}</td>
         <td class="dim">${ago(minsSince(s.activeAt))}</td>
-      </tr>${open ? `<tr class="x"><td></td><td colspan="6">${liveDetail(s)}</td></tr>` : ''}`;
+      </tr>${open ? `<tr class="x"><td></td><td colspan="7">${liveDetail(s)}</td></tr>` : ''}`;
   }).join('');
   return `<div class="page">
     <h1>Everything that's running</h1>
     <p class="prose" style="margin:10px 0 18px">${esc(lede)}${isOffline ? ' <b>The Slorp service stopped responding; this is the last thing it reported.</b>' : ''}</p>
-    <table class="tbl"><thead><tr><th class="label">Status</th><th class="label">What</th><th class="label">Agent</th><th class="label hide">Effort</th><th class="label hide">Where</th><th class="label hide">Age</th><th class="label">Last activity</th></tr></thead>
+    <table class="tbl"><thead><tr><th class="label">Status</th><th class="label">What</th><th class="label">Agent</th><th class="label hide">Context</th><th class="label hide">Effort</th><th class="label hide">Where</th><th class="label hide">Age</th><th class="label">Last activity</th></tr></thead>
     <tbody>${rows}</tbody></table>
   </div>`;
 }

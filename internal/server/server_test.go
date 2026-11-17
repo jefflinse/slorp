@@ -107,6 +107,28 @@ func (f *fixture) connect(id string) {
 	}
 }
 
+func TestBridgeSaysHowMuchItsModelCanTake(t *testing.T) {
+	f := newFixture(t)
+	window := func() int { return f.state().Sessions[0].ContextWindow }
+
+	f.connect("s1")
+	if got := window(); got != 0 {
+		t.Fatalf("window = %d before the bridge gave one", got)
+	}
+	f.post("/api/bridge/poll", `{"sessionId":"s1","contextWindow":1000000}`)
+	if got := window(); got != 1000000 {
+		t.Fatalf("window = %d, want what the bridge reported", got)
+	}
+	f.post("/api/bridge/poll", `{"sessionId":"s1","contextWindow":0}`)
+	if got := window(); got != 1000000 {
+		t.Errorf("window = %d; a bridge that does not know yet erased what was known", got)
+	}
+	f.post("/api/bridge/poll", `{"sessionId":"s1","contextWindow":200000}`)
+	if got := window(); got != 200000 {
+		t.Errorf("window = %d after the session changed model", got)
+	}
+}
+
 func TestRefusesRequestsAWebPageElsewhereCouldCause(t *testing.T) {
 	f := newFixture(t)
 	f.connect("s1")
