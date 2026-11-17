@@ -1,0 +1,17 @@
+{
+  "name": "opencode-slorp",
+  "version": "0.1.0",
+  "description": "Connects OpenCode sessions to the local Slorp service: reports what each session is doing, delivers replies written in Slorp, and lets Slorp answer permission prompts.",
+  "private": true,
+  "type": "module",
+  "main": "slorp.ts",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "1.19.5",
+    "@types/node": "^22",
+    "typescript": "^5.8"
+  }
+}

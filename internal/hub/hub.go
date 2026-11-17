@@ -366,9 +366,9 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 	h.changed()
 }
 
-// Apply records a bridge's report about one session, creating the session if
-// no adapter has listed it yet.
-func (h *Hub) Apply(agent, id string, fn func(*Session)) {
+// Apply records a bridge's report about one session. It creates the session
+// if nothing has listed it yet, and reports whether it did.
+func (h *Hub) Apply(agent, id string, fn func(*Session)) (created bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	s, ok := h.sessions[id]
@@ -381,6 +381,21 @@ func (h *Hub) Apply(agent, id string, fn func(*Session)) {
 	s.bridgeSeen = time.Now()
 	if fn != nil {
 		fn(s)
+	}
+	h.changed()
+	return !ok
+}
+
+// Retire drops the sessions of an agent whose bridge has reported nothing
+// for longer than silence. It stands in for a roster where a session's
+// bridge is the only witness that the session is still open.
+func (h *Hub) Retire(agent string, silence time.Duration) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for id, s := range h.sessions {
+		if s.Agent == agent && time.Since(s.bridgeSeen) > silence {
+			delete(h.sessions, id)
+		}
 	}
 	h.changed()
 }

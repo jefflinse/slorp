@@ -227,6 +227,71 @@ func TestBridgeEventsDriveSessionState(t *testing.T) {
 	}
 }
 
+func TestBridgeNamesItsAgent(t *testing.T) {
+	f := newFixture(t)
+	poll := func(body string) (fresh bool) {
+		t.Helper()
+		code, res := f.do("POST", "/api/bridge/poll", body, nil)
+		var out struct{ Fresh *bool }
+		if err := json.Unmarshal([]byte(res), &out); code != 200 || err != nil || out.Fresh == nil {
+			t.Fatalf("poll %s = %d %s", body, code, res)
+		}
+		return *out.Fresh
+	}
+	byID := func(id string) hub.Session {
+		t.Helper()
+		for _, s := range f.state().Sessions {
+			if s.ID == id {
+				return s
+			}
+		}
+		t.Fatalf("session %q is not listed", id)
+		return hub.Session{}
+	}
+
+	if !poll(`{"agent":"opencode","sessionId":"o1","cwd":"/work/o","title":"Fix the build","branch":"main"}`) {
+		t.Error("the poll that introduced a session did not say Slorp had not known it")
+	}
+	if s := byID("o1"); s.Agent != "opencode" || s.Cwd != "/work/o" || s.Title != "Fix the build" || s.Branch != "main" {
+		t.Errorf("an OpenCode session was recorded as %+v", s)
+	}
+	if poll(`{"agent":"opencode","sessionId":"o1","cwd":"/elsewhere","title":"","branch":""}`) {
+		t.Error("a later poll for the same session said Slorp had not known it")
+	}
+	if s := byID("o1"); s.Cwd != "/work/o" || s.Title != "Fix the build" || s.Branch != "main" {
+		t.Errorf("a poll with less detail erased what was known: %+v", s)
+	}
+	poll(`{"agent":"opencode","sessionId":"o1","title":"Fix the release build","branch":"release"}`)
+	if s := byID("o1"); s.Title != "Fix the release build" || s.Branch != "release" {
+		t.Errorf("a renamed session on a new branch is still %q on %q", s.Title, s.Branch)
+	}
+
+	poll(`{"sessionId":"c1"}`)
+	if s := byID("c1"); s.Agent != "claude" {
+		t.Errorf("a bridge that names no agent was recorded as %q, want claude", s.Agent)
+	}
+
+	if code := f.post("/api/bridge/event", `{"agent":"opencode","sessionId":"o2","type":"turn.start","text":"hi"}`); code != 204 {
+		t.Fatalf("event = %d", code)
+	}
+	if code := f.post("/api/bridge/permission", `{"agent":"opencode","sessionId":"o3","tool":"bash","summary":"ls","input":"ls","canAnswer":true}`); code != 200 {
+		t.Fatalf("permission = %d", code)
+	}
+	if a, b := byID("o2").Agent, byID("o3").Agent; a != "opencode" || b != "opencode" {
+		t.Errorf("sessions an OpenCode bridge reported on were recorded as %q and %q", a, b)
+	}
+
+	before := len(f.state().Sessions)
+	for _, path := range []string{"/api/bridge/poll", "/api/bridge/event", "/api/bridge/permission"} {
+		if code := f.post(path, `{"agent":"cursor","sessionId":"x1","type":"turn.start","tool":"bash"}`); code != 400 {
+			t.Errorf("%s from an agent Slorp does not know = %d, want 400", path, code)
+		}
+	}
+	if after := len(f.state().Sessions); after != before {
+		t.Errorf("an unknown agent's report created %d session(s)", after-before)
+	}
+}
+
 func TestPermissionAnsweredFromTheUI(t *testing.T) {
 	f := newFixture(t)
 	ask := func(canAnswer string) (id string, answerable bool) {

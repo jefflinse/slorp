@@ -14,7 +14,24 @@ import (
 	"github.com/jefflinse/slorp/internal/hub"
 	"github.com/jefflinse/slorp/internal/integrations"
 	"github.com/jefflinse/slorp/internal/kb"
+	"github.com/jefflinse/slorp/internal/opencode"
 )
+
+// agents are the agents a bridge may report for.
+var agents = map[string]bool{claude.Agent: true, opencode.Agent: true}
+
+// agentOf returns the agent a bridge names, Claude Code's when it names
+// none, and refuses one Slorp does not know.
+func agentOf(w http.ResponseWriter, name string) (string, bool) {
+	if name == "" {
+		return claude.Agent, true
+	}
+	if !agents[name] {
+		http.Error(w, "unknown agent", http.StatusBadRequest)
+		return "", false
+	}
+	return name, true
+}
 
 // Feeds is what the server asks of whatever collects the integrations' feeds.
 type Feeds interface {
@@ -159,26 +176,41 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, uiPath s
 
 	mux.HandleFunc("POST /api/bridge/poll", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
+			Agent     string `json:"agent"`
 			SessionID string `json:"sessionId"`
 			Cwd       string `json:"cwd"`
+			Title     string `json:"title"`
+			Branch    string `json:"branch"`
 		}
 		if !readJSON(w, r, &in) || in.SessionID == "" {
 			return
 		}
-		h.Apply(claude.Agent, in.SessionID, func(s *hub.Session) {
+		agent, ok := agentOf(w, in.Agent)
+		if !ok {
+			return
+		}
+		fresh := h.Apply(agent, in.SessionID, func(s *hub.Session) {
 			if s.Cwd == "" {
 				s.Cwd = in.Cwd
+			}
+			if in.Title != "" {
+				s.Title = in.Title
+			}
+			if in.Branch != "" {
+				s.Branch = in.Branch
 			}
 		})
 		replies := h.Claim(in.SessionID)
 		if replies == nil {
 			replies = []hub.Reply{}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"replies": replies})
+		// fresh tells a bridge that Slorp knew nothing of the session until now.
+		writeJSON(w, http.StatusOK, map[string]any{"replies": replies, "fresh": fresh})
 	})
 
 	mux.HandleFunc("POST /api/bridge/event", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
+			Agent     string `json:"agent"`
 			SessionID string `json:"sessionId"`
 			Type      string `json:"type"`
 			Text      string `json:"text"`
@@ -186,7 +218,11 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, uiPath s
 		if !readJSON(w, r, &in) || in.SessionID == "" {
 			return
 		}
-		h.Apply(claude.Agent, in.SessionID, func(s *hub.Session) {
+		agent, ok := agentOf(w, in.Agent)
+		if !ok {
+			return
+		}
+		h.Apply(agent, in.SessionID, func(s *hub.Session) {
 			now := time.Now()
 			switch in.Type {
 			case "turn.start":
@@ -211,6 +247,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, uiPath s
 	// A bridge reports a permission prompt and learns whether Slorp may answer it.
 	mux.HandleFunc("POST /api/bridge/permission", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
+			Agent     string `json:"agent"`
 			SessionID string `json:"sessionId"`
 			Tool      string `json:"tool"`
 			Summary   string `json:"summary"`
@@ -220,7 +257,11 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, uiPath s
 		if !readJSON(w, r, &in) || in.SessionID == "" {
 			return
 		}
-		p := h.Ask(claude.Agent, in.SessionID, hub.Pending{Tool: in.Tool, Summary: in.Summary, Input: in.Input}, in.CanAnswer)
+		agent, ok := agentOf(w, in.Agent)
+		if !ok {
+			return
+		}
+		p := h.Ask(agent, in.SessionID, hub.Pending{Tool: in.Tool, Summary: in.Summary, Input: in.Input}, in.CanAnswer)
 		writeJSON(w, http.StatusOK, map[string]any{"id": p.ID, "answerable": p.Answerable})
 	})
 

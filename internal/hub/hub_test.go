@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -946,4 +947,48 @@ func TestFeedChangesAreAnnounced(t *testing.T) {
 	if !heard() {
 		t.Error("dropping a feed was not announced")
 	}
+}
+
+func TestApplyReportsSessionsItCreates(t *testing.T) {
+	h, _, _ := newHub(t)
+	if !h.Apply("opencode", "o", nil) {
+		t.Error("the first report about a session did not say the session was new")
+	}
+	if h.Apply("opencode", "o", nil) {
+		t.Error("a second report about the same session said it was new")
+	}
+	h.SetRoster(agent, []Session{idle("a", "/w", "")})
+	if h.Apply(agent, "a", nil) {
+		t.Error("a report about a session the roster had listed said it was new")
+	}
+}
+
+func TestRetireDropsSessionsWhoseBridgeWentSilent(t *testing.T) {
+	h, _, _ := newHub(t)
+	for _, id := range []string{"silent", "polling"} {
+		h.Apply("opencode", id, nil)
+	}
+	h.SetRoster(agent, []Session{idle("claude", "/w", "")})
+	h.sessions["silent"].bridgeSeen = time.Now().Add(-time.Minute)
+	ticks, stop := h.Subscribe()
+	defer stop()
+
+	h.Retire("opencode", 30*time.Second)
+	var left []string
+	for _, s := range h.Sessions() {
+		left = append(left, s.ID)
+	}
+	sort.Strings(left)
+	if got := strings.Join(left, ","); got != "claude,polling" {
+		t.Errorf("sessions = %s, want the one still polling and the other agent's, which no bridge ever polled for", got)
+	}
+	select {
+	case <-ticks:
+	default:
+		t.Error("subscribers were not told a session had gone")
+	}
+
+	h.sessions["polling"].bridgeSeen = time.Now().Add(-29 * time.Second)
+	h.Retire("opencode", 30*time.Second)
+	session(t, h, "polling")
 }

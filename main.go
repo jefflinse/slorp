@@ -20,6 +20,7 @@ import (
 	"github.com/jefflinse/slorp/internal/hub"
 	"github.com/jefflinse/slorp/internal/integrations"
 	"github.com/jefflinse/slorp/internal/kb"
+	"github.com/jefflinse/slorp/internal/opencode"
 	"github.com/jefflinse/slorp/internal/server"
 	"github.com/jefflinse/slorp/internal/store"
 )
@@ -85,6 +86,7 @@ func main() {
 	h := hub.New(k, st)
 	tools := integrations.NewManager(func() map[string]bool { return h.Settings().Integrations }, integrations.GitHub(integrations.Exec))
 	go (&claude.Adapter{Hub: h, Bin: *claudeBin, Home: home, Interval: 2 * time.Second}).Run(ctx)
+	go (&opencode.Adapter{Hub: h, Interval: 2 * time.Second, Silence: 30 * time.Second}).Run(ctx)
 	if *llm != "" {
 		go (&enrich.Enricher{Hub: h, BaseURL: *llm, Model: *model, Offer: tools.Offer}).Run(ctx)
 	}
