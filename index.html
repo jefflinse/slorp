@@ -76,6 +76,17 @@ h1, h2, h3, p { margin: 0; }
 .pane.list { border-right: 1px solid var(--line); background: var(--panel); }
 .pane.detail { padding: 28px 36px 60px; }
 .inner { max-width: 740px; }
+.split.sided { grid-template-columns: minmax(320px, 410px) minmax(520px, 1fr) minmax(240px, 340px); }
+.split.sided.shut { grid-template-columns: minmax(320px, 410px) minmax(520px, 1fr) 40px; }
+.split.sided .going { display: none; }
+.pane.side { border-left: 1px solid var(--line); background: var(--panel); padding: 26px 22px 40px; }
+.pane.side .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.pane.side .head button { color: var(--ink3); padding: 2px 6px; border-radius: 6px; }
+.pane.side .head button:hover, .rail:hover { color: var(--accent); background: var(--sel); }
+.pane.side .prose { font-size: 14.5px; }
+.split.shut .pane.side { padding: 0; overflow: hidden; }
+.rail { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; height: 100%; padding: 26px 0; color: var(--ink3); }
+.rail .label { writing-mode: vertical-rl; color: inherit; white-space: nowrap; }
 .page { padding: 28px 36px 60px; max-width: 1240px; margin: 0 auto; }
 
 /* Briefing */
@@ -284,10 +295,15 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
 #news { bottom: 70px; transform: translate(-50%, 140px); }
 #news span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+@media (max-width: 1180px) {
+  .split.sided, .split.sided.shut { grid-template-columns: minmax(320px, 410px) 1fr; }
+  .split.sided .going { display: block; }
+  .pane.side { display: none; }
+}
 @media (max-width: 860px) {
   .top { gap: 10px; overflow-x: auto; }
   .model { display: none; }
-  .split, .split.narrow { grid-template-columns: 1fr; height: auto; }
+  .split, .split.narrow, .split.sided, .split.sided.shut { grid-template-columns: 1fr; height: auto; }
   .pane.list { border-right: 0; border-bottom: 1px solid var(--line); max-height: 48vh; }
   .pane.detail, .page { padding: 20px 16px 48px; }
   h1 { font-size: 24px; }
@@ -557,7 +573,7 @@ const KB_SECTIONS = {
 const KEY = 'slorp.proto.v1';
 const VIEWS = ['attention', 'efforts', 'activity', 'pulls', 'knowledge'];
 const VIEW_NAMES = { pulls: 'PRs' };
-const fresh = () => ({ view: 'attention', sel: null, effortSel: 'snap', kbSel: 'watch', groupBy: 'effort', srcFilter: 'all', pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', sourceRaw: false, fluent: true, theme: 'auto',
+const fresh = () => ({ view: 'attention', sel: null, effortSel: 'snap', kbSel: 'watch', groupBy: 'effort', srcFilter: 'all', pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto',
   handled: {}, moved: {}, sessMoved: {}, extra: [], arrived: {}, collapsed: {}, showHandled: false, variant: {}, rawOpen: {},
   actFilter: 'all', expanded: {}, kb: structuredClone(KB_SEED), seq: 100 });
 let state = fresh();
@@ -780,7 +796,11 @@ function viewAttention() {
   }).join('');
   const seg = ['effort', 'urgency', 'source'].map(b => `<button class="${state.groupBy === b ? 'on' : ''}" data-act="group" data-by="${b}">${cap(b)}</button>`).join('');
   const sel = state.sel && itemById(state.sel);
-  return `<div class="split">
+  const sided = sel && sel.live && !sel.feed;
+  const side = !sided ? '' : state.sideShut
+    ? `<aside class="pane side"><button class="rail" data-act="side" title="Show what's going on" aria-expanded="false"><span>‹</span><span class="label">${sel.summary ? spark : ''}What's going on</span></button></aside>`
+    : `<aside class="pane side" data-scroll="att-side"><div class="head"><span class="label">${sel.summary ? spark : ''}What's going on</span><button data-act="side" title="Hide this panel" aria-expanded="true">›</button></div>${goingOn(sel)}</aside>`;
+  return `<div class="split ${sided ? 'sided' : ''} ${sided && state.sideShut ? 'shut' : ''}">
     <section class="pane list" data-scroll="att-list">
       ${briefing(all)}
       <div class="listbar"><span class="label">Needs you</span><span class="seg" role="group" aria-label="Group by">${seg}</span></div>
@@ -789,6 +809,7 @@ function viewAttention() {
       ${handledFooter()}
     </section>
     <section class="pane detail" data-scroll="att-${state.sel}">${sel ? itemDetail(sel) : `<div class="empty">${spark}All clear. Go make something.</div>`}</section>
+    ${side}
   </div>`;
 }
 
@@ -1144,6 +1165,13 @@ function detailTabs(it, s) {
     <div class="tabbody">${also ? others.html : source}</div>`;
 }
 
+/* The local model's account of a session item: beside it where there is room, within it where there is not. */
+function goingOn(it) {
+  const looked = it.session.insight?.lookups || [];
+  return `<p class="prose">${it.summary ? esc(it.summary) : `<span class="none">${summarizer.model ? 'Not summarized yet.' : 'No local model is available to summarize this.'}</span>`}</p>
+    ${looked.length ? `<div class="none" style="margin-top:8px">${spark}Checked ${esc(listOf(looked))} to write this.</div>` : ''}`;
+}
+
 function liveItemDetail(it) {
   if (it.feed) return feedItemDetail(it);
   const s = it.session;
@@ -1166,9 +1194,7 @@ function liveItemDetail(it) {
     <h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>
     <div class="need"><div class="label">${it.summary ? spark : ''}What's needed from you</div><p class="ask">${esc(it.ask)}</p>${answer}</div>
     ${barFor(it, `${s.pending ? '' : `<button class="btn" data-act="livePark" data-id="${it.id}">Park as open question</button>`}${moveSelect(s)}${roleSelect(s)}`)}
-    <div class="sec"><div class="label"><span>${it.summary ? spark : ''}What's going on</span></div>
-      <p class="prose">${it.summary ? esc(it.summary) : `<span class="none">${summarizer.model ? 'Not summarized yet.' : 'No local model is available to summarize this.'}</span>`}</p>
-      ${(s.insight?.lookups || []).length ? `<div class="none" style="margin-top:8px">${spark}Checked ${esc(listOf(s.insight.lookups))} to write this.</div>` : ''}</div>
+    <div class="sec going"><div class="label"><span>${it.summary ? spark : ''}What's going on</span></div>${goingOn(it)}</div>
     ${detailTabs(it, s)}
   </div>`;
 }
@@ -1479,6 +1505,7 @@ const actions = {
   group: d => { state.groupBy = d.by; },
   srcFilter: d => { state.srcFilter = d.src; },
   collapse: d => { state.collapsed[d.key] = !state.collapsed[d.key]; },
+  side: () => { state.sideShut = !state.sideShut; },
   fluent: d => { state.fluent = d.on === '1'; },
   theme: () => {
     const dark = state.theme === 'dark' || (state.theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
