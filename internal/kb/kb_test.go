@@ -135,6 +135,13 @@ func TestDeleteForgetsTheEffortEverywhere(t *testing.T) {
 	if err := k.Delete(a); err == nil {
 		t.Error("deleting an unknown effort reported success")
 	}
+
+	if again := create(t, k, "A"); again != a {
+		t.Fatalf("recreated effort got id %q, want the freed %q", again, a)
+	}
+	if _, _, ok := k.Resolve("s1", "/elsewhere"); ok {
+		t.Error("a new effort with a deleted one's name inherited its filings")
+	}
 }
 
 func TestRevisionsTrackWhatTheModelReads(t *testing.T) {

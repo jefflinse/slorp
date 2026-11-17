@@ -47,7 +47,7 @@ func appendTo(t *testing.T, path, s string) {
 
 func TestTailReadsWhatMatters(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
-	meta := user("<local-command-caveat>ignore me</local-command-caveat>")
+	meta := user("text the harness injected, not the user")
 	meta["isMeta"] = true
 	side := assistant(text("a subagent talking"))
 	side["isSidechain"] = true
