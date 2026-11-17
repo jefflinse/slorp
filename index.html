@@ -104,8 +104,10 @@ h1, h2, h3, p { margin: 0; }
 .row .m { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin-top: 4px; color: var(--ink3); font-size: 12px; }
 .row.fresh { animation: arrive 1.6s ease-out; }
 @keyframes arrive { 0% { background: var(--fill); } 100% { background: transparent; } }
-.kind { display: inline-flex; align-items: center; white-space: nowrap; }
-.kind i { width: 7px; height: 7px; border-radius: 2px; margin-right: 5px; }
+.kind { display: inline-flex; align-items: center; white-space: nowrap; padding: 1px 8px 1px 6px; border-radius: 99px; font-size: 11.5px; font-weight: 600; line-height: 1.5;
+  color: color-mix(in srgb, var(--k) 50%, var(--ink)); background: color-mix(in srgb, var(--k) 15%, transparent); }
+.kind i, .chip i { width: 6px; height: 6px; border-radius: 50%; margin-right: 5px; background: var(--k); }
+.chip i { display: inline-block; vertical-align: 1px; }
 .tag { font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 1px 6px; border-radius: 4px; }
 .tag.blocking { background: var(--fill); color: var(--fill-ink); }
 .tag.soon { color: var(--warn); border: 1px solid currentColor; }
@@ -262,7 +264,7 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
    stand in for what a local model would write; `raw` and `lines` stand in for
    what the source actually said. */
 
-const KINDS = { claude: 'Claude', opencode: 'OpenCode', slack: 'Slack', worker: 'Worker', local: 'Local LLM', kb: 'Knowledge base', github: 'GitHub' };
+const KINDS = { claude: 'Claude Code', opencode: 'OpenCode', slack: 'Slack', worker: 'Worker', local: 'Local LLM', kb: 'Knowledge base', github: 'GitHub' };
 const URGENCY = { blocking: 'Holding work up', soon: 'Soon', whenever: 'Whenever' };
 const STATUS = { waiting: 'waiting on you', error: 'failed', running: 'running', done: 'finished', idle: 'idle' };
 
@@ -340,7 +342,7 @@ const SESSIONS = [
 ];
 
 const ITEMS = [
-  { id: 'a1', effort: 'snap', session: 's1', kind: 'claude', src: 'Claude session', urgency: 'blocking', age: 12,
+  { id: 'a1', effort: 'snap', session: 's1', kind: 'claude', src: 'Claude Code session', urgency: 'blocking', age: 12,
     title: 'Keep every snapshot, or only the newest few?',
     raw: 'claude 7c1e02 · AskUserQuestion · "Retention policy?"',
     ask: 'Pick a retention policy so the pruning query can be written.',
@@ -380,7 +382,7 @@ const ITEMS = [
     draft: "Hey Priya, the upgrade branch builds on v0.14 and I'm about to run the integration suite. If nothing surprising turns up, the fork is on v0.14 by Thursday. I'll confirm tomorrow afternoon either way, so hold off on the workaround until then.",
     lines: [['Priya Raman · yesterday 4:12 PM', 'any eta on the estoria bump? we want the iterator for the reconciliation job'],
       ['Priya Raman · 9:41 AM', "no pressure but if we don't have a date by wed we'll just write the paging loop ourselves and rip it out later"]] },
-  { id: 'a5', effort: 'fork', session: 's4', kind: 'claude', src: 'Claude session', urgency: 'blocking', age: 6,
+  { id: 'a5', effort: 'fork', session: 's4', kind: 'claude', src: 'Claude Code session', urgency: 'blocking', age: 6,
     title: 'Wants to run the integration suite against your local Postgres',
     raw: 'claude 19ab44 · permission · Bash(make test-integration PG_DSN=…)',
     ask: 'Allow or deny the command.',
@@ -401,7 +403,7 @@ const ITEMS = [
       ['Dee Castellanos · 11:09 AM', '+1, the last one broke the outbox tests for a day'],
       ['Priya Raman · 11:20 AM', 'we need 0.14 for the iterator though. can we pin after that?'],
       ['Marcus Oyelaran · 11:31 AM', "let's decide at planning thurs"]] },
-  { id: 'a7', effort: 'docs', session: 's6', kind: 'claude', src: 'Claude session', urgency: 'blocking', age: 52,
+  { id: 'a7', effort: 'docs', session: 's6', kind: 'claude', src: 'Claude Code session', urgency: 'blocking', age: 52,
     title: 'Should the quickstart use the in-memory store or Postgres?',
     raw: 'claude e03d7a · AskUserQuestion · "Quickstart backend?"',
     ask: 'Choose the event store the quickstart is written around.',
@@ -410,7 +412,7 @@ const ITEMS = [
     replies: ['In-memory, then a Postgres page', 'Postgres from the start'],
     lines: [['claude', "I've outlined the new quickstart. One decision changes the whole page: which event store it uses."],
       ['claude', 'In-memory: zero setup, 30 lines, runs anywhere. Postgres: realistic, but needs docker compose before any Go code. I suggest in-memory here and a follow-up page for Postgres.']] },
-  { id: 'a8', effort: 'docs', session: 's7', kind: 'claude', src: 'Claude session', urgency: 'whenever', age: 210,
+  { id: 'a8', effort: 'docs', session: 's7', kind: 'claude', src: 'Claude Code session', urgency: 'whenever', age: 210,
     title: 'Three concept pages are rewritten and the site builds',
     raw: 'claude 5f21c9 · stopped · 3 files changed · hugo ok',
     ask: 'Read the diff and say whether it can be committed.',
@@ -440,7 +442,7 @@ const ITEMS = [
 
 /* Arrive one at a time via "Simulate an incoming item". */
 const POOL = [
-  { id: 'p1', effort: 'snap', session: 's1', kind: 'claude', src: 'Claude session', urgency: 'soon', age: 0,
+  { id: 'p1', effort: 'snap', session: 's1', kind: 'claude', src: 'Claude Code session', urgency: 'soon', age: 0,
     title: 'The pruning migration is written; can it drop the old index?',
     raw: 'claude 7c1e02 · AskUserQuestion · "Drop idx_snapshots_stream?"',
     ask: 'Say whether the old index can go.',
@@ -540,7 +542,8 @@ const byUrgency = (a, b) => URG_W[a.urgency] - URG_W[b.urgency] || ageOf(a) - ag
 const title = (x, cls = '') => state.fluent
   ? `<span class="gen ${cls}">${esc(x.title || x.name)}</span>`
   : `<span class="mono ${cls}">${esc(x.raw)}</span>`;
-const kindBadge = (kind, label) => `<span class="kind"><i style="background:var(--k-${kind})"></i>${esc(label || KINDS[kind])}</span>`;
+const kindColor = kind => `--k:var(--k-${kind}, var(--ink3))`;
+const kindBadge = (kind, label) => `<span class="kind" style="${kindColor(kind)}"><i></i>${esc(label || KINDS[kind] || kind)}</span>`;
 const spark = '<span class="spark" title="Written by the local model">✦</span>';
 
 function groupItems(items) {
@@ -604,7 +607,8 @@ function briefing(items) {
 }
 
 function rowHtml(it, act = 'select') {
-  const meta = state.groupBy === 'effort' || act !== 'select' ? kindBadge(it.kind, it.src) : `<span>${esc(effortById(effortOf(it)).name)}</span>`;
+  const grouped = act === 'select' ? state.groupBy : 'effort';
+  const meta = `${grouped === 'source' ? '' : kindBadge(it.kind)}${grouped === 'effort' ? '' : `<span>${esc(effortById(effortOf(it)).name)}</span>`}`;
   return `<button class="row ${it.urgency} ${state.view === 'attention' && it.id === state.sel ? 'sel' : ''} ${it.id === freshId ? 'fresh' : ''}" data-act="${act}" data-id="${it.id}">
     ${title(it, 't')}
     <span class="m">${meta}<span>${ago(ageOf(it))}</span>${it.urgency === 'blocking' ? '<span class="tag blocking">blocking</span>' : ''}</span>
@@ -675,7 +679,7 @@ function viewAttention() {
   const present = Object.keys(KINDS).filter(k => all.some(i => i.kind === k));
   const chips = state.groupBy === 'source' && present.length > 1
     ? `<div class="chips">${[['all', 'All', all.length]].concat(present.map(k => [k, KINDS[k], all.filter(i => i.kind === k).length]))
-        .map(([k, name, n]) => `<button class="chip ${src === k ? 'on' : ''}" data-act="srcFilter" data-src="${k}">${esc(name)} <span class="n">${n}</span></button>`).join('')}</div>`
+        .map(([k, name, n]) => `<button class="chip ${src === k ? 'on' : ''}" data-act="srcFilter" data-src="${k}">${k === 'all' ? '' : `<i style="${kindColor(k)}"></i>`}${esc(name)} <span class="n">${n}</span></button>`).join('')}</div>`
     : '';
   const groups = groupItems(items).map(g => {
     const shut = state.collapsed[g.key];
