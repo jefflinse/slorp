@@ -232,9 +232,11 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
 .add input { flex: 1; min-width: 180px; }
 
 /* Toast */
-#toast { position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 80px); background: var(--ink); color: var(--bg); padding: 9px 14px; border-radius: 9px; display: flex; gap: 14px; align-items: center; transition: transform 0.18s; z-index: 20; max-width: calc(100vw - 32px); }
-#toast.show { transform: translate(-50%, 0); }
-#toast button { color: var(--toast-act); font-weight: 600; }
+#toast, #news { position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 80px); background: var(--ink); color: var(--bg); padding: 9px 14px; border-radius: 9px; display: flex; gap: 14px; align-items: center; transition: transform 0.18s; z-index: 20; max-width: calc(100vw - 32px); }
+#toast.show, #news.show { transform: translate(-50%, 0); }
+#toast button, #news button { color: var(--toast-act); font-weight: 600; }
+#news { bottom: 70px; transform: translate(-50%, 140px); }
+#news span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 @media (max-width: 860px) {
   .top { gap: 10px; overflow-x: auto; }
@@ -256,6 +258,7 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
 </header>
 <main id="main"></main>
 <div id="toast" role="status"></div>
+<div id="news" role="status"></div>
 
 <script>
 'use strict';
@@ -507,7 +510,7 @@ const KB_SECTIONS = {
 const KEY = 'slorp.proto.v1';
 const VIEWS = ['attention', 'efforts', 'activity', 'pulls', 'knowledge'];
 const VIEW_NAMES = { pulls: 'PRs' };
-const fresh = () => ({ view: 'attention', sel: null, effortSel: 'snap', kbSel: 'watch', groupBy: 'effort', srcFilter: 'all', pullFilter: 'all', fluent: true, theme: 'auto',
+const fresh = () => ({ view: 'attention', sel: null, effortSel: 'snap', kbSel: 'watch', groupBy: 'effort', srcFilter: 'all', pullFilter: 'all', notify: false, fluent: true, theme: 'auto',
   handled: {}, moved: {}, sessMoved: {}, extra: [], arrived: {}, collapsed: {}, showHandled: false, variant: {}, rawOpen: {},
   actFilter: 'all', expanded: {}, kb: structuredClone(KB_SEED), seq: 100 });
 let state = fresh();
@@ -569,6 +572,37 @@ function toast(msg, undo, label = 'Undo') {
   if (undo) $('#undo').onclick = () => { undo(); save(); render(); t.classList.remove('show'); };
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove('show'), 5000);
+}
+
+/* Says that items have arrived since the page last looked: with a note in
+   the page unless the list they join is already showing, and, when the user
+   has turned that on and the page is out of sight, a desktop notification.
+   Either way nothing happens until the user clicks. */
+let known = null, newsTimer;
+const canNotify = () => state.notify && window.Notification?.permission === 'granted';
+function announce(items) {
+  const arrived = known ? items.filter(i => isActive(i) && !known.has(i.id)).sort(byUrgency) : [];
+  known ??= new Set();
+  items.forEach(i => known.add(i.id));
+  if (!arrived.length) return;
+  const first = arrived[0], one = arrived.length === 1;
+  const msg = one ? `${KINDS[first.kind] || first.kind}: ${first.title || first.ask}` : `${cap(num(arrived.length))} new things need you`;
+  const show = () => { state.sel = first.id; go('attention'); save(); render(); };
+  freshId = first.id;
+  if (state.view !== 'attention') {
+    const n = $('#news');
+    n.innerHTML = `<span>${esc(msg)}</span><button>Show</button>`;
+    n.querySelector('button').onclick = () => { n.classList.remove('show'); show(); };
+    n.classList.add('show');
+    clearTimeout(newsTimer);
+    newsTimer = setTimeout(() => n.classList.remove('show'), 8000);
+  }
+  if (canNotify() && document.hidden) {
+    try {
+      const note = new Notification(one ? first.title || msg : msg, { body: one ? first.ask || '' : arrived.map(i => i.title || i.ask).join('\n'), tag: 'slorp' });
+      note.onclick = () => { window.focus(); note.close(); show(); };
+    } catch (e) { /* this browser will not show one from a page */ }
+  }
 }
 
 function resolve(id, how, note, opts = {}) {
@@ -873,6 +907,7 @@ async function refresh(force) {
     feeds = data.feeds || {};
     pulls = data.pullRequests || [];
     isOffline = false;
+    announce(liveItems);
   } catch (e) { isOffline = live !== null; }
   render();
 }
@@ -1195,6 +1230,7 @@ function render() {
     <details class="menu" id="menu" ${menuOpen ? 'open' : ''}><summary class="icon" title="Prototype controls" aria-label="Prototype controls">⋯</summary>
       <div class="pop"><p>Prototype controls</p>
         ${live ? `<button data-act="toggleHold">Permission prompts: ${settings.answerPermissions ? 'Slorp or terminal' : 'terminal only'}</button>` : ''}
+        ${live && window.Notification ? `<button data-act="toggleNotify">Desktop notifications: ${canNotify() ? 'on' : 'off'}</button>` : ''}
         ${live ? '' : '<button data-act="simulate">Simulate an incoming item</button>'}
         <button data-act="reset">Reset the demo</button>
         <p>Keys: j/k move · e dismiss · s snooze · r fluent/raw · 1–5 views</p></div></details>`;
@@ -1284,6 +1320,15 @@ const actions = {
   },
   feedCheck: () => { api('POST', '/api/feed/check', {}, () => toast('Checking now')); return false; },
   integrationToggle: d => { api('POST', `/api/integrations/${d.id}`, { enabled: d.on === '1' }); return false; },
+  toggleNotify: () => {
+    if (canNotify()) { state.notify = false; return; }
+    Notification.requestPermission().then(answer => {
+      state.notify = answer === 'granted';
+      toast(state.notify ? 'Slorp will notify you while this page is out of sight' : 'The browser is blocking notifications for this page');
+      save(); render();
+    });
+    return false;
+  },
   toggleHold: () => { api('POST', '/api/settings', { answerPermissions: !settings.answerPermissions }); return false; },
   effortDelete: d => {
     toast(`Delete "${effortById(d.id).name}" and its filings?`, () => { api('DELETE', `/api/efforts/${d.id}`); }, 'Delete');
