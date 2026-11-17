@@ -65,6 +65,9 @@ type Session struct {
 	// Effort is the effort this session is filed under, empty when unsorted.
 	Effort    string `json:"effort"`
 	EffortVia string `json:"effortVia,omitempty"`
+	// Role is the role this session has, empty for none.
+	Role    string `json:"role"`
+	RoleVia string `json:"roleVia,omitempty"`
 
 	bridgeSeen time.Time
 	key        string
@@ -73,6 +76,10 @@ type Session struct {
 	guess      string
 	guessKey   string
 	insightAt  time.Time
+	roleGuess  string
+	roleKey    string
+	// attention is what the session's role lets through, when the user chose it.
+	attention string
 }
 
 // ViaGuess marks a filing the model chose, as opposed to the user or a rule.
@@ -98,6 +105,14 @@ type Unrouted struct {
 	Efforts []kb.Effort
 	// Hints are the user's standing context and routing hints.
 	Hints []string
+}
+
+// Unroled is a described session the user has given no role, for the model
+// to guess one.
+type Unroled struct {
+	Session Session
+	Key     string
+	Roles   []kb.Role
 }
 
 // Unnoted is an effort whose sessions have changed since its note was written.
@@ -255,6 +270,8 @@ type sessionDoc struct {
 	Guess      string    `json:"guess"`
 	GuessKey   string    `json:"guessKey"`
 	InsightAt  time.Time `json:"insightAt"`
+	RoleGuess  string    `json:"roleGuess"`
+	RoleKey    string    `json:"roleKey"`
 }
 
 type ReplyState string
@@ -335,10 +352,12 @@ func (h *Hub) restore(s *Session) {
 		return
 	}
 	s.Insight, s.insightKey, s.guess, s.guessKey, s.insightAt = d.Insight, d.InsightKey, d.Guess, d.GuessKey, d.InsightAt
+	s.roleGuess, s.roleKey = d.RoleGuess, d.RoleKey
 }
 
 func (h *Hub) remember(s *Session) {
-	h.warn(h.cache.Put("session", s.ID, sessionDoc{Insight: s.Insight, InsightKey: s.insightKey, Guess: s.guess, GuessKey: s.guessKey, InsightAt: s.insightAt}))
+	h.warn(h.cache.Put("session", s.ID, sessionDoc{Insight: s.Insight, InsightKey: s.insightKey, Guess: s.guess, GuessKey: s.guessKey, InsightAt: s.insightAt,
+		RoleGuess: s.roleGuess, RoleKey: s.roleKey}))
 }
 
 // SetRoster replaces the known sessions of one agent with the live set an
@@ -354,6 +373,7 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 			s.bridgeSeen = old.bridgeSeen
 			s.key, s.keySince, s.insightKey, s.Insight = old.key, old.keySince, old.insightKey, old.Insight
 			s.guess, s.guessKey, s.insightAt = old.guess, old.guessKey, old.insightAt
+			s.roleGuess, s.roleKey = old.roleGuess, old.roleKey
 			// The roster stops saying "waiting" once the terminal's dialog is
 			// answered. A request it has not caught up with yet is kept.
 			if p := old.Pending; p != nil && (s.Status == Waiting || time.Since(p.At) < pendingGrace) {
@@ -765,6 +785,39 @@ func (h *Hub) SetGuess(sessionID, key, effortID string) {
 	}
 }
 
+// Unroled lists described sessions that still need the model to guess a role.
+func (h *Hub) Unroled() []Unroled {
+	roles := h.kb.Knowledge().Roles
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []Unroled
+	if len(roles) == 0 {
+		return out
+	}
+	for _, s := range h.sessions {
+		key := s.insightKey + ":" + strconv.Itoa(h.kb.RoleRevision())
+		if s.insightKey != s.key || s.roleKey == key {
+			continue
+		}
+		if _, ok := h.kb.RoleOf(s.ID); !ok {
+			out = append(out, Unroled{Session: *s, Key: key, Roles: roles})
+		}
+	}
+	return out
+}
+
+// SetRoleGuess records the model's choice of role for a session; an empty
+// roleID means it found none the session clearly has.
+func (h *Hub) SetRoleGuess(sessionID, key, roleID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if s, ok := h.sessions[sessionID]; ok {
+		s.roleGuess, s.roleKey = roleID, key
+		h.remember(s)
+		h.changed()
+	}
+}
+
 // Unnoted lists efforts with described sessions whose note is out of date.
 func (h *Hub) Unnoted() []Unnoted {
 	h.mu.Lock()
@@ -884,12 +937,16 @@ func contentKey(s *Session) string {
 // items derives what needs the user from the sessions. Permission prompts,
 // blocked and failed sessions are items on their state alone; a question or
 // finished work is an item only once an insight written for the current
-// content says so.
+// content says so. A role the user gave a session can keep it from asking:
+// altogether, or unless it is stopped.
 func items(sessions []Session) []Item {
 	out := []Item{}
 	for _, s := range sessions {
 		it := Item{ID: s.ID[:min(8, len(s.ID))] + "-" + s.key[:min(10, len(s.key))], SessionID: s.ID, At: s.ActiveAt, Replies: []string{},
 			Effort: s.Effort, EffortVia: s.EffortVia}
+		if s.attention == kb.AttentionNone {
+			continue
+		}
 		it.Title = s.Title
 		if it.Title == "" {
 			it.Title = s.Name
@@ -917,6 +974,8 @@ func items(sessions []Session) []Item {
 			if fresh {
 				it.Replies = s.Insight.Replies
 			}
+		case s.attention == kb.AttentionStopped:
+			continue
 		case fresh && s.Status != Working && s.Insight.Kind == KindQuestion:
 			it.Kind, it.Urgency, it.Replies = KindQuestion, "awaiting", s.Insight.Replies
 		case fresh && s.Status != Working && s.Insight.Kind == KindReview:
@@ -943,6 +1002,11 @@ func (h *Hub) snapshot() []Session {
 		} else if s.guess != "" && h.kb.Has(s.guess) {
 			// A guess made on older content stands until a newer one replaces it.
 			c.Effort, c.EffortVia = s.guess, ViaGuess
+		}
+		if role, ok := h.kb.RoleOf(s.ID); ok {
+			c.Role, c.RoleVia, c.attention = role.ID, kb.ViaUser, role.Attention
+		} else if s.roleGuess != "" && h.kb.HasRole(s.roleGuess) {
+			c.Role, c.RoleVia = s.roleGuess, ViaGuess
 		}
 		for _, r := range h.replies {
 			if r.SessionID == s.ID {

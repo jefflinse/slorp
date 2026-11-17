@@ -225,6 +225,40 @@ func TestRoute(t *testing.T) {
 	}
 }
 
+func TestRole(t *testing.T) {
+	work := hub.Unroled{
+		Session: hub.Session{Cwd: "/work/toasters", Branch: "main", LastPrompt: "review the open ones", Insight: &hub.Insight{Title: "Reviewed four pull requests", Summary: "Two need changes."}},
+		Roles:   []kb.Role{{ID: "r1", Name: "Reviewer", About: "Reviews pull requests on a loop"}, {ID: "r2", Name: "Builder", About: "Writes features"}},
+	}
+	tests := []struct{ reply, want string }{
+		{`{"kind":"r1"}`, "r1"},
+		{`{"kind":"none"}`, ""},
+		{`{"kind":"a role that does not exist"}`, ""},
+	}
+	for _, tt := range tests {
+		llm := &fakeLLM{content: tt.reply}
+		got, err := llm.enricher(t).role(ctx, "m", work)
+		if err != nil || got != tt.want {
+			t.Errorf("role with reply %s = %q, %v; want %q", tt.reply, got, err, tt.want)
+		}
+		for _, want := range []string{"Reviewer", "Reviews pull requests on a loop", "Writes features", "toasters", "main", "Reviewed four pull requests", "Two need changes.", "review the open ones"} {
+			if !strings.Contains(llm.user(), want) {
+				t.Errorf("prompt lacks %q", want)
+			}
+		}
+		var schema struct {
+			Properties struct{ Kind struct{ Enum []string } }
+		}
+		json.Unmarshal(llm.request.ResponseFormat.JSONSchema.Schema, &schema)
+		if got := strings.Join(schema.Properties.Kind.Enum, ","); got != "none,r1,r2" {
+			t.Errorf("the model may answer %q; want none or one of the roles", got)
+		}
+	}
+	if _, err := (&fakeLLM{content: "not json"}).enricher(t).role(ctx, "m", work); err == nil {
+		t.Error("an unreadable answer was taken as a choice")
+	}
+}
+
 func TestNote(t *testing.T) {
 	llm := &fakeLLM{content: `{"line":"Waiting on a retention decision.","stands":"Save and load work."}`}
 	n, err := llm.enricher(t).note(ctx, "m", hub.Unnoted{

@@ -317,3 +317,76 @@ func TestRepoFilingSurvivesReopen(t *testing.T) {
 		t.Errorf("after reopening: %q, %q, %v", got, via, ok)
 	}
 }
+
+// role adds a role and returns its ID.
+func role(t *testing.T, k *kb.Store, name, attention string) string {
+	t.Helper()
+	must(t, k.Add(kb.SectionRoles, kb.Entry{Name: name, Text: " what " + name + " does ", Type: attention}))
+	roles := k.Knowledge().Roles
+	return roles[len(roles)-1].ID
+}
+
+func TestRoles(t *testing.T) {
+	st := testdb.Open(t)
+	k := testdb.KB(t, st)
+	if got := k.Knowledge().Roles; got == nil || len(got) != 0 {
+		t.Fatalf("Roles = %#v before any is added, want an empty list", got)
+	}
+	start := k.RoleRevision()
+	reviewer, triage := role(t, k, " Reviewer ", ""), role(t, k, "Triage", kb.AttentionStopped)
+	want := []kb.Role{{ID: reviewer, Name: "Reviewer", About: "what  Reviewer  does", Attention: kb.AttentionAll}, {ID: triage, Name: "Triage", About: "what Triage does", Attention: kb.AttentionStopped}}
+	if got := k.Knowledge().Roles; len(got) != 2 || got[0] != want[0] || got[1] != want[1] || reviewer == triage {
+		t.Fatalf("Roles = %+v, want %+v", got, want)
+	}
+	if k.RoleRevision() != start+2 {
+		t.Error("adding roles did not change the role revision, so the model would not look again")
+	}
+	for name, bad := range map[string]kb.Entry{"no name": {Text: "x"}, "an attention that does not exist": {Name: "x", Type: "loud"}} {
+		if k.Add(kb.SectionRoles, bad) == nil {
+			t.Errorf("a role with %s was accepted", name)
+		}
+	}
+
+	if _, ok := k.RoleOf("s"); ok {
+		t.Error("a session nobody gave a role has one")
+	}
+	if k.SetRole("s", "nope") == nil {
+		t.Error("a role that does not exist was given to a session")
+	}
+	must(t, k.SetRole("s", triage))
+	must(t, k.SetRole("none", ""))
+	if got, ok := k.RoleOf("s"); !ok || got != want[1] {
+		t.Errorf("RoleOf = %+v, %v", got, ok)
+	}
+	if got, ok := k.RoleOf("none"); !ok || got != (kb.Role{}) {
+		t.Errorf("RoleOf a session told to have none = %+v, %v; want none, as the user said", got, ok)
+	}
+	settled := k.RoleRevision()
+
+	if k.SetRoleAttention("nope", kb.AttentionNone) == nil || k.SetRoleAttention(triage, "loud") == nil {
+		t.Error("a bad change of attention was accepted")
+	}
+	must(t, k.SetRoleAttention(triage, kb.AttentionNone))
+	if got, _ := k.RoleOf("s"); got.Attention != kb.AttentionNone {
+		t.Errorf("attention = %q after it was changed", got.Attention)
+	}
+	if k.RoleRevision() != settled {
+		t.Error("giving a session a role, or changing a role's attention, changed what the model chooses among")
+	}
+
+	k2 := testdb.KB(t, st)
+	if got, ok := k2.RoleOf("s"); !ok || got.ID != triage || got.Attention != kb.AttentionNone || len(k2.Knowledge().Roles) != 2 || k2.RoleRevision() != settled {
+		t.Errorf("after reopening: role %+v, %v; %d roles; revision %d", got, ok, len(k2.Knowledge().Roles), k2.RoleRevision())
+	}
+
+	must(t, k.Remove(kb.SectionRoles, triage))
+	if _, ok := k.RoleOf("s"); ok || k.HasRole(triage) || !k.HasRole(reviewer) || len(k.Knowledge().Roles) != 1 {
+		t.Error("a removed role is still around, or took another with it")
+	}
+	if _, ok := k.RoleOf("none"); !ok {
+		t.Error("removing a role forgot a session the user said has none")
+	}
+	if k.RoleRevision() == settled {
+		t.Error("removing a role did not change the role revision")
+	}
+}

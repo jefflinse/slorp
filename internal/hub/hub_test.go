@@ -1047,3 +1047,128 @@ func TestPullRequestsAreListedAndFiledByRepository(t *testing.T) {
 		t.Errorf("after the feed is turned off %d pull requests are still listed", len(got))
 	}
 }
+
+// role adds a role to the knowledge base and returns its ID.
+func role(t *testing.T, k *kb.Store, name, attention string) string {
+	t.Helper()
+	must(t, k.Add(kb.SectionRoles, kb.Entry{Name: name, Type: attention}))
+	roles := k.Knowledge().Roles
+	return roles[len(roles)-1].ID
+}
+
+func TestRolePrecedence(t *testing.T) {
+	h, k, _ := newHub(t)
+	a, b := role(t, k, "A", ""), role(t, k, "B", "")
+	h.SetRoster(agent, []Session{idle("s1", "/w", "done")})
+	check := func(step, wantRole, wantVia string) {
+		t.Helper()
+		h.Touch()
+		if s := session(t, h, "s1"); s.Role != wantRole || s.RoleVia != wantVia {
+			t.Fatalf("%s: role %q via %q, want %q via %q", step, s.Role, s.RoleVia, wantRole, wantVia)
+		}
+	}
+
+	check("nothing known", "", "")
+	h.SetRoleGuess("s1", "k", "")
+	check("the model found none", "", "")
+	h.SetRoleGuess("s1", "k", a)
+	check("the model's guess", a, ViaGuess)
+	must(t, k.SetRole("s1", b))
+	check("the user's choice beats the guess", b, kb.ViaUser)
+	must(t, k.SetRole("s1", ""))
+	check("the user choosing none beats the guess", "", kb.ViaUser)
+	must(t, k.Remove(kb.SectionRoles, b))
+	check("removing an unrelated role changes nothing", "", kb.ViaUser)
+
+	h.SetRoster(agent, []Session{idle("s1", "/w", "done"), idle("s2", "/w", "done")})
+	h.SetRoleGuess("s2", "k", a)
+	must(t, k.Remove(kb.SectionRoles, a))
+	h.Touch()
+	if s := session(t, h, "s2"); s.Role != "" {
+		t.Errorf("still in a removed role: %q", s.Role)
+	}
+}
+
+func TestARoleCanKeepASessionFromAsking(t *testing.T) {
+	h, k, _ := newHub(t)
+	r := role(t, k, "Loop", "")
+	h.SetRoster(agent, []Session{
+		idle("review", "/w", "done"), idle("question", "/w", "which?"), idle("nothing", "/w", "ok"), idle("prompt", "/w", "running"),
+		{ID: "waiting", Agent: agent, Status: Waiting}, {ID: "failed", Agent: agent, Status: Failed},
+	})
+	describe(h, "review", KindReview)
+	describe(h, "question", KindQuestion)
+	describe(h, "nothing", KindNone)
+	h.Ask(agent, "prompt", Pending{Tool: "Bash", Summary: "rm x"}, true)
+	asking := func() string {
+		h.Touch()
+		var ids []string
+		for _, it := range h.State().Items {
+			ids = append(ids, it.SessionID)
+		}
+		sort.Strings(ids)
+		return strings.Join(ids, " ")
+	}
+	const everything, stopped = "failed prompt question review waiting", "failed prompt waiting"
+
+	if got := asking(); got != everything {
+		t.Fatalf("with no roles: %q, want %q", got, everything)
+	}
+	for _, id := range []string{"review", "question", "nothing", "prompt", "waiting", "failed"} {
+		h.SetRoleGuess(id, "k", r)
+	}
+	must(t, k.SetRoleAttention(r, kb.AttentionNone))
+	if got := asking(); got != everything {
+		t.Errorf("with a role only the model guessed: %q; a guess must not silence anything", got)
+	}
+	for _, id := range []string{"review", "question", "nothing", "prompt", "waiting", "failed"} {
+		must(t, k.SetRole(id, r))
+	}
+	for attention, want := range map[string]string{kb.AttentionAll: everything, kb.AttentionStopped: stopped, kb.AttentionNone: ""} {
+		must(t, k.SetRoleAttention(r, attention))
+		if got := asking(); got != want {
+			t.Errorf("with attention %q: %q, want %q", attention, got, want)
+		}
+	}
+	must(t, k.SetRole("review", ""))
+	if got := asking(); got != "review" {
+		t.Errorf("after one session left the role: %q, want only it asking", got)
+	}
+}
+
+func TestUnroled(t *testing.T) {
+	h, k, st := newHub(t)
+	roster := []Session{idle("loose", "/w", "x"), idle("chosen", "/w", "y"), idle("undescribed", "/w", "z")}
+	h.SetRoster(agent, roster)
+	describe(h, "loose", KindNone)
+	describe(h, "chosen", KindNone)
+	if got := h.Unroled(); len(got) != 0 {
+		t.Fatalf("with no roles to choose among, Unroled = %+v", got)
+	}
+	a := role(t, k, "A", "")
+	must(t, k.SetRole("chosen", a))
+
+	work := h.Unroled()
+	if len(work) != 1 || work[0].Session.ID != "loose" || len(work[0].Roles) != 1 || work[0].Roles[0].ID != a {
+		t.Fatalf("Unroled = %+v, want only the described session the user has not given a role, with the roles", work)
+	}
+	h.SetRoleGuess("loose", work[0].Key, a)
+	if len(h.Unroled()) != 0 {
+		t.Fatal("a session with a current guess is still waiting for one")
+	}
+
+	h2 := New(k, st)
+	h2.SetRoster(agent, roster)
+	h2.SetRoster(agent, roster)
+	if s := session(t, h2, "loose"); s.Role != a || s.RoleVia != ViaGuess || len(h2.Unroled()) != 0 {
+		t.Errorf("after a restart: role %q via %q, %d waiting; want the guess kept and nothing asked again", s.Role, s.RoleVia, len(h2.Unroled()))
+	}
+
+	role(t, k, "B", "")
+	if again := h.Unroled(); len(again) != 1 || len(again[0].Roles) != 2 {
+		t.Errorf("after a new role, Unroled = %+v; want the model to look again", again)
+	}
+	if s := session(t, h, "loose"); s.Role != a {
+		t.Errorf("the old guess vanished while a new one is pending: %q", s.Role)
+	}
+}

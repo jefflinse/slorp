@@ -106,6 +106,8 @@ h1, h2, h3, p { margin: 0; }
   color: color-mix(in srgb, var(--k) 50%, var(--ink)); background: color-mix(in srgb, var(--k) 15%, transparent); }
 .kind i, .chip i { width: 6px; height: 6px; border-radius: 50%; margin-right: 5px; background: var(--k); }
 .chip i { display: inline-block; vertical-align: 1px; }
+.role { display: inline-flex; align-items: center; white-space: nowrap; padding: 0 7px; border-radius: 99px; border: 1px solid var(--ink3); color: var(--ink2); font-size: 11.5px; font-weight: 500; line-height: 1.5; }
+.role .spark { margin-right: 4px; }
 .tag { font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 1px 6px; border-radius: 4px; }
 .tag.blocking { background: var(--fill); color: var(--fill-ink); }
 .tag.awaiting { color: var(--warn); border: 1px solid currentColor; }
@@ -647,7 +649,7 @@ function briefing(items) {
 
 function rowHtml(it, act = 'select') {
   const grouped = act === 'select' ? state.groupBy : 'effort';
-  const meta = `${grouped === 'source' ? '' : kindBadge(it.kind)}${grouped === 'effort' ? '' : `<span>${esc(effortById(effortOf(it)).name)}</span>`}`;
+  const meta = `${grouped === 'source' ? '' : kindBadge(it.kind)}${it.live && it.session ? roleChip(it.session) : ''}${grouped === 'effort' ? '' : `<span>${esc(effortById(effortOf(it)).name)}</span>`}`;
   return `<button class="row ${it.urgency} ${state.view === 'attention' && it.id === state.sel ? 'sel' : ''} ${it.id === freshId ? 'fresh' : ''}" data-act="${act}" data-id="${it.id}" style="${kindColor(it.kind)}">
     ${title(it, 't')}
     <span class="m">${meta}<span>${ago(ageOf(it))}</span>${it.urgency === 'whenever' ? '' : `<span class="tag ${it.urgency}">${it.urgency}</span>`}</span>
@@ -779,6 +781,27 @@ function moveSelect(s) {
     <option value="__new">New effort…</option></select>`;
 }
 
+/* A session's role: the kind of session it is, as the user named the kinds. */
+const ATTENTION = { all: 'Asks whenever it needs you', stopped: 'Asks only when it is stopped', none: 'Never asks' };
+const roleById = id => knowledge.roles.find(r => r.id === id);
+function roleChip(s) {
+  const r = s.role && roleById(s.role);
+  return r ? `<span class="role" title="${s.roleVia === 'guess' ? 'The local model guessed this role' : 'You gave it this role'}">${s.roleVia === 'guess' ? spark : ''}${esc(r.name)}</span>` : '';
+}
+function roleSelect(s) {
+  return `<select class="btn" data-change="liveRole" data-id="${s.id}" aria-label="Give this session a role">
+    <option value="">${s.role && s.roleVia === 'you' ? 'Change role…' : 'Role…'}</option>
+    ${knowledge.roles.filter(r => !(r.id === s.role && s.roleVia === 'you')).map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join('')}
+    ${s.role || s.roleVia !== 'you' ? '<option value="__none">No role</option>' : ''}
+    <option value="__new">New role…</option></select>`;
+}
+/* What a session's role keeps from Attention, when the user chose the role. */
+function roleNote(s) {
+  const r = s.roleVia === 'you' && roleById(s.role);
+  return r && r.attention !== 'all'
+    ? `<div class="none" style="margin-bottom:10px">As a ${esc(r.name)} session it ${r.attention === 'none' ? 'never shows under Attention' : 'shows under Attention only when it is stopped'}.</div>` : '';
+}
+
 function effortDetailLive(e) {
   const sess = live.filter(s => (s.effort || 'unsorted') === e.id);
   const needs = activeItems().filter(i => i.effort === e.id).sort(byUrgency);
@@ -797,7 +820,7 @@ function effortDetailLive(e) {
       ${sess.length ? sess.map(x => `<div class="srow"><span class="dot ${(LIVE_STATUS[x.status] || LIVE_STATUS.idle)[0]}"></span>
         <div class="body"><div class="ttl">${esc(clip(x.insight?.title || x.title || x.name, 90))}</div>
           <div class="sub">${(LIVE_STATUS[x.status] || LIVE_STATUS.idle)[1]} · <span class="mono">${esc(shortPath(x.cwd))}</span>${x.effortVia ? ` · ${VIA[x.effortVia]}` : ''}</div></div>
-        ${moveSelect(x)}</div>`).join('') : '<div class="none">None.</div>'}</div>
+        ${roleChip(x)}${moveSelect(x)}</div>`).join('') : '<div class="none">None.</div>'}</div>
     ${real ? `<div class="sec"><div class="label"><span>Open questions (${knowledge.questions.filter(q => q.effort === e.id).length})</span><button data-act="kbGo" data-s="questions">Manage ›</button></div>
       ${knowledge.questions.filter(q => q.effort === e.id).map(q => `<div class="srow"><div class="body">${esc(q.text)}</div><span class="side">${ago(minsSince(q.at))}</span></div>`).join('') || '<div class="none">None recorded.</div>'}</div>
     ${knowledge.watch.some(w => w.efforts.includes(e.id)) ? `<div class="sec"><div class="label"><span>Watching</span><button data-act="kbGo" data-s="watch">Manage ›</button></div>
@@ -887,7 +910,7 @@ function viewActivity() {
    service's session list; everything outside Activity is still mock data. */
 
 let live = null, liveItems = [], liveEfforts = [], summarizer = {}, settings = {}, isOffline = false;
-let knowledge = { watch: [], questions: [], context: [], routing: [] }, integrations = [], lookups = [], feeds = {}, pulls = [];
+let knowledge = { watch: [], questions: [], context: [], routing: [], roles: [] }, integrations = [], lookups = [], feeds = {}, pulls = [];
 const LIVE_STATUS = { waiting: ['waiting', 'awaiting you'], failed: ['error', 'failed'], working: ['running', 'working'], idle: ['idle', 'idle'], done: ['done', 'finished'] };
 const minsSince = iso => Math.max(0, (Date.now() - new Date(iso).getTime()) / 60000);
 const tilde = p => p.replace(/^\/Users\/[^/]+/, '~');
@@ -904,7 +927,7 @@ async function refresh(force) {
     liveItems = toItems(data);
     summarizer = data.summarizer || {};
     settings = data.settings || {};
-    knowledge = data.knowledge || knowledge;
+    knowledge = { roles: [], ...(data.knowledge || knowledge) };
     integrations = data.integrations || [];
     lookups = data.lookups || [];
     feeds = data.feeds || {};
@@ -996,10 +1019,10 @@ function liveItemDetail(it) {
     answer = `<div class="none">This session isn't running the Slorp mod, so answer it in its terminal: <span class="mono">${esc(shortPath(s.cwd))}</span></div>`;
   }
   return `<div class="inner">
-    <div class="crumb">${s.effort ? `<button class="eff" data-act="effort" data-id="${s.effort}">${esc(effortById(s.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${s.effortVia === 'guess' ? `<span>${spark}filed by the model</span>` : ''}${kindBadge(it.kind, it.src)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span>${s.branch ? `<span class="mono">${esc(s.branch)}</span>` : ''}</div>
+    <div class="crumb">${s.effort ? `<button class="eff" data-act="effort" data-id="${s.effort}">${esc(effortById(s.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${s.effortVia === 'guess' ? `<span>${spark}filed by the model</span>` : ''}${kindBadge(it.kind, it.src)}${roleChip(s)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span>${s.branch ? `<span class="mono">${esc(s.branch)}</span>` : ''}</div>
     <h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>
     <div class="need"><div class="label">${it.summary ? spark : ''}What's needed from you</div><p class="ask">${esc(it.ask)}</p>${answer}</div>
-    ${barFor(it, `${s.pending ? '' : `<button class="btn" data-act="livePark" data-id="${it.id}">Park as open question</button>`}${moveSelect(s)}`)}
+    ${barFor(it, `${s.pending ? '' : `<button class="btn" data-act="livePark" data-id="${it.id}">Park as open question</button>`}${moveSelect(s)}${roleSelect(s)}`)}
     <div class="sec"><div class="label"><span>${it.summary ? spark : ''}What's going on</span></div>
       <p class="prose">${it.summary ? esc(it.summary) : `<span class="none">${summarizer.model ? 'Not summarized yet.' : 'No local model is available to summarize this.'}</span>`}</p>
       ${(s.insight?.lookups || []).length ? `<div class="none" style="margin-top:8px">${spark}Checked ${esc(listOf(s.insight.lookups))} to write this.</div>` : ''}</div>
@@ -1040,7 +1063,8 @@ function liveDetail(s) {
         <button class="btn go" data-act="liveSend" data-id="${s.id}">Send</button></div>
         ${sent ? `<div class="sent">${sent}</div>` : ''}</div>`
     : `<div class="none" style="margin:10px 0 16px">This session isn't running the Slorp mod, so it can be watched but not replied to.</div>`;
-  return `${pending}${lines.length ? rawBlock(lines) : '<div class="none">No transcript found for this session.</div>'}${box}`;
+  return `${roleNote(s)}${pending}${lines.length ? rawBlock(lines) : '<div class="none">No transcript found for this session.</div>'}${box}
+    <div class="bar" style="margin:0 0 14px">${moveSelect(s)}${roleSelect(s)}</div>`;
 }
 
 function viewActivityLive() {
@@ -1056,7 +1080,7 @@ function viewActivityLive() {
     return `<tr class="s ${open ? 'open' : ''}" data-act="expand" data-id="${s.id}">
         <td class="st"><span class="dot ${dot}"></span>${label}${s.waitingFor ? `<div class="dim">${esc(s.waitingFor)}</div>` : ''}</td>
         <td><div>${what}</div>${state.fluent && sub ? `<div class="doing">${esc(clip(sub, 220))}</div>` : ''}</td>
-        <td class="dim">${kindBadge(s.agent)}${s.kind === 'background' ? ' · background' : ''}${s.canReply ? ' · connected' : ''}</td>
+        <td class="dim">${kindBadge(s.agent)}${s.kind === 'background' ? ' · background' : ''}${s.canReply ? ' · connected' : ''}${s.role ? `<div style="margin-top:5px">${roleChip(s)}</div>` : ''}</td>
         <td class="dim hide">${s.effort ? esc(effortById(s.effort).name) : ''}</td>
         <td class="dim hide mono" title="${esc(s.cwd)}">${esc(shortPath(s.cwd))}</td>
         <td class="dim hide">${span(minsSince(s.startedAt))}</td>
@@ -1151,10 +1175,11 @@ const KB_LIVE_LEDE = {
   questions: 'Things you have not decided yet. They show under their effort, and the model reads them when it writes that effort\'s status.',
   context: 'Facts the model should always know. It reads them before describing any session, so changing one re-describes everything.',
   routing: 'Plain-language notes on how to file things, read by the model when it guesses an effort. Directories that file automatically are listed under each effort.',
+  roles: 'The kinds of session you tell apart, such as one that reviews pull requests on a loop. Give a session a role from its bar under Attention or Activity. The local model guesses a role for the rest from what each role is about; a guess only labels a session, and never keeps it from asking for you.',
   integrations: 'Tools Slorp reads, and never changes. While one is on, Slorp checks it every few minutes for things that need you and lists them under Attention, with no model involved. The local model may also look things up in it while it describes a session: it picks from the lookups listed and supplies only a number and, where there are several, which repository.',
 };
 const kbData = () => live ? knowledge : state.kb;
-const kbSections = () => live ? { ...KB_SECTIONS, integrations: { name: 'Integrations' } } : KB_SECTIONS;
+const kbSections = () => live ? { ...KB_SECTIONS, roles: { name: 'Session roles' }, integrations: { name: 'Integrations' } } : KB_SECTIONS;
 const kbCount = k => k === 'integrations' ? integrations.filter(i => i.enabled).length : kbData()[k].length;
 
 function integrationsBody() {
@@ -1181,8 +1206,24 @@ function integrationsBody() {
     ${recent || '<div class="none">Nothing yet. Lookups appear here as the model makes them, and are forgotten when the service restarts.</div>'}</div>`;
 }
 
+function rolesBody() {
+  const options = cur => Object.entries(ATTENTION).map(([k, name]) => `<option value="${k}" ${k === cur ? 'selected' : ''}>${name}</option>`).join('');
+  const cards = knowledge.roles.map(r => {
+    const mine = live.filter(s => s.role === r.id), guessed = mine.filter(s => s.roleVia === 'guess').length;
+    return `<div class="card"><span class="glyph">${esc(r.name[0].toUpperCase())}</span>
+      <div class="body"><div class="nm">${esc(r.name)}</div>${r.about ? `<div class="why">${esc(r.about)}</div>` : ''}
+      <div class="meta" style="align-items:center"><select class="btn" data-change="roleAttention" data-id="${r.id}" aria-label="What sessions in this role may ask for">${options(r.attention)}</select>
+        <span>${mine.length ? `${plural(mine.length, 'open session')}${guessed ? `, ${num(guessed)} guessed by the model` : ''}` : 'no open sessions'}</span></div></div>
+      <button class="x" data-act="kbRemove" data-sec="roles" data-id="${r.id}" title="Remove" aria-label="Remove">×</button></div>`;
+  }).join('');
+  return `${cards}<form class="add" data-form="roles"><input name="name" data-keep="kb-roles-name" placeholder="Role, such as PR reviewer" required>
+    <input name="text" data-keep="kb-roles-text" placeholder="What its sessions do, for the model to recognise them">
+    <select name="type" data-keep="kb-roles-type" aria-label="What its sessions may ask for">${options('all')}</select><button class="btn go">Add</button></form>`;
+}
+
 function kbBody(sec) {
   if (sec === 'integrations') return integrationsBody();
+  if (sec === 'roles') return rolesBody();
   const list = kbData()[sec];
   const rm = id => `<button class="x" data-act="kbRemove" data-sec="${sec}" data-id="${id}" title="Remove" aria-label="Remove">×</button>`;
   if (sec === 'watch') return list.map(w => `<div class="card"><span class="glyph">${GLYPH[w.type]}</span>
@@ -1378,6 +1419,15 @@ const changes = {
     });
     return false;
   },
+  liveRole: (d, el) => {
+    const to = el.value;
+    if (!to) return false;
+    if (to === '__new') { state.kbSel = 'roles'; go('knowledge'); return; }
+    const role = to === '__none' ? '' : to;
+    api('POST', `/api/sessions/${d.id}/role`, { role }, () => toast(role ? `Marked as ${roleById(role).name}` : 'No role'));
+    return false;
+  },
+  roleAttention: (d, el) => { api('POST', `/api/roles/${d.id}`, { attention: el.value }); return false; },
   repoMove: (d, el) => {
     const to = el.value, it = itemById(d.id);
     if (!to) return false;

@@ -554,3 +554,49 @@ func TestFeedIsCollectedWhenAsked(t *testing.T) {
 		t.Error("a refused edit caused a rescan")
 	}
 }
+
+func TestRolesOverHTTP(t *testing.T) {
+	f := newFixture(t)
+	f.connect("s1")
+	if code := f.post("/api/kb/roles", `{"name":"Reviewer","text":"Reviews pull requests","type":"stopped"}`); code != 204 {
+		t.Fatalf("add a role = %d", code)
+	}
+	roles := f.state().Knowledge.Roles
+	if len(roles) != 1 || roles[0].Name != "Reviewer" || roles[0].About != "Reviews pull requests" || roles[0].Attention != kb.AttentionStopped {
+		t.Fatalf("roles = %+v", roles)
+	}
+	id := roles[0].ID
+	_, body := f.do("GET", "/api/sessions", "", nil)
+	for _, field := range []string{`"roles":[{"id":"` + id + `","name":"Reviewer","about":"Reviews pull requests","attention":"stopped"}]`, `"role":""`} {
+		if !strings.Contains(body, field) {
+			t.Errorf("state lacks %s, which the page reads: %s", field, body)
+		}
+	}
+
+	if code := f.post("/api/sessions/s1/role", `{"role":"`+id+`"}`); code != 204 {
+		t.Fatalf("give a session a role = %d", code)
+	}
+	if s := f.state().Sessions[0]; s.Role != id || s.RoleVia != kb.ViaUser {
+		t.Errorf("session role %q via %q, want the user's choice", s.Role, s.RoleVia)
+	}
+	if code := f.post("/api/roles/"+id, `{"attention":"none"}`); code != 204 || f.state().Knowledge.Roles[0].Attention != kb.AttentionNone {
+		t.Errorf("change a role's attention = %d, roles %+v", code, f.state().Knowledge.Roles)
+	}
+	for what, req := range map[string][2]string{
+		"a role that does not exist":       {"/api/sessions/s1/role", `{"role":"nope"}`},
+		"a malformed choice of role":       {"/api/sessions/s1/role", `{`},
+		"an attention that does not exist": {"/api/roles/" + id, `{"attention":"loud"}`},
+		"attention for an unknown role":    {"/api/roles/nope", `{"attention":"none"}`},
+		"a malformed change of attention":  {"/api/roles/" + id, `{`},
+	} {
+		if code := f.post(req[0], req[1]); code != 400 {
+			t.Errorf("%s = %d, want 400", what, code)
+		}
+	}
+	if code := f.post("/api/sessions/s1/role", `{"role":""}`); code != 204 || f.state().Sessions[0].Role != "" || f.state().Sessions[0].RoleVia != kb.ViaUser {
+		t.Errorf("give a session no role = %d, session %+v", code, f.state().Sessions[0])
+	}
+	if code, _ := f.do("DELETE", "/api/kb/roles/"+id, "", nil); code != 204 || len(f.state().Knowledge.Roles) != 0 {
+		t.Errorf("remove a role = %d, roles %+v", code, f.state().Knowledge.Roles)
+	}
+}

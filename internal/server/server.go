@@ -157,6 +157,26 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, uiPath s
 		edited(w, k.Assign(r.PathValue("id"), in.Effort))
 	})
 
+	mux.HandleFunc("POST /api/sessions/{id}/role", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Role string `json:"role"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		edited(w, k.SetRole(r.PathValue("id"), in.Role))
+	})
+
+	mux.HandleFunc("POST /api/roles/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Attention string `json:"attention"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		edited(w, k.SetRoleAttention(r.PathValue("id"), in.Attention))
+	})
+
 	mux.HandleFunc("POST /api/repos/effort", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Repo   string `json:"repo"`

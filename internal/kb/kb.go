@@ -47,6 +47,10 @@ type file struct {
 	// Assignments maps a session ID to the effort the user filed it under;
 	// an empty effort means the user chose to leave it unsorted.
 	Assignments map[string]string `json:"assignments"`
+	// SessionRoles maps a session ID to the role the user gave it; an empty
+	// role means the user chose to give it none.
+	SessionRoles map[string]string `json:"sessionRoles"`
+	RoleRevision int               `json:"roleRevision"`
 }
 
 type Store struct {
