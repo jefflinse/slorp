@@ -16,6 +16,8 @@ let base = ''
 let cwd = ''
 /** What the session's model can take, in tokens; zero until the engine says. */
 let contextWindow = 0
+/** The engine's estimate of the session's cost so far, in US dollars. */
+let costUsd = 0
 let isPolling = false
 
 async function post($: EngineInterface, path: string, body: object) {
@@ -34,6 +36,11 @@ function report($: EngineInterface, type: string, fields: object = {}) {
     .catch(() => {})
 }
 
+function measured(window: number, usd: number | undefined) {
+  contextWindow = window
+  costUsd = usd ?? costUsd
+}
+
 async function deliver($: EngineInterface, reply: Reply) {
   const sent = await $.prompt.submit({ text: reply.text, asUser: true })
   const state = sent.drop === undefined ? 'delivered' : 'dropped'
@@ -45,7 +52,7 @@ async function poll($: EngineInterface) {
   isPolling = true
   try {
     const sessionId = await $.session.id()
-    const claimed = await post($, '/api/bridge/poll', { agent: AGENT, sessionId, cwd, contextWindow })
+    const claimed = await post($, '/api/bridge/poll', { agent: AGENT, sessionId, cwd, contextWindow, costUsd })
     for (const reply of (claimed?.replies ?? []) as Reply[]) {
       void deliver($, reply).catch(() => {})
     }
@@ -98,7 +105,7 @@ async function askSlorp($: EngineInterface, tool: string, input: unknown, abando
  * to Slorp as well as the terminal's own dialog, and whichever the user
  * answers first decides it; a question is answered there with the options
  * the user picked. Each poll also carries the size of the model's context
- * window.
+ * window and the engine's estimate of the session's cost.
  */
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
@@ -106,14 +113,14 @@ export const register: Register = (on, options) => {
     cwd = e.cwd
     void $.session
       .usage()
-      .then(usage => void (contextWindow = usage.context.window))
+      .then(usage => measured(usage.context.window, usage.cost?.usd))
       .catch(() => {})
     $.clock.every(POLL_MS, () => void poll($))
     return next(e)
   })
 
   on('session.measure', ($, e, next) => {
-    contextWindow = e.context.window
+    measured(e.context.window, e.cost?.usd)
     return next(e)
   })
 

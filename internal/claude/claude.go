@@ -88,7 +88,7 @@ func (a *Adapter) poll(ctx context.Context) error {
 		if t := a.tail(r.SessionID); t != nil {
 			t.read()
 			s.Title, s.Branch, s.LastPrompt, s.LastReply = t.title, t.branch, t.lastPrompt, t.lastReply
-			s.Model, s.Reasoning, s.ContextTokens = t.model, t.reasoning, t.contextTokens
+			s.Model, s.Reasoning, s.ContextTokens, s.Used = t.model, t.reasoning, t.contextTokens, t.used
 			if !t.modTime.IsZero() {
 				s.ActiveAt = t.modTime
 			}
@@ -137,6 +137,10 @@ type tail struct {
 	model, reasoning                     string
 	// contextTokens is zero from a compaction until the next response.
 	contextTokens int
+	// used totals every response in the file, subagents' included. counted
+	// holds each response's share, as one is written once per block.
+	used    hub.Tokens
+	counted map[string]hub.Tokens
 }
 
 type entry struct {
@@ -150,11 +154,13 @@ type entry struct {
 	Effort      string `json:"effort"`
 	Message     struct {
 		Content json.RawMessage `json:"content"`
+		ID      string          `json:"id"`
 		Model   string          `json:"model"`
 		Usage   struct {
 			Input      int `json:"input_tokens"`
 			CacheWrite int `json:"cache_creation_input_tokens"`
 			CacheRead  int `json:"cache_read_input_tokens"`
+			Output     int `json:"output_tokens"`
 		} `json:"usage"`
 	} `json:"message"`
 }
@@ -213,7 +219,14 @@ func (t *tail) apply(line []byte) {
 		return
 	}
 	var e entry
-	if json.Unmarshal(line, &e) != nil || e.IsSidechain {
+	if json.Unmarshal(line, &e) != nil {
+		return
+	}
+	if e.Type == "assistant" && e.Message.ID != "" {
+		u := e.Message.Usage
+		t.count(e.Message.ID, hub.Tokens{In: u.Input, CacheWrite: u.CacheWrite, CacheRead: u.CacheRead, Out: u.Output})
+	}
+	if e.IsSidechain {
 		return
 	}
 	if e.GitBranch != "" {
@@ -247,6 +260,20 @@ func (t *tail) apply(line []byte) {
 			t.contextTokens = 0
 		}
 	}
+}
+
+// count makes now the share of the response id in the total, in place of
+// whatever an earlier block of it reported.
+func (t *tail) count(id string, now hub.Tokens) {
+	if t.counted == nil {
+		t.counted = map[string]hub.Tokens{}
+	}
+	was := t.counted[id]
+	t.counted[id] = now
+	t.used.In += now.In - was.In
+	t.used.CacheWrite += now.CacheWrite - was.CacheWrite
+	t.used.CacheRead += now.CacheRead - was.CacheRead
+	t.used.Out += now.Out - was.Out
 }
 
 func assistantText(content json.RawMessage) string {

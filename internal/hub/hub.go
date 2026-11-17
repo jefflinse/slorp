@@ -78,6 +78,12 @@ type Session struct {
 	// ContextWindow how much the model can take. Zero is unknown.
 	ContextTokens int `json:"contextTokens,omitempty"`
 	ContextWindow int `json:"contextWindow,omitempty"`
+	// Used is what the session's responses have taken so far, as far as its
+	// agent recorded them.
+	Used Tokens `json:"used"`
+	// CostUSD is the agent's own estimate of what the session has cost, zero
+	// when it gave none.
+	CostUSD float64 `json:"costUsd,omitempty"`
 
 	bridgeSeen time.Time
 	key        string
@@ -90,6 +96,16 @@ type Session struct {
 	roleKey    string
 	// attention is what the session's role lets through, when the user chose it.
 	attention string
+}
+
+// Tokens counts what a session's responses took, by how each is charged.
+type Tokens struct {
+	// In was sent fresh, CacheWrite sent and kept, CacheRead reused.
+	In         int `json:"in"`
+	CacheWrite int `json:"cacheWrite"`
+	CacheRead  int `json:"cacheRead"`
+	// Out is what the model wrote.
+	Out int `json:"out"`
 }
 
 // ViaGuess marks a filing the model chose, as opposed to the user or a rule.
@@ -434,7 +450,7 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 			s.key, s.keySince, s.insightKey, s.Insight = old.key, old.keySince, old.insightKey, old.Insight
 			s.guess, s.guessKey, s.insightAt = old.guess, old.guessKey, old.insightAt
 			s.roleGuess, s.roleKey = old.roleGuess, old.roleKey
-			s.ContextWindow = old.ContextWindow
+			s.ContextWindow, s.CostUSD = old.ContextWindow, old.CostUSD
 			// The roster stops saying "waiting" once the terminal's dialog is
 			// answered. A request it has not caught up with yet is kept.
 			if p := old.Pending; p != nil && (s.Status == Waiting || time.Since(p.At) < pendingGrace) {

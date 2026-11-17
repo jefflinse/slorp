@@ -1,6 +1,6 @@
 {
   "name": "slorp",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Connects this session to the local Slorp service: reports what the session is doing, delivers replies written in Slorp, and lets Slorp answer its permission prompts.",
   "author": {
     "name": "Jeff Linse"

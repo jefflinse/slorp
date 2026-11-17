@@ -861,6 +861,18 @@ function modelName(id) {
   return out.join(' ');
 }
 const tokens = n => n >= 999500 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
+const money = n => '$' + (n >= 100 ? Math.round(n) : n.toFixed(2));
+/* What the open sessions have used between them, for the top bar. */
+function usageTotal() {
+  const of = s => (s.used?.in || 0) + (s.used?.cacheWrite || 0) + (s.used?.cacheRead || 0) + (s.used?.out || 0);
+  const counted = live.filter(of), all = counted.reduce((n, s) => n + of(s), 0);
+  if (!all) return '';
+  const sum = k => tokens(counted.reduce((n, s) => n + s.used[k], 0));
+  const priced = live.filter(s => s.costUsd), usd = priced.reduce((n, s) => n + s.costUsd, 0);
+  const about = `Used by the ${num(counted.length)} open session${counted.length === 1 ? '' : 's'} with a transcript, since each began: ${sum('in')} sent fresh, ${sum('cacheWrite')} written to the cache, ${sum('cacheRead')} read back from it, ${sum('out')} written by the model. `
+    + (priced.length ? `The cost is each agent's own estimate at list prices, from ${priced.length === live.length ? 'all of them' : `${num(priced.length)} of the ${num(live.length)} open`}; inside a subscription it is not a charge.` : 'No session has reported what it cost.');
+  return `<span class="model" id="used" title="${esc(about)}">${tokens(all)} tokens${priced.length ? ` · ≈${money(usd)}` : ''}</span>`;
+}
 function runsOn(s) {
   return [s.model && esc(modelName(s.model)), s.reasoning && `<span title="Reasoning effort">${esc(s.reasoning)}</span>`].filter(Boolean).join(' · ');
 }
@@ -1473,7 +1485,7 @@ function render() {
   const n = activeItems().length;
   $('#nav').innerHTML = VIEWS.map(v => `<button class="${state.view === v ? 'on' : ''}" data-act="view" data-view="${v}">${VIEW_NAMES[v] || cap(v)}${v === 'attention' && n ? `<span class="count">${n}</span>` : ''}</button>`).join('');
   $('#tools').innerHTML = `
-    <span class="model"><span class="dot ${live && isOffline ? 'error' : 'running'}"></span>${live ? (isOffline ? 'service offline' : `live · ${summarizer.model ? summarizer.model.split('/').pop() : summarizer.error || 'no local model'}`) : 'qwen3:14b · local · caught up'}</span>
+    <span class="model"><span class="dot ${live && isOffline ? 'error' : 'running'}"></span>${live ? (isOffline ? 'service offline' : `live · ${summarizer.model ? summarizer.model.split('/').pop() : summarizer.error || 'no local model'}`) : 'qwen3:14b · local · caught up'}</span>${live ? usageTotal() : ''}
     <span class="seg" role="group" aria-label="Voice" title="Fluent shows what the model wrote. Raw shows what the sources said. (r)">
       <button class="${state.fluent ? 'on' : ''}" data-act="fluent" data-on="1">Fluent</button><button class="${state.fluent ? '' : 'on'}" data-act="fluent" data-on="0">Raw</button></span>
     <button class="icon" data-act="theme" title="Light or dark" aria-label="Toggle theme">◐</button>

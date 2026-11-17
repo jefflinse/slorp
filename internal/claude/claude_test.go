@@ -129,6 +129,35 @@ func TestTailReadsWhatTheModelWasGiven(t *testing.T) {
 	}
 }
 
+// block is one content block of the response id, carrying the usage the
+// response had reported by then.
+func block(id string, fresh, written, read, out int) map[string]any {
+	e := answered("claude-fable-5-2", "high", fresh, written, read, text("x"))
+	m := e["message"].(map[string]any)
+	m["id"] = id
+	m["usage"].(map[string]any)["output_tokens"] = out
+	return e
+}
+
+func TestTailTotalsWhatWasUsed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	side := block("msg_side", 5, 0, 100, 7)
+	side["isSidechain"] = true
+
+	appendTo(t, path, line(t, block("msg_1", 1, 20, 300, 4))+line(t, block("msg_2", 2, 0, 320, 10)))
+	tl := &tail{path: path}
+	tl.read()
+	appendTo(t, path, line(t, block("msg_1", 1, 20, 300, 60))+line(t, side))
+	tl.read()
+
+	if want := (hub.Tokens{In: 8, CacheWrite: 20, CacheRead: 720, Out: 77}); tl.used != want {
+		t.Errorf("used = %+v, want %+v: each response once, at what it last reported, subagents' included", tl.used, want)
+	}
+	if tl.contextTokens != 321 {
+		t.Errorf("context = %d tokens; a subagent's response is not what the session was last answered over", tl.contextTokens)
+	}
+}
+
 func TestTailReadsIncrementally(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	appendTo(t, path, line(t, assistant(text("first"))))
@@ -230,7 +259,7 @@ func TestPollBuildsTheRoster(t *testing.T) {
 	if err := os.MkdirAll(project, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	appendTo(t, filepath.Join(project, "aaa.jsonl"), line(t, map[string]any{"type": "ai-title", "aiTitle": "Session A"})+line(t, user("go"))+line(t, answered("claude-fable-5-2", "high", 10, 20, 30, text("May I run this?"))))
+	appendTo(t, filepath.Join(project, "aaa.jsonl"), line(t, map[string]any{"type": "ai-title", "aiTitle": "Session A"})+line(t, user("go"))+line(t, block("msg_1", 10, 20, 30, 900)))
 
 	st := testdb.Open(t)
 	h := hub.New(testdb.KB(t, st), st)
@@ -250,11 +279,11 @@ func TestPollBuildsTheRoster(t *testing.T) {
 	if sa.Agent != Agent || sa.Status != hub.Waiting || sa.WaitingFor != "permission prompt" || sa.Cwd != "/w/a" || sa.Name != "a-1" {
 		t.Errorf("session from the roster: %+v", sa)
 	}
-	if sa.Title != "Session A" || sa.LastPrompt != "go" || sa.LastReply != "May I run this?" || sa.Branch != "feat/x" {
+	if sa.Title != "Session A" || sa.LastPrompt != "go" || sa.LastReply != "x" || sa.Branch != "feat/x" {
 		t.Errorf("session was not filled in from its transcript: %+v", sa)
 	}
-	if sa.Model != "claude-fable-5-2" || sa.Reasoning != "high" || sa.ContextTokens != 60 {
-		t.Errorf("model %q, reasoning %q, %d tokens; want them from the transcript", sa.Model, sa.Reasoning, sa.ContextTokens)
+	if sa.Model != "claude-fable-5-2" || sa.Reasoning != "high" || sa.ContextTokens != 60 || sa.Used != (hub.Tokens{In: 10, CacheWrite: 20, CacheRead: 30, Out: 900}) {
+		t.Errorf("model %q, reasoning %q, %d tokens, used %+v; want them from the transcript", sa.Model, sa.Reasoning, sa.ContextTokens, sa.Used)
 	}
 	if sa.StartedAt.UnixMilli() != 1700000000000 || !sa.ActiveAt.After(sa.StartedAt) {
 		t.Errorf("times: started %v, active %v; want the roster's start and the transcript's last write", sa.StartedAt, sa.ActiveAt)

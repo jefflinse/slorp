@@ -798,11 +798,11 @@ func TestSetRoster(t *testing.T) {
 	h, _, _ := newHub(t)
 	h.SetRoster(agent, []Session{idle("a", "/w", "from the transcript")})
 	h.SetRoster("opencode", []Session{{ID: "o", Agent: "opencode", Status: Idle}})
-	h.Apply(agent, "a", func(s *Session) { s.LastPrompt, s.ContextWindow = "from the bridge", 200000 })
+	h.Apply(agent, "a", func(s *Session) { s.LastPrompt, s.ContextWindow, s.CostUSD = "from the bridge", 200000, 1.5 })
 
 	h.SetRoster(agent, []Session{{ID: "a", Agent: agent, Status: Working}, idle("b", "/w", "")})
 	a := session(t, h, "a")
-	if a.LastReply != "from the transcript" || a.LastPrompt != "from the bridge" || !a.CanReply || a.ContextWindow != 200000 {
+	if a.LastReply != "from the transcript" || a.LastPrompt != "from the bridge" || !a.CanReply || a.ContextWindow != 200000 || a.CostUSD != 1.5 {
 		t.Errorf("a roster with less detail erased what was known: %+v", a)
 	}
 	session(t, h, "o")

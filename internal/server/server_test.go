@@ -129,6 +129,24 @@ func TestBridgeSaysHowMuchItsModelCanTake(t *testing.T) {
 	}
 }
 
+func TestBridgeSaysWhatItsSessionHasCost(t *testing.T) {
+	f := newFixture(t)
+	cost := func() float64 { return f.state().Sessions[0].CostUSD }
+
+	f.post("/api/bridge/poll", `{"sessionId":"s1","costUsd":1.25}`)
+	if got := cost(); got != 1.25 {
+		t.Fatalf("cost = %v, want what the bridge reported", got)
+	}
+	f.post("/api/bridge/poll", `{"sessionId":"s1"}`)
+	if got := cost(); got != 1.25 {
+		t.Errorf("cost = %v; a bridge with no estimate erased the last one", got)
+	}
+	f.post("/api/bridge/poll", `{"sessionId":"s1","costUsd":2.5}`)
+	if got := cost(); got != 2.5 {
+		t.Errorf("cost = %v after the session went on", got)
+	}
+}
+
 func TestRefusesRequestsAWebPageElsewhereCouldCause(t *testing.T) {
 	f := newFixture(t)
 	f.connect("s1")

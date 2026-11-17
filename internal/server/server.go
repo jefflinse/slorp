@@ -203,6 +203,8 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, uiPath s
 			Branch    string `json:"branch"`
 			// ContextWindow is what the session's model can take, in tokens.
 			ContextWindow int `json:"contextWindow"`
+			// CostUSD is the agent's own estimate of the session's cost so far.
+			CostUSD float64 `json:"costUsd"`
 		}
 		if !readJSON(w, r, &in) || in.SessionID == "" {
 			return
@@ -214,6 +216,9 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, uiPath s
 		fresh := h.Apply(agent, in.SessionID, func(s *hub.Session) {
 			if in.ContextWindow > 0 {
 				s.ContextWindow = in.ContextWindow
+			}
+			if in.CostUSD > 0 {
+				s.CostUSD = in.CostUSD
 			}
 			if s.Cwd == "" {
 				s.Cwd = in.Cwd
