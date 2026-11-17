@@ -80,7 +80,8 @@ type PullRequest struct {
 	ChangesRequested int `json:"changesRequested"`
 	// Awaiting counts the reviewers asked who have not answered.
 	Awaiting int `json:"awaiting"`
-	// Checks is "passing", "failing", "running" or "none".
+	// Checks is "passing", "failing", "running", "none", or "unknown" when the
+	// tool did not say.
 	Checks string `json:"checks"`
 	// Conflicts is true when it cannot merge into its base branch as it stands.
 	Conflicts bool `json:"conflicts"`

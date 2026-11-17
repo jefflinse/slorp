@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -21,18 +22,38 @@ const (
 	FeedReady     = "ready-to-merge"
 )
 
-// feedQuery asks, in one read-only request, for the user's open pull
-// requests and the open ones waiting on their review.
-const feedQuery = `query {
-  mine: search(query: "is:pr is:open author:@me archived:false", type: ISSUE, first: 50) { nodes { ...pr } }
-  review: search(query: "is:pr is:open review-requested:@me archived:false", type: ISSUE, first: 50) { nodes { ...pr } }
+// The pull requests the feed is about, as GitHub's search names them.
+const (
+	mineSearch   = "is:pr is:open author:@me archived:false"
+	reviewSearch = "is:pr is:open review-requested:@me archived:false"
+)
+
+// listQuery asks, in one read-only request, which pull requests those are,
+// leaving out everything GitHub has to work out for each one.
+const listQuery = `query {
+  mine: search(query: "` + mineSearch + `", type: ISSUE, first: 50) { nodes { ...pr } }
+  review: search(query: "` + reviewSearch + `", type: ISSUE, first: 50) { nodes { ...pr } }
 }
-fragment pr on PullRequest { number title url isDraft updatedAt reviewDecision mergeable headRefOid
+fragment pr on PullRequest { number title url isDraft updatedAt reviewDecision headRefOid
   author { login __typename }
-  repository { nameWithOwner viewerPermission }
-  reviewRequests { totalCount }
-  latestOpinionatedReviews(first: 50) { nodes { state } }
-  commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } }`
+  repository { nameWithOwner viewerPermission } }`
+
+// detailQuery asks how one page of a search's pull requests stand. GitHub
+// works these fields out as it answers, and gives up on a request that asks
+// for too many at once.
+const detailQuery = `query($q: String!, $after: String) {
+  search(query: $q, type: ISSUE, first: 10, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    nodes { ... on PullRequest { number mergeable
+      repository { nameWithOwner }
+      reviewRequests { totalCount }
+      latestOpinionatedReviews(first: 50) { nodes { state } }
+      commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } }
+  }
+}`
+
+// detailPages caps how many pages of one search are asked about.
+const detailPages = 5
 
 var githubWatches = []string{
 	"Pull requests where your review is requested.",
@@ -81,7 +102,12 @@ type feedPR struct {
 			} `json:"commit"`
 		} `json:"nodes"`
 	} `json:"commits"`
+
+	// detailed is true once GitHub has said how the pull request stands.
+	detailed bool
 }
+
+func (p feedPR) key() string { return fmt.Sprintf("%s#%d", p.Repository.Name, p.Number) }
 
 // checks is the state of the pull request's newest commit, empty when it has
 // no checks.
@@ -94,26 +120,83 @@ func (p feedPR) checks() string {
 
 func githubFeed(run Runner) func(ctx context.Context) (Found, error) {
 	return func(ctx context.Context) (Found, error) {
-		out, err := run(ctx, "", "gh", "api", "graphql", "-f", "query="+feedQuery)
-		if err != nil {
-			return Found{}, err
-		}
-		var res struct {
+		var listed struct {
 			Data struct {
 				Mine   struct{ Nodes []feedPR } `json:"mine"`
 				Review struct{ Nodes []feedPR } `json:"review"`
 			} `json:"data"`
 		}
-		if json.Unmarshal(out, &res) != nil {
-			return Found{}, errors.New("gh returned something unreadable")
+		if err := ask(ctx, run, &listed, listQuery); err != nil {
+			return Found{}, err
 		}
-		return survey(res.Data.Mine.Nodes, res.Data.Review.Nodes), nil
+		mine, review := listed.Data.Mine.Nodes, listed.Data.Review.Nodes
+		detail(ctx, run, mineSearch, mine)
+		detail(ctx, run, reviewSearch, review)
+		return survey(mine, review), nil
+	}
+}
+
+// ask runs one read-only GraphQL query through gh, a second time if the
+// first fails, and decodes the answer into v. vars are "name=value".
+func ask(ctx context.Context, run Runner, v any, query string, vars ...string) error {
+	argv := []string{"gh", "api", "graphql", "-f", "query=" + query}
+	for _, kv := range vars {
+		argv = append(argv, "-f", kv)
+	}
+	out, err := run(ctx, "", argv...)
+	if err != nil {
+		out, err = run(ctx, "", argv...)
+	}
+	if err != nil {
+		return err
+	}
+	if json.Unmarshal(out, v) != nil {
+		return errors.New("gh returned something unreadable")
+	}
+	return nil
+}
+
+// detail fills in how the listed pull requests of one search stand, a page
+// at a time. Those on a page GitHub will not answer for, and on the pages
+// after it, are left undetailed.
+func detail(ctx context.Context, run Runner, search string, listed []feedPR) {
+	byKey := map[string]*feedPR{}
+	for i := range listed {
+		byKey[listed[i].key()] = &listed[i]
+	}
+	vars := []string{"q=" + search}
+	for page := 0; page < detailPages && len(listed) > 0; page++ {
+		var res struct {
+			Data struct {
+				Search struct {
+					PageInfo struct {
+						HasNextPage bool   `json:"hasNextPage"`
+						EndCursor   string `json:"endCursor"`
+					} `json:"pageInfo"`
+					Nodes []feedPR `json:"nodes"`
+				} `json:"search"`
+			} `json:"data"`
+		}
+		if err := ask(ctx, run, &res, detailQuery, vars...); err != nil {
+			log.Printf("github: how some pull requests stand is unknown: %v", err)
+			return
+		}
+		for _, d := range res.Data.Search.Nodes {
+			if p := byKey[d.key()]; p != nil {
+				p.Mergeable, p.ReviewRequests, p.Reviews, p.Commits, p.detailed = d.Mergeable, d.ReviewRequests, d.Reviews, d.Commits, true
+			}
+		}
+		if !res.Data.Search.PageInfo.HasNextPage {
+			return
+		}
+		vars = []string{"q=" + search, "after=" + res.Data.Search.PageInfo.EndCursor}
 	}
 }
 
 // survey lists every pull request and picks out, as items, those waiting on
 // the user. Drafts, and a pull request of the user's still waiting on
-// someone else, are listed but are not items.
+// someone else, are listed but are not items. Nothing is concluded from
+// checks or mergeability GitHub did not report.
 func survey(mine, review []feedPR) Found {
 	found := Found{Items: []FeedItem{}, PullRequests: []PullRequest{}}
 	for _, p := range mine {
@@ -126,12 +209,15 @@ func survey(mine, review []feedPR) Found {
 		canMerge := p.Repository.Permission == "ADMIN" || p.Repository.Permission == "MAINTAIN" || p.Repository.Permission == "WRITE"
 		pr := p.pull(true)
 		it := p.item("opened by you")
-		it.Summary += fmt.Sprintf(" Review: %s. Checks: %s.%s",
-			orWord(strings.ToLower(strings.ReplaceAll(p.ReviewDecision, "_", " ")), "none required"),
-			orWord(checkWords[p.checks()], "still running"), mergeWords[p.Mergeable])
+		it.Summary += fmt.Sprintf(" Review: %s.", orWord(strings.ToLower(strings.ReplaceAll(p.ReviewDecision, "_", " ")), "none required"))
+		if p.detailed {
+			it.Summary += fmt.Sprintf(" Checks: %s.%s", orWord(checkWords[p.checks()], "still running"), mergeWords[p.Mergeable])
+		}
 		switch {
 		case p.IsDraft:
 			pr.Needs = "Still a draft."
+		case !p.detailed && p.ReviewDecision != "CHANGES_REQUESTED":
+			pr.Needs = "GitHub did not say how this one stands."
 		case failing:
 			it.Kind, it.Urgency, pr.Needs = FeedChecks, "soon", "Checks are failing."
 			it.Title, it.Ask = "Checks failing: "+p.Title, "Checks are failing on your pull request. Fix them or run them again."
@@ -191,6 +277,9 @@ func survey(mine, review []feedPR) Found {
 func (p feedPR) pull(mine bool) PullRequest {
 	pr := PullRequest{Repo: p.Repository.Name, Number: p.Number, Title: p.Title, Author: p.Author.Login, Mine: mine, Draft: p.IsDraft,
 		At: p.UpdatedAt, Awaiting: p.ReviewRequests.TotalCount, Checks: orWord(checkWords[p.checks()], "running"), Conflicts: p.Mergeable == "CONFLICTING"}
+	if !p.detailed {
+		pr.Checks = "unknown"
+	}
 	if strings.HasPrefix(p.URL, "https://") {
 		pr.URL = p.URL
 	}

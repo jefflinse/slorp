@@ -8,10 +8,68 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
+
+// github stands in for gh talking to GitHub: it answers the feed's listing
+// and detail queries from the pull requests it holds, ten details to a page.
+type github struct {
+	mine, review []node
+	// fail names the requests, counted from 1, that GitHub answers with an error.
+	fail map[int]bool
+	// endless makes every page of details claim another follows.
+	endless bool
+	calls   [][]string
+}
+
+var detailFields = []string{"mergeable", "reviewRequests", "latestOpinionatedReviews", "commits"}
+
+// only copies the named fields of each node, or with drop every other field.
+func only(in []node, fields []string, drop bool) []node {
+	out := []node{}
+	for _, p := range in {
+		c := node{}
+		for k, v := range p {
+			if slices.Contains(fields, k) != drop {
+				c[k] = v
+			}
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+func (g *github) run(_ context.Context, dir string, argv ...string) ([]byte, error) {
+	g.calls = append(g.calls, argv)
+	if g.fail[len(g.calls)] {
+		return nil, errors.New("HTTP 502: Bad Gateway")
+	}
+	vars := map[string]string{}
+	for i := 4; i < len(argv); i += 2 {
+		k, v, _ := strings.Cut(argv[i], "=")
+		vars[k] = v
+	}
+	switch {
+	case dir != "" || len(argv) < 5 || !reflect.DeepEqual(argv[:4], []string{"gh", "api", "graphql", "-f"}):
+	case vars["query"] == listQuery:
+		return json.Marshal(node{"data": node{"mine": node{"nodes": only(g.mine, detailFields, true)}, "review": node{"nodes": only(g.review, detailFields, true)}}})
+	case vars["query"] == detailQuery && (vars["q"] == mineSearch || vars["q"] == reviewSearch):
+		all := g.mine
+		if vars["q"] == reviewSearch {
+			all = g.review
+		}
+		from, _ := strconv.Atoi(vars["after"])
+		to := min(from+10, len(all))
+		return json.Marshal(node{"data": node{"search": node{
+			"pageInfo": node{"hasNextPage": to < len(all) || g.endless, "endCursor": strconv.Itoa(to)},
+			"nodes":    only(all[from:to], append([]string{"number", "repository"}, detailFields...), false)}}})
+	}
+	return nil, fmt.Errorf("not a request the feed makes: %q in %q", argv, dir)
+}
 
 type node map[string]any
 
@@ -66,11 +124,7 @@ func permission(level string) func(node) {
 // surveyed runs the GitHub feed against a gh that answers with those nodes.
 func surveyed(t *testing.T, mine, review []node) Found {
 	t.Helper()
-	b, err := json.Marshal(node{"data": node{"mine": node{"nodes": mine}, "review": node{"nodes": review}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := GitHub((&recorder{out: string(b)}).run).Feed(ctx)
+	got, err := GitHub((&github{mine: mine, review: review}).run).Feed(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +194,7 @@ func TestFeedPicksOutYourPullRequestsThatNeedYou(t *testing.T) {
 }
 
 func TestFeedItemSaysWhatItIsAbout(t *testing.T) {
-	got := collect(t, []node{own(nil), own(both(checks("FAILURE"), set("reviewDecision", "CHANGES_REQUESTED"), set("mergeable", "CONFLICTING")))}, nil)
+	got := collect(t, []node{own(nil), own(both(set("number", 8), checks("FAILURE"), set("reviewDecision", "CHANGES_REQUESTED"), set("mergeable", "CONFLICTING")))}, nil)
 	ready, failing := got[0], got[1]
 	want := FeedItem{
 		Key: "Acme/Widgets#7:ready-to-merge", Kind: FeedReady, Urgency: "whenever",
@@ -155,7 +209,7 @@ func TestFeedItemSaysWhatItIsAbout(t *testing.T) {
 		t.Errorf("ready ask = %q", ready.Ask)
 	}
 	if failing.Title != "Checks failing: Add a thing" || !strings.Contains(failing.Ask, "failing") ||
-		failing.Summary != "Acme/Widgets#7, opened by you. Review: changes requested. Checks: failing. It conflicts with its base branch." {
+		failing.Summary != "Acme/Widgets#8, opened by you. Review: changes requested. Checks: failing. It conflicts with its base branch." {
 		t.Errorf("failing item = %+v", failing)
 	}
 
@@ -290,23 +344,140 @@ func TestFeedSaysHowAPullRequestStands(t *testing.T) {
 	}
 }
 
-func TestFeedRunsOneFixedReadOnlyQuery(t *testing.T) {
+// requested is n pull requests waiting on the user's review, numbered from
+// 100, each conflicting with its base.
+func requested(n int) []node {
+	out := []node{}
+	for i := range n {
+		out = append(out, asked(both(set("number", 100+i), set("mergeable", "CONFLICTING"))))
+	}
+	return out
+}
+
+func TestFeedMakesOnlyFixedReadOnlyRequests(t *testing.T) {
 	r := &recorder{out: `{"data":{"mine":{"nodes":[]},"review":{"nodes":[]}}}`}
 	got, err := GitHub(r.run).Feed(ctx)
 	if err != nil || got.Items == nil || len(got.Items) != 0 || got.PullRequests == nil || len(got.PullRequests) != 0 {
 		t.Fatalf("Feed = %+v, %v; want two empty lists", got, err)
 	}
-	want := []string{"gh", "api", "graphql", "-f", "query=" + feedQuery}
-	if !reflect.DeepEqual(r.argv, want) || r.dir != "" {
-		t.Errorf("ran %q in %q", r.argv, r.dir)
+	list := []string{"gh", "api", "graphql", "-f", "query=" + listQuery}
+	if !reflect.DeepEqual(r.argv, list) || r.dir != "" {
+		t.Errorf("with nothing listed, last ran %q in %q; want only the listing", r.argv, r.dir)
 	}
-	if strings.Contains(feedQuery, "mutation") || !strings.HasPrefix(feedQuery, "query {") {
-		t.Error("the feed's request is not a plain query")
+
+	g := &github{mine: []node{own(nil)}, review: requested(23)}
+	found, err := GitHub(g.run).Feed(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, scope := range []string{"is:open author:@me", "is:open review-requested:@me", "reviewRequests", "latestOpinionatedReviews", "mergeable", "statusCheckRollup"} {
-		if !strings.Contains(feedQuery, scope) {
-			t.Errorf("the query does not ask for %q", scope)
+	detail := func(vars ...string) []string {
+		argv := []string{"gh", "api", "graphql", "-f", "query=" + detailQuery}
+		for _, v := range vars {
+			argv = append(argv, "-f", v)
 		}
+		return argv
+	}
+	want := [][]string{list, detail("q=" + mineSearch), detail("q=" + reviewSearch), detail("q="+reviewSearch, "after=10"), detail("q="+reviewSearch, "after=20")}
+	if !reflect.DeepEqual(g.calls, want) {
+		t.Errorf("ran\n%q, want the listing and then the details a page at a time", g.calls)
+	}
+	for _, p := range found.PullRequests[1:] {
+		if !p.Conflicts {
+			t.Errorf("pull request %d was not detailed: %+v", p.Number, p)
+		}
+	}
+
+	for _, q := range []string{listQuery, detailQuery} {
+		if strings.Contains(q, "mutation") || !strings.HasPrefix(q, "query") {
+			t.Errorf("not a plain query: %s", q)
+		}
+	}
+	for _, scope := range []string{"is:open author:@me", "is:open review-requested:@me"} {
+		if !strings.Contains(listQuery, scope) {
+			t.Errorf("the listing does not ask for %q", scope)
+		}
+	}
+	for _, costly := range []string{"reviewRequests", "latestOpinionatedReviews", "mergeable", "statusCheckRollup"} {
+		if strings.Contains(listQuery, costly) || !strings.Contains(detailQuery, costly) {
+			t.Errorf("%s belongs in the paged details, and not in the listing", costly)
+		}
+	}
+	if !strings.Contains(detailQuery, "first: 10,") {
+		t.Error("a page of details is not ten pull requests")
+	}
+}
+
+func TestFeedStopsAskingForDetailsAfterAFewPages(t *testing.T) {
+	g := &github{review: requested(3), endless: true}
+	if _, err := GitHub(g.run).Feed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(g.calls) != 1+detailPages {
+		t.Errorf("made %d requests, want the listing and %d pages of details", len(g.calls), detailPages)
+	}
+}
+
+func TestFeedTriesAFailedRequestOnceMore(t *testing.T) {
+	for _, failed := range []int{1, 2} {
+		g := &github{mine: []node{own(nil)}, fail: map[int]bool{failed: true}}
+		got, err := GitHub(g.run).Feed(ctx)
+		if err != nil || len(got.Items) != 1 || got.Items[0].Kind != FeedReady {
+			t.Errorf("with request %d failing once: %+v, %v; want the ready pull request found all the same", failed, got.Items, err)
+		}
+		if len(g.calls) != 3 {
+			t.Errorf("with request %d failing once, made %d requests, want 3", failed, len(g.calls))
+		}
+	}
+	g := &github{mine: []node{own(nil)}, fail: map[int]bool{1: true, 2: true}}
+	if _, err := GitHub(g.run).Feed(ctx); err == nil || !strings.Contains(err.Error(), "502") || len(g.calls) != 2 {
+		t.Errorf("with the listing failing twice: err = %v after %d requests, want GitHub's error after 2", err, len(g.calls))
+	}
+}
+
+func TestFeedGetsByWithoutDetailsGitHubWillNotGive(t *testing.T) {
+	failing := func(n int) func(node) { return both(set("number", n), checks("FAILURE")) }
+	review := []node{}
+	for i := range 12 {
+		review = append(review, asked(failing(100+i)))
+	}
+	// Requests: the listing, your details twice, their first page, their second page twice.
+	g := &github{mine: []node{own(nil), own(both(set("number", 8), set("reviewDecision", "CHANGES_REQUESTED"))), own(both(set("number", 9), set("isDraft", true)))},
+		review: review, fail: map[int]bool{2: true, 3: true, 5: true, 6: true}}
+	got, err := GitHub(g.run).Feed(ctx)
+	if err != nil || len(g.calls) != 6 {
+		t.Fatalf("err = %v after %d requests; want what was listed, after 6", err, len(g.calls))
+	}
+
+	if len(got.Items) != 13 || got.Items[0].Kind != FeedChanges {
+		t.Fatalf("items = %+v; want the changes requested and the 12 reviews, and nothing concluded from checks nobody reported", got.Items)
+	}
+	if got.Items[0].Summary != "Acme/Widgets#8, opened by you. Review: changes requested." {
+		t.Errorf("summary = %q, want nothing said of checks or conflicts", got.Items[0].Summary)
+	}
+	for _, it := range got.Items[1:] {
+		if it.Kind != FeedReview {
+			t.Errorf("item = %+v, want a review request", it)
+		}
+	}
+
+	prs := got.PullRequests
+	if len(prs) != 15 {
+		t.Fatalf("listed %d pull requests, want all 15", len(prs))
+	}
+	if p := prs[0]; p.OnYou || p.Checks != "unknown" || p.Needs != "GitHub did not say how this one stands." {
+		t.Errorf("undetailed pull request of yours = %+v", p)
+	}
+	if p := prs[1]; !p.OnYou || p.Checks != "unknown" || p.Needs != "A reviewer asked for changes." {
+		t.Errorf("undetailed pull request with changes requested = %+v", p)
+	}
+	if p := prs[2]; p.OnYou || p.Needs != "Still a draft." {
+		t.Errorf("undetailed draft = %+v", p)
+	}
+	if p := prs[3]; !p.OnYou || p.Checks != "failing" {
+		t.Errorf("first to review = %+v, want its details", p)
+	}
+	if p := prs[14]; !p.OnYou || p.Checks != "unknown" || p.Needs != "Your review is requested." {
+		t.Errorf("last to review = %+v; want it on you all the same, its checks unknown", p)
 	}
 }
 
