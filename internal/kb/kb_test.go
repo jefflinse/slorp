@@ -277,8 +277,10 @@ func TestResolveRepo(t *testing.T) {
 	}
 
 	must(t, k.AssignRepo("Acme/Widgets", a))
-	if got, via, ok := k.ResolveRepo("acme/widgets", []string{"/work/b"}); got != a || via != kb.ViaUser || !ok {
-		t.Errorf("after the user filed it: %q, %q, %v; want their choice over the directory rule, whatever the case", got, via, ok)
+	for _, name := range []string{"acme/widgets", "ACME/Widgets"} {
+		if got, via, ok := k.ResolveRepo(name, []string{"/work/b"}); got != a || via != kb.ViaUser || !ok {
+			t.Errorf("%s after the user filed it: %q, %q, %v; want their choice over the directory rule, whatever the case", name, got, via, ok)
+		}
 	}
 	if got, _, ok := k.ResolveRepo("acme/other", nil); ok {
 		t.Errorf("another repository resolved to %q", got)

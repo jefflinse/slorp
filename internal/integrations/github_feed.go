@@ -108,7 +108,7 @@ func githubFeed(run Runner) func(ctx context.Context) ([]FeedItem, error) {
 func needs(mine, review []feedPR) []FeedItem {
 	out := []FeedItem{}
 	for _, p := range mine {
-		if p.Number == 0 || p.IsDraft {
+		if p.IsDraft {
 			continue
 		}
 		failing := p.checks() == "FAILURE" || p.checks() == "ERROR"

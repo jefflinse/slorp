@@ -356,7 +356,12 @@ func feeder(id string, available bool, found []FeedItem) Integration {
 	in := fake(id, available, true, new(int))
 	in.Feed = func(ctx context.Context) ([]FeedItem, error) { return found, nil }
 	in.Watches = []string{"Watches " + id}
-	in.Clones = func(dir string) []string { return []string{id + "/" + filepath.Base(dir)} }
+	in.Clones = func(dir string) []string {
+		if filepath.Base(dir) == "empty" {
+			return nil
+		}
+		return []string{id + "/" + filepath.Base(dir)}
+	}
 	return in
 }
 
@@ -392,7 +397,7 @@ func TestManagerClones(t *testing.T) {
 	silent.Clones = func(string) []string { return nil }
 	m := NewManager(func() map[string]bool { return on }, feeder("a", true, nil), feeder("off", true, nil), silent, fake("plain", true, true, new(int)))
 
-	got := m.Clones([]string{"/w/one", "/w/two"})
+	got := m.Clones([]string{"/w/one", "/w/empty", "/w/two"})
 	want := map[string][]string{"/w/one": {"a/one"}, "/w/two": {"a/two"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Clones = %v, want %v: only integrations that are on, and only directories that hold something", got, want)

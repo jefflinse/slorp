@@ -263,16 +263,36 @@ func TestRunCollectsWhenAsked(t *testing.T) {
 
 	p.Check()
 	eventually(t, "a collection when asked", func() bool { return src.count("github") == 2 })
-	p.Check()
-	p.Check()
-	p.Check()
-	eventually(t, "another collection, without blocking whoever asked", func() bool { return src.count("github") >= 3 })
+
+	scans := src.scans()
+	p.Rescan()
+	eventually(t, "another search of the directories", func() bool { return src.scans() > scans })
+	if n := src.count("github"); n != 2 {
+		t.Errorf("collected %d times, want one request to check now to cause one collection", n)
+	}
 
 	cancel()
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not stop when its context ended")
+	}
+}
+
+func TestAskingNeverBlocks(t *testing.T) {
+	p, _, _ := newPoller(t, newSource("github"))
+	done := make(chan struct{})
+	go func() {
+		for range 3 {
+			p.Check()
+			p.Rescan()
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("asking a poller that is busy, or not running, blocked whoever asked")
 	}
 }
 
