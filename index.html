@@ -10,8 +10,8 @@
   --ink: #1b1c18; --ink2: #55574e; --ink3: #8b8d82; --line: #e1ded3;
   --accent: #4f6b00; --fill: #c8f05a; --fill-ink: #1c2700;
   --warn: #a85a09; --err: #b3261e; --toast-act: #c8f05a;
-  --k-claude: #d97757; --k-opencode: #3b82c4; --k-slack: #8e5bb5;
-  --k-worker: #5f8a8b; --k-local: #6a9a23; --k-kb: #b8930f; --k-github: #7d8590;
+  --k-claude: #d97757; --k-opencode: #8b949e; --k-slack: #8e5bb5;
+  --k-worker: #5f8a8b; --k-local: #6a9a23; --k-kb: #b8930f; --k-github: #1f6feb;
   --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --top: 52px;
@@ -94,11 +94,9 @@ h1, h2, h3, p { margin: 0; }
 .gline { padding: 0 18px 6px 18px; color: var(--ink3); font-size: 12.5px; }
 .chev { display: inline-block; width: 10px; color: var(--ink3); font-size: 10px; transition: transform 0.12s; }
 .chev.shut { transform: rotate(-90deg); }
-.row { display: block; width: 100%; padding: 9px 18px 10px 16px; border-left: 3px solid transparent; }
+.row { display: block; width: 100%; padding: 9px 18px 10px 16px; border-left: 3px solid var(--k, transparent); }
 .row:hover { background: color-mix(in srgb, var(--sel) 55%, transparent); }
-.row.sel { background: var(--sel); border-left-color: var(--ink); }
-.row.blocking { border-left-color: var(--fill); }
-.row.sel.blocking { border-left-color: var(--accent); }
+.row.sel { background: var(--sel); }
 .row .t { display: block; font-size: 14px; font-weight: 500; line-height: 1.35; }
 .row .t.mono { font-size: 12px; font-weight: 400; line-height: 1.45; word-break: break-word; }
 .row .m { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin-top: 4px; color: var(--ink3); font-size: 12px; }
@@ -609,7 +607,7 @@ function briefing(items) {
 function rowHtml(it, act = 'select') {
   const grouped = act === 'select' ? state.groupBy : 'effort';
   const meta = `${grouped === 'source' ? '' : kindBadge(it.kind)}${grouped === 'effort' ? '' : `<span>${esc(effortById(effortOf(it)).name)}</span>`}`;
-  return `<button class="row ${it.urgency} ${state.view === 'attention' && it.id === state.sel ? 'sel' : ''} ${it.id === freshId ? 'fresh' : ''}" data-act="${act}" data-id="${it.id}">
+  return `<button class="row ${it.urgency} ${state.view === 'attention' && it.id === state.sel ? 'sel' : ''} ${it.id === freshId ? 'fresh' : ''}" data-act="${act}" data-id="${it.id}" style="${kindColor(it.kind)}">
     ${title(it, 't')}
     <span class="m">${meta}<span>${ago(ageOf(it))}</span>${it.urgency === 'blocking' ? '<span class="tag blocking">blocking</span>' : ''}</span>
   </button>`;
