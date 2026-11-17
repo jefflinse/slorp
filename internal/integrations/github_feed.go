@@ -219,14 +219,14 @@ func survey(mine, review []feedPR) Found {
 		case !p.detailed && p.ReviewDecision != "CHANGES_REQUESTED":
 			pr.Needs = "GitHub did not say how this one stands."
 		case failing:
-			it.Kind, it.Urgency, pr.Needs = FeedChecks, "soon", "Checks are failing."
+			it.Kind, it.Urgency, pr.Needs = FeedChecks, "awaiting", "Checks are failing."
 			it.Title, it.Ask = "Checks failing: "+p.Title, "Checks are failing on your pull request. Fix them or run them again."
 			it.Key += ":" + p.Head
 		case p.ReviewDecision == "CHANGES_REQUESTED":
-			it.Kind, it.Urgency, pr.Needs = FeedChanges, "soon", "A reviewer asked for changes."
+			it.Kind, it.Urgency, pr.Needs = FeedChanges, "awaiting", "A reviewer asked for changes."
 			it.Title, it.Ask = "Changes requested: "+p.Title, "A reviewer asked for changes on your pull request."
 		case pr.Conflicts:
-			it.Kind, it.Urgency, pr.Needs = FeedConflicts, "soon", "It conflicts with its base branch."
+			it.Kind, it.Urgency, pr.Needs = FeedConflicts, "awaiting", "It conflicts with its base branch."
 			it.Title, it.Ask = "Conflicts: "+p.Title, "Your pull request conflicts with its base branch. Resolve the conflicts so it can merge."
 			it.Key += ":" + p.Head
 		case passing && approved && canMerge && p.Mergeable == "MERGEABLE":
@@ -240,7 +240,7 @@ func survey(mine, review []feedPR) Found {
 			pr.Needs = "Waiting on someone else."
 		}
 		if it.Kind != "" {
-			pr.OnYou = true
+			pr.OnYou, pr.Urgency = true, it.Urgency
 			it.Key += ":" + it.Kind
 			found.Items = append(found.Items, it)
 		}
@@ -257,15 +257,15 @@ func survey(mine, review []feedPR) Found {
 			found.PullRequests = append(found.PullRequests, pr)
 			continue
 		}
-		pr.OnYou = true
-		found.PullRequests = append(found.PullRequests, pr)
 		who := orWord(p.Author.Login, "someone")
 		it := p.item("opened by " + who)
-		it.Kind, it.Urgency = FeedReview, "soon"
+		it.Kind, it.Urgency = FeedReview, "blocking"
 		it.Title, it.Ask = "Review requested: "+p.Title, "Your review is requested on "+who+"'s pull request."
 		if p.Author.Type == "Bot" {
 			it.Urgency = "whenever"
 		}
+		pr.OnYou, pr.Urgency = true, it.Urgency
+		found.PullRequests = append(found.PullRequests, pr)
 		it.Key += ":" + it.Kind
 		found.Items = append(found.Items, it)
 	}

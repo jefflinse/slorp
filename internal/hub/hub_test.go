@@ -84,17 +84,17 @@ func TestItems(t *testing.T) {
 	}{
 		{"idle with nothing said about it", with(func(s *Session) {}), "", "", ""},
 		{"model says nothing is needed", with(func(s *Session) { s.Insight = insight(KindNone) }), "", "", ""},
-		{"model says it asked a question", with(func(s *Session) { s.Insight = insight(KindQuestion) }), KindQuestion, "blocking", "model title"},
+		{"model says it asked a question", with(func(s *Session) { s.Insight = insight(KindQuestion) }), KindQuestion, "awaiting", "model title"},
 		{"model says it finished something", with(func(s *Session) { s.Insight = insight(KindReview) }), KindReview, "whenever", "model title"},
 		{"still working, whatever the model said earlier", with(func(s *Session) { s.Insight, s.Status = insight(KindQuestion), Working }), "", "", ""},
 		{"insight is about earlier content", with(func(s *Session) { s.Insight, s.insightKey = insight(KindQuestion), "older:1" }), "", "", ""},
-		{"insight predates a context edit only", with(func(s *Session) { s.Insight, s.insightKey = insight(KindQuestion), "content:0" }), KindQuestion, "blocking", "model title"},
-		{"permission prompt with no insight", with(func(s *Session) { s.Pending, s.Status = &Pending{Tool: "Bash", Summary: "rm x"}, Waiting }), KindPermission, "blocking", "raw-name"},
+		{"insight predates a context edit only", with(func(s *Session) { s.Insight, s.insightKey = insight(KindQuestion), "content:0" }), KindQuestion, "awaiting", "model title"},
+		{"permission prompt with no insight", with(func(s *Session) { s.Pending, s.Status = &Pending{Tool: "Bash", Summary: "rm x"}, Waiting }), KindPermission, "awaiting", "raw-name"},
 		{"permission prompt outranks a review", with(func(s *Session) {
 			s.Pending, s.Insight = &Pending{Tool: "Bash", Summary: "rm x"}, insight(KindReview)
-		}), KindPermission, "blocking", "model title"},
-		{"blocked with no insight", with(func(s *Session) { s.Status = Waiting }), KindQuestion, "blocking", "raw-name"},
-		{"failed", with(func(s *Session) { s.Status = Failed }), KindFailed, "soon", "raw-name"},
+		}), KindPermission, "awaiting", "model title"},
+		{"blocked with no insight", with(func(s *Session) { s.Status = Waiting }), KindQuestion, "awaiting", "raw-name"},
+		{"failed", with(func(s *Session) { s.Status = Failed }), KindFailed, "awaiting", "raw-name"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -996,7 +996,11 @@ func TestRetireDropsSessionsWhoseBridgeWentSilent(t *testing.T) {
 }
 
 func pull(repo string, n int, onYou bool, at time.Time) integrations.PullRequest {
-	return integrations.PullRequest{Repo: repo, Number: n, Title: "A change", OnYou: onYou, At: at}
+	p := integrations.PullRequest{Repo: repo, Number: n, Title: "A change", OnYou: onYou, At: at}
+	if onYou {
+		p.Urgency = "awaiting"
+	}
+	return p
 }
 
 func TestPullRequestsAreListedAndFiledByRepository(t *testing.T) {
@@ -1008,9 +1012,11 @@ func TestPullRequestsAreListedAndFiledByRepository(t *testing.T) {
 	must(t, k.AddDir(a, "/work/a"))
 	h.SetClones(map[string][]string{"/work/a": {"acme/widgets"}})
 	day := func(d int) time.Time { return time.Date(2026, 11, d, 0, 0, 0, 0, time.UTC) }
+	blocking, whenever := pull("acme/gadgets", 6, true, day(1)), pull("acme/gadgets", 7, true, day(9))
+	blocking.Urgency, whenever.Urgency = "blocking", "whenever"
 	h.SetFeed("github", nil, []integrations.PullRequest{
 		pull("acme/gadgets", 1, false, day(9)), pull("Acme/Widgets", 2, true, day(1)), pull("acme/gadgets", 4, true, day(5)),
-		pull("acme/gadgets", 3, false, day(9)), pull("acme/gadgets", 5, true, day(5)),
+		pull("acme/gadgets", 3, false, day(9)), pull("acme/gadgets", 5, true, day(5)), whenever, blocking,
 	}, nil)
 
 	got := h.State().PullRequests
@@ -1018,19 +1024,19 @@ func TestPullRequestsAreListedAndFiledByRepository(t *testing.T) {
 	for _, p := range got {
 		order = append(order, p.Number)
 	}
-	if want := []int{4, 5, 2, 1, 3}; !reflect.DeepEqual(order, want) {
-		t.Fatalf("order = %v, want %v: those waiting on you first, then the most recently changed, then by number", order, want)
+	if want := []int{6, 4, 5, 2, 7, 1, 3}; !reflect.DeepEqual(order, want) {
+		t.Fatalf("order = %v, want %v: where you hold someone up, then what awaits you, then what will keep, then the rest; within each the most recently changed, then by number", order, want)
 	}
-	if p := got[2]; p.Effort != a || p.EffortVia != kb.ViaDir || p.Source != "github" || p.Title != "A change" {
+	if p := got[3]; p.Effort != a || p.EffortVia != kb.ViaDir || p.Source != "github" || p.Title != "A change" {
 		t.Errorf("widgets pull request = %+v, want it filed where its checkout is and marked as GitHub's", p)
 	}
-	if p := got[0]; p.Effort != "" || p.EffortVia != "" {
+	if p := got[1]; p.Effort != "" || p.EffortVia != "" {
 		t.Errorf("gadgets pull request = %+v, want it unsorted", p)
 	}
 
 	h.SetFeed("github", nil, nil, errors.New("timed out"))
-	if got := h.State().PullRequests; len(got) != 5 {
-		t.Errorf("after a failed collection %d pull requests are listed, want the 5 found before", len(got))
+	if got := h.State().PullRequests; len(got) != 7 {
+		t.Errorf("after a failed collection %d pull requests are listed, want the 7 found before", len(got))
 	}
 	h.SetFeed("github", nil, []integrations.PullRequest{pull("acme/gadgets", 1, false, day(9))}, nil)
 	if got := h.State().PullRequests; len(got) != 1 {

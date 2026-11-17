@@ -145,14 +145,17 @@ const (
 type Item struct {
 	ID string `json:"id"`
 	// SessionID is empty for an item from a feed.
-	SessionID string    `json:"sessionId,omitempty"`
-	Kind      string    `json:"kind"`
-	Urgency   string    `json:"urgency"`
-	Title     string    `json:"title"`
-	Ask       string    `json:"ask"`
-	Summary   string    `json:"summary"`
-	Replies   []string  `json:"replies"`
-	At        time.Time `json:"at"`
+	SessionID string `json:"sessionId,omitempty"`
+	Kind      string `json:"kind"`
+	// Urgency is "blocking" while the user is holding up another person,
+	// "awaiting" while something of the user's own is stopped until they
+	// act, and "whenever" when nothing is stopped.
+	Urgency string    `json:"urgency"`
+	Title   string    `json:"title"`
+	Ask     string    `json:"ask"`
+	Summary string    `json:"summary"`
+	Replies []string  `json:"replies"`
+	At      time.Time `json:"at"`
 	// Source is the integration whose feed found the item.
 	Source string `json:"source,omitempty"`
 	URL    string `json:"url,omitempty"`
@@ -618,8 +621,9 @@ func (h *Hub) fed() []Item {
 	return out
 }
 
-// pulls returns every feed's pull requests, those waiting on the user first
-// and the most recently changed first among the rest.
+// pulls returns every feed's pull requests, the most pressing of the user's
+// moves first and those waiting on someone else last, the most recently
+// changed first within each.
 func (h *Hub) pulls() []PullRequest {
 	out := []PullRequest{}
 	for id, f := range h.feeds {
@@ -629,9 +633,10 @@ func (h *Hub) pulls() []PullRequest {
 			out = append(out, pr)
 		}
 	}
+	rank := map[string]int{"blocking": 3, "awaiting": 2, "whenever": 1}
 	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].OnYou != out[j].OnYou {
-			return out[i].OnYou
+		if a, b := rank[out[i].Urgency], rank[out[j].Urgency]; a != b {
+			return a > b
 		}
 		if !out[i].At.Equal(out[j].At) {
 			return out[i].At.After(out[j].At)
@@ -895,17 +900,17 @@ func items(sessions []Session) []Item {
 		}
 		switch {
 		case s.Pending != nil:
-			it.Kind, it.Urgency = KindPermission, "blocking"
+			it.Kind, it.Urgency = KindPermission, "awaiting"
 			if it.Ask == "" {
 				it.Ask = "Allow or deny " + s.Pending.Tool + ": " + s.Pending.Summary
 			}
 		case s.Status == Failed:
-			it.Kind, it.Urgency = KindFailed, "soon"
+			it.Kind, it.Urgency = KindFailed, "awaiting"
 			if it.Ask == "" {
 				it.Ask = "This session failed. Look at what went wrong."
 			}
 		case s.Status == Waiting:
-			it.Kind, it.Urgency = KindQuestion, "blocking"
+			it.Kind, it.Urgency = KindQuestion, "awaiting"
 			if it.Ask == "" {
 				it.Ask = "This session is stopped until you respond."
 			}
@@ -913,7 +918,7 @@ func items(sessions []Session) []Item {
 				it.Replies = s.Insight.Replies
 			}
 		case fresh && s.Status != Working && s.Insight.Kind == KindQuestion:
-			it.Kind, it.Urgency, it.Replies = KindQuestion, "blocking", s.Insight.Replies
+			it.Kind, it.Urgency, it.Replies = KindQuestion, "awaiting", s.Insight.Replies
 		case fresh && s.Status != Working && s.Insight.Kind == KindReview:
 			it.Kind, it.Urgency, it.Replies = KindReview, "whenever", s.Insight.Replies
 		default:

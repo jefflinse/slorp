@@ -108,7 +108,7 @@ h1, h2, h3, p { margin: 0; }
 .chip i { display: inline-block; vertical-align: 1px; }
 .tag { font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 1px 6px; border-radius: 4px; }
 .tag.blocking { background: var(--fill); color: var(--fill-ink); }
-.tag.soon { color: var(--warn); border: 1px solid currentColor; }
+.tag.awaiting { color: var(--warn); border: 1px solid currentColor; }
 .tag.whenever { color: var(--ink3); border: 1px solid var(--line); }
 .foot { padding: 16px 18px 24px; color: var(--ink3); font-size: 12px; border-top: 1px solid var(--line); margin-top: 14px; }
 .foot .link, .link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
@@ -269,8 +269,9 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
    what the source actually said. */
 
 const KINDS = { claude: 'Claude Code', opencode: 'OpenCode', slack: 'Slack', worker: 'Worker', local: 'Local LLM', kb: 'Knowledge base', github: 'GitHub' };
-const URGENCY = { blocking: 'Holding work up', soon: 'Soon', whenever: 'Whenever' };
-const STATUS = { waiting: 'waiting on you', error: 'failed', running: 'running', done: 'finished', idle: 'idle' };
+/* Blocking: you are holding up another person. Awaiting: something of your own is stopped until you act. */
+const URGENCY = { blocking: 'Blocking other people', awaiting: 'Awaiting you', whenever: 'Whenever' };
+const STATUS = { waiting: 'awaiting you', error: 'failed', running: 'running', done: 'finished', idle: 'idle' };
 
 const EFFORTS = [
   { id: 'snap', name: 'Estoria snapshot store', raw: 'go-estoria/estoria @ feat/snapshot-store',
@@ -346,7 +347,7 @@ const SESSIONS = [
 ];
 
 const ITEMS = [
-  { id: 'a1', effort: 'snap', session: 's1', kind: 'claude', src: 'Claude Code session', urgency: 'blocking', age: 12,
+  { id: 'a1', effort: 'snap', session: 's1', kind: 'claude', src: 'Claude Code session', urgency: 'awaiting', age: 12,
     title: 'Keep every snapshot, or only the newest few?',
     raw: 'claude 7c1e02 · AskUserQuestion · "Retention policy?"',
     ask: 'Pick a retention policy so the pruning query can be written.',
@@ -356,7 +357,7 @@ const ITEMS = [
     lines: [['claude', 'Save and Load are passing against Postgres 17. Before I write Prune I need a retention policy.'],
       ['claude', 'Options: (1) keep all snapshots, (2) keep newest N per stream, default N=3, (3) delete snapshots older than a configured duration. I recommend (2): bounded growth, no background job, one DELETE per save.'],
       ['claude', 'Which retention policy should the Postgres snapshot store use?']] },
-  { id: 'a2', effort: 'snap', session: 's2', kind: 'opencode', src: 'OpenCode session', urgency: 'soon', age: 95,
+  { id: 'a2', effort: 'snap', session: 's2', kind: 'opencode', src: 'OpenCode session', urgency: 'whenever', age: 95,
     title: 'The benchmark harness is finished and wants a look',
     raw: 'opencode bench-harness · exited 0 · bench/RESULTS.md (+212)',
     ask: 'Skim the numbers and decide whether loads are fast enough to stop optimizing.',
@@ -386,7 +387,7 @@ const ITEMS = [
     draft: "Hey Priya, the upgrade branch builds on v0.14 and I'm about to run the integration suite. If nothing surprising turns up, the fork is on v0.14 by Thursday. I'll confirm tomorrow afternoon either way, so hold off on the workaround until then.",
     lines: [['Priya Raman · yesterday 4:12 PM', 'any eta on the estoria bump? we want the iterator for the reconciliation job'],
       ['Priya Raman · 9:41 AM', "no pressure but if we don't have a date by wed we'll just write the paging loop ourselves and rip it out later"]] },
-  { id: 'a5', effort: 'fork', session: 's4', kind: 'claude', src: 'Claude Code session', urgency: 'blocking', age: 6,
+  { id: 'a5', effort: 'fork', session: 's4', kind: 'claude', src: 'Claude Code session', urgency: 'awaiting', age: 6,
     title: 'Wants to run the integration suite against your local Postgres',
     raw: 'claude 19ab44 · permission · Bash(make test-integration PG_DSN=…)',
     ask: 'Allow or deny the command.',
@@ -396,7 +397,7 @@ const ITEMS = [
     lines: [['claude', "The build is clean on v0.14.2. I'd like to run the integration suite to confirm the append path."],
       ['tool', 'Bash: make test-integration PG_DSN=postgres://localhost:5432/ledger_dev'],
       ['harness', 'Permission required. This command has not been approved in ~/work/ledger-platform.']] },
-  { id: 'a6', effort: 'fork', kind: 'slack', src: 'Slack · #platform-eng', urgency: 'soon', age: 170,
+  { id: 'a6', effort: 'fork', kind: 'slack', src: 'Slack · #platform-eng', urgency: 'whenever', age: 170,
     title: '#platform-eng is debating whether to pin the fork',
     raw: 'slack C02PLATENG · thread · 14 replies · matched "estoria", "fork"',
     ask: 'Worth weighing in before Thursday planning. Nobody has asked you directly.',
@@ -407,7 +408,7 @@ const ITEMS = [
       ['Dee Castellanos · 11:09 AM', '+1, the last one broke the outbox tests for a day'],
       ['Priya Raman · 11:20 AM', 'we need 0.14 for the iterator though. can we pin after that?'],
       ['Marcus Oyelaran · 11:31 AM', "let's decide at planning thurs"]] },
-  { id: 'a7', effort: 'docs', session: 's6', kind: 'claude', src: 'Claude Code session', urgency: 'blocking', age: 52,
+  { id: 'a7', effort: 'docs', session: 's6', kind: 'claude', src: 'Claude Code session', urgency: 'awaiting', age: 52,
     title: 'Should the quickstart use the in-memory store or Postgres?',
     raw: 'claude e03d7a · AskUserQuestion · "Quickstart backend?"',
     ask: 'Choose the event store the quickstart is written around.',
@@ -446,7 +447,7 @@ const ITEMS = [
 
 /* Arrive one at a time via "Simulate an incoming item". */
 const POOL = [
-  { id: 'p1', effort: 'snap', session: 's1', kind: 'claude', src: 'Claude Code session', urgency: 'soon', age: 0,
+  { id: 'p1', effort: 'snap', session: 's1', kind: 'claude', src: 'Claude Code session', urgency: 'awaiting', age: 0,
     title: 'The pruning migration is written; can it drop the old index?',
     raw: 'claude 7c1e02 · AskUserQuestion · "Drop idx_snapshots_stream?"',
     ask: 'Say whether the old index can go.',
@@ -454,7 +455,7 @@ const POOL = [
       'New composite index makes the old one redundant. The agent would drop it.'],
     replies: ['Drop it', 'Keep it for now'],
     lines: [['claude', 'idx_snapshots_stream is now covered by idx_snapshots_stream_version. OK to drop it in the same migration?']] },
-  { id: 'p2', effort: 'fork', kind: 'slack', src: 'Slack DM · Marcus Oyelaran', urgency: 'soon', age: 0,
+  { id: 'p2', effort: 'fork', kind: 'slack', src: 'Slack DM · Marcus Oyelaran', urgency: 'blocking', age: 0,
     title: 'Marcus asks whether the fork needs the outbox change',
     raw: 'slack D07MARCUS · 1 unread · "does 0.14 touch outbox?"',
     ask: 'Tell him whether v0.14 changes anything the outbox depends on.',
@@ -540,7 +541,7 @@ const ageOf = it => it.live ? minsSince(it.at) : state.arrived[it.id] ? (Date.no
 const isActive = it => { const h = state.handled[it.id]; return !h || (h.how === 'snoozed' && h.until < Date.now()); };
 const activeItems = () => allItems().filter(isActive);
 const activeMockItems = () => mockItems().filter(isActive);
-const URG_W = { blocking: 0, soon: 1, whenever: 2 };
+const URG_W = { blocking: 0, awaiting: 1, whenever: 2 };
 const byUrgency = (a, b) => URG_W[a.urgency] - URG_W[b.urgency] || ageOf(a) - ageOf(b);
 
 /* A title in whichever voice is switched on: the model's, or the source's. */
@@ -630,13 +631,15 @@ function briefing(items) {
   if (!items.length) text = 'Nothing needs you. Everything that is running can keep running without you.';
   else {
     const efforts = new Set(items.map(effortOf));
-    const blocking = items.filter(i => i.urgency === 'blocking');
-    const where = [...new Set(blocking.map(i => effortById(effortOf(i)).name))];
+    const blocking = items.filter(i => i.urgency === 'blocking'), awaiting = items.filter(i => i.urgency === 'awaiting');
+    const where = list => listOf([...new Set(list.map(i => effortById(effortOf(i)).name))]);
+    const count = (list, what) => `${cap(num(list.length))} ${list.length === 1 ? 'is' : 'are'} ${what}, in ${where(list)}.`;
     const one = items.length === 1;
-    text = `${cap(num(items.length))} thing${one ? '' : 's'} need${one ? 's' : ''} you across ${num(efforts.size)} effort${efforts.size === 1 ? '' : 's'}. `;
-    text += blocking.length
-      ? `${cap(num(blocking.length))} ${blocking.length === 1 ? 'is' : 'are'} holding work up right now, in ${listOf(where)}.${items.length > blocking.length ? ' The rest will keep.' : ''}`
-      : 'Nothing is stopped waiting on you, so all of it will keep.';
+    text = [`${cap(num(items.length))} thing${one ? '' : 's'} need${one ? 's' : ''} you across ${num(efforts.size)} effort${efforts.size === 1 ? '' : 's'}.`,
+      blocking.length ? count(blocking, 'blocking someone else') : '',
+      awaiting.length ? count(awaiting, 'awaiting you') : '',
+      !blocking.length && !awaiting.length ? 'Nobody is held up and nothing is stopped on you, so all of it will keep.' : items.length > blocking.length + awaiting.length ? 'The rest will keep.' : '',
+    ].filter(Boolean).join(' ');
   }
   const day = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
   return `<div class="brief"><div class="when"><span class="label">${day}</span><span class="label">${live ? '' : spark}briefing</span></div><p>${esc(text)}</p></div>`;
@@ -647,7 +650,7 @@ function rowHtml(it, act = 'select') {
   const meta = `${grouped === 'source' ? '' : kindBadge(it.kind)}${grouped === 'effort' ? '' : `<span>${esc(effortById(effortOf(it)).name)}</span>`}`;
   return `<button class="row ${it.urgency} ${state.view === 'attention' && it.id === state.sel ? 'sel' : ''} ${it.id === freshId ? 'fresh' : ''}" data-act="${act}" data-id="${it.id}" style="${kindColor(it.kind)}">
     ${title(it, 't')}
-    <span class="m">${meta}<span>${ago(ageOf(it))}</span>${it.urgency === 'blocking' ? '<span class="tag blocking">blocking</span>' : ''}</span>
+    <span class="m">${meta}<span>${ago(ageOf(it))}</span>${it.urgency === 'whenever' ? '' : `<span class="tag ${it.urgency}">${it.urgency}</span>`}</span>
   </button>`;
 }
 
@@ -851,7 +854,7 @@ function viewActivity() {
   if (live) return viewActivityLive();
   const order = Object.keys(STATUS);
   const count = k => SESSIONS.filter(s => s.status === k).length;
-  const lede = `${cap(num(SESSIONS.length))} things are running or recently finished. ${cap(num(count('waiting')))} are stopped waiting on you, ${num(count('error'))} failed overnight, and the rest are getting on with it.`;
+  const lede = `${cap(num(SESSIONS.length))} things are running or recently finished. ${cap(num(count('waiting')))} are awaiting you, ${num(count('error'))} failed overnight, and the rest are getting on with it.`;
   const filters = [['all', 'Everything']].concat(Object.entries(KINDS).filter(([k]) => SESSIONS.some(s => s.kind === k)))
     .map(([k, n]) => `<button class="chip ${state.actFilter === k ? 'on' : ''}" data-act="actFilter" data-f="${k}">${esc(n)}</button>`).join('');
   const rows = SESSIONS.filter(s => state.actFilter === 'all' || s.kind === state.actFilter)
@@ -885,7 +888,7 @@ function viewActivity() {
 
 let live = null, liveItems = [], liveEfforts = [], summarizer = {}, settings = {}, isOffline = false;
 let knowledge = { watch: [], questions: [], context: [], routing: [] }, integrations = [], lookups = [], feeds = {}, pulls = [];
-const LIVE_STATUS = { waiting: ['waiting', 'waiting on you'], failed: ['error', 'failed'], working: ['running', 'working'], idle: ['idle', 'idle'], done: ['done', 'finished'] };
+const LIVE_STATUS = { waiting: ['waiting', 'awaiting you'], failed: ['error', 'failed'], working: ['running', 'working'], idle: ['idle', 'idle'], done: ['done', 'finished'] };
 const minsSince = iso => Math.max(0, (Date.now() - new Date(iso).getTime()) / 60000);
 const tilde = p => p.replace(/^\/Users\/[^/]+/, '~');
 const shortPath = p => { const t = tilde(p); return t.length > 44 ? '…/' + t.split('/').slice(-2).join('/') : t; };
@@ -1043,7 +1046,7 @@ function liveDetail(s) {
 function viewActivityLive() {
   const n = k => live.filter(s => s.status === k).length;
   const lede = live.length
-    ? `${cap(num(live.length))} agent session${live.length === 1 ? ' is' : 's are'} open on this machine: ${n('waiting')} waiting on you, ${n('working')} working, ${n('idle') + n('done') + n('failed')} quiet.`
+    ? `${cap(num(live.length))} agent session${live.length === 1 ? ' is' : 's are'} open on this machine: ${n('waiting')} awaiting you, ${n('working')} working, ${n('idle') + n('done') + n('failed')} quiet.`
     : 'No agent sessions are open on this machine.';
   const rows = live.map(s => {
     const open = state.expanded[s.id], [dot, label] = LIVE_STATUS[s.status] || LIVE_STATUS.idle;
@@ -1072,17 +1075,17 @@ function viewActivityLive() {
 
 const MOCK_PULLS = [
   { repo: 'go-estoria/estoria', number: 61, title: 'Postgres snapshot store with pruning', url: 'https://github.com/go-estoria/estoria/pull/61', author: 'you', mine: true, draft: false, age: 190,
-    approvals: 1, changesRequested: 1, awaiting: 0, checks: 'passing', conflicts: false, onYou: true, needs: 'A reviewer asked for changes.', source: 'github', effort: 'snap' },
+    approvals: 1, changesRequested: 1, awaiting: 0, checks: 'passing', conflicts: false, onYou: true, urgency: 'awaiting', needs: 'A reviewer asked for changes.', source: 'github', effort: 'snap' },
   { repo: 'acme/estoria-fork', number: 212, title: 'Catch up to upstream v0.14', url: 'https://github.com/acme/estoria-fork/pull/212', author: 'you', mine: true, draft: false, age: 45,
-    approvals: 0, changesRequested: 0, awaiting: 2, checks: 'running', conflicts: true, onYou: true, needs: 'It conflicts with its base branch.', source: 'github', effort: 'fork' },
+    approvals: 0, changesRequested: 0, awaiting: 2, checks: 'running', conflicts: true, onYou: true, urgency: 'awaiting', needs: 'It conflicts with its base branch.', source: 'github', effort: 'fork' },
   { repo: 'acme/platform', number: 1408, title: 'Stream iterator: bound the read-ahead buffer', url: 'https://github.com/acme/platform/pull/1408', author: 'priya', mine: false, draft: false, age: 320,
-    approvals: 1, changesRequested: 0, awaiting: 1, checks: 'failing', conflicts: false, onYou: true, needs: 'Your review is requested.', source: 'github', effort: 'fork' },
+    approvals: 1, changesRequested: 0, awaiting: 1, checks: 'failing', conflicts: false, onYou: true, urgency: 'blocking', needs: 'Your review is requested.', source: 'github', effort: 'fork' },
   { repo: 'go-estoria/go-estoria.github.io', number: 33, title: 'Rewrite the concept pages', url: 'https://github.com/go-estoria/go-estoria.github.io/pull/33', author: 'you', mine: true, draft: false, age: 1500,
     approvals: 0, changesRequested: 0, awaiting: 1, checks: 'passing', conflicts: false, onYou: false, needs: 'Waiting on review.', source: 'github', effort: 'docs' },
   { repo: 'go-estoria/estoria', number: 64, title: 'Sketch: retention as an option on the store', url: 'https://github.com/go-estoria/estoria/pull/64', author: 'you', mine: true, draft: true, age: 2900,
     approvals: 0, changesRequested: 0, awaiting: 0, checks: 'none', conflicts: false, onYou: false, needs: 'Still a draft.', source: 'github', effort: 'snap' },
 ];
-const PULL_FILTERS = [['all', 'Everything', () => true], ['you', 'Waiting on you', p => p.onYou], ['mine', 'Yours', p => p.mine], ['review', 'To review', p => !p.mine]];
+const PULL_FILTERS = [['all', 'Everything', () => true], ['blocking', 'Blocking', p => p.urgency === 'blocking'], ['you', 'Awaiting you', p => p.urgency === 'awaiting'], ['mine', 'Yours', p => p.mine], ['review', 'To review', p => !p.mine]];
 const plural = (n, one, many = one + 's') => `${num(n)} ${n === 1 ? one : many}`;
 
 function pullReviews(p) {
@@ -1097,10 +1100,10 @@ function viewPulls() {
   const all = live ? pulls : MOCK_PULLS, github = integrations.find(i => i.id === 'github'), feed = feeds.github;
   if (!PULL_FILTERS.some(([k]) => k === state.pullFilter)) state.pullFilter = 'all';
   const test = PULL_FILTERS.find(([k]) => k === state.pullFilter)[2];
-  const mine = all.filter(p => p.mine).length, onYou = all.filter(p => p.onYou).length;
+  const mine = all.filter(p => p.mine).length, blocking = all.filter(p => p.urgency === 'blocking').length, awaiting = all.filter(p => p.urgency === 'awaiting').length;
   const some = n => n ? num(n) : 'none';
   let lede = all.length
-    ? `${cap(plural(all.length, 'open pull request'))} involve${all.length === 1 ? 's' : ''} you: ${some(mine)} of yours and ${some(all.length - mine)} to review. ${cap(some(onYou))} ${onYou === 1 ? 'is' : 'are'} waiting on you.`
+    ? `${cap(plural(all.length, 'open pull request'))} involve${all.length === 1 ? 's' : ''} you: ${some(mine)} of yours and ${some(all.length - mine)} to review. ${cap(some(blocking))} ${blocking === 1 ? 'is' : 'are'} blocking someone, and ${some(awaiting)} ${awaiting === 1 ? 'is' : 'are'} awaiting you.`
     : 'No open pull request is yours or waiting on your review.';
   let status = '';
   if (live && !(github && github.enabled && github.available)) {
@@ -1112,11 +1115,13 @@ function viewPulls() {
   }
   const chips = PULL_FILTERS.map(([k, name, t]) => `<button class="chip ${state.pullFilter === k ? 'on' : ''}" data-act="pullFilter" data-f="${k}">${name} <span class="n">${all.filter(t).length}</span></button>`).join('');
   const rows = all.filter(test).map(p => {
-    const [dot, label] = p.onYou ? ['waiting', 'waiting on you'] : p.draft ? ['done', 'draft'] : ['idle', 'waiting on others'];
+    const standing = p.urgency === 'blocking' || p.urgency === 'awaiting' ? `<span class="tag ${p.urgency}">${p.urgency}</span>`
+      : p.onYou ? '<span class="dot waiting"></span>your move, whenever'
+      : `<span class="dot ${p.draft ? 'done' : 'idle'}"></span>${p.draft ? 'draft' : 'waiting on others'}`;
     const name = /^https:\/\//.test(p.url || '')
       ? `<a class="ttl" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.title)} ↗</a>` : `<span class="ttl">${esc(p.title)}</span>`;
     return `<tr>
-        <td class="st"><span class="dot ${dot}"></span>${label}</td>
+        <td class="st">${standing}</td>
         <td><div>${name}</div><div class="doing">${esc(p.needs)}</div>
           <div class="dim mono" style="margin-top:3px">${esc(p.repo)}#${p.number} · ${p.mine ? 'yours' : `by ${esc(p.author || 'someone')}`}</div></td>
         <td class="dim">${pullReviews(p)}</td>

@@ -50,8 +50,11 @@ type Integration struct {
 type FeedItem struct {
 	// Key is the same from one collection to the next for as long as the same
 	// thing is needed, and changes when it is needed afresh.
-	Key     string
-	Kind    string
+	Key  string
+	Kind string
+	// Urgency is "blocking" while the user is holding up another person,
+	// "awaiting" while something of the user's own is stopped until they
+	// act, and "whenever" when nothing is stopped.
 	Urgency string
 	Title   string
 	Ask     string
@@ -87,6 +90,9 @@ type PullRequest struct {
 	Conflicts bool `json:"conflicts"`
 	// OnYou is true while the next move is the user's.
 	OnYou bool `json:"onYou"`
+	// Urgency is how pressing that move is, as a FeedItem's is; empty while
+	// the move is someone else's.
+	Urgency string `json:"urgency"`
 	// Needs says what that move is, or what the pull request is waiting on.
 	Needs string `json:"needs"`
 }
