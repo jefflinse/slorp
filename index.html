@@ -105,6 +105,16 @@ a.pr:hover { border-color: var(--k-github); color: var(--ink); }
 .menu .pop button { display: block; width: 100%; padding: 7px 9px; border-radius: 6px; }
 .menu .pop button:hover { background: var(--sel); }
 .menu .pop p { padding: 6px 9px 4px; color: var(--ink3); font-size: 12px; }
+.menu .pop summary { display: flex; justify-content: space-between; padding: 7px 9px; border-radius: 6px; cursor: pointer; list-style: none; }
+.menu .pop summary::-webkit-details-marker { display: none; }
+.menu .pop summary:hover { background: var(--sel); }
+.menu .pop summary span { color: var(--ink3); transition: transform 0.12s; }
+.menu .pop details[open] > summary span { transform: rotate(90deg); }
+.menu .pop details > div { margin: 2px 0 4px 9px; padding-left: 6px; border-left: 1px solid var(--line); }
+.menu .pop button { text-align: left; }
+.acts .pop { z-index: 4; font-size: 13px; font-weight: 400; letter-spacing: 0; line-height: 1.45; }
+.titled { display: flex; align-items: flex-start; gap: 12px; }
+.titled > h1, .titled > form { flex: 1; min-width: 0; }
 
 /* Panes */
 .split { display: grid; grid-template-columns: minmax(320px, 410px) 1fr; height: calc(100vh - var(--top) - var(--notice)); }
@@ -143,7 +153,8 @@ a.pr:hover { border-color: var(--k-github); color: var(--ink); }
 .brief { padding: 18px 18px 16px; border-bottom: 1px solid var(--line); }
 .brief .when { display: flex; justify-content: space-between; margin-bottom: 8px; }
 .brief p { font-size: 15px; line-height: 1.5; }
-.listbar { display: flex; align-items: center; justify-content: space-between; padding: 10px 18px; }
+.listbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 8px; padding: 10px 18px; }
+.listbar .segs { display: flex; gap: 6px; }
 
 /* Groups and rows */
 .ghead { display: flex; align-items: baseline; gap: 8px; padding: 14px 18px 4px; }
@@ -158,6 +169,9 @@ a.pr:hover { border-color: var(--k-github); color: var(--ink); }
 .row { display: block; width: 100%; padding: 9px 18px 10px 16px; border-left: 3px solid var(--k, transparent); }
 .row:hover { background: color-mix(in srgb, var(--sel) 55%, transparent); }
 .row.sel { background: var(--sel); }
+.row .h { display: flex; align-items: baseline; gap: 10px; }
+.row .h .t { flex: 1; min-width: 0; }
+.row .h .w { flex: none; display: inline-flex; align-items: center; gap: 8px; color: var(--ink3); font-size: 12px; white-space: nowrap; }
 .row .t { display: block; font-size: 14px; font-weight: 500; line-height: 1.35; }
 .row .t.mono { font-size: 12px; font-weight: 400; line-height: 1.45; word-break: break-word; }
 .row .st { display: block; margin-top: 1px; color: var(--ink2); font-size: 13px; line-height: 1.4; }
@@ -782,12 +796,14 @@ function briefing(items) {
 
 function rowHtml(it, act = 'select') {
   const grouped = act === 'select' ? state.groupBy : 'effort';
-  const meta = `${grouped === 'source' ? '' : kindBadge(it.kind)}${it.live && it.session ? roleChip(it.session) + pullChip(it.session) : ''}${grouped === 'effort' ? '' : `<span>${esc(effortById(effortOf(it)).name)}</span>`}`;
+  const chips = `${grouped === 'source' ? '' : kindBadge(it.kind)}${it.live && it.session ? roleChip(it.session) + pullChip(it.session) : ''}${grouped === 'effort' ? '' : `<span>${esc(effortById(effortOf(it)).name)}</span>`}`;
+  /* The short form keeps the title, its age and urgency, and the description. */
+  const long = state.rows !== 'short';
   return `<button class="row ${it.urgency} ${state.view === 'attention' && it.id === state.sel ? 'sel' : ''} ${it.id === freshId ? 'fresh' : ''}" data-act="${act}" data-id="${it.id}" style="${kindColor(it.kind)}">
-    ${title(it, 't')}
+    <span class="h">${title(it, 't')}<span class="w"><span>${ago(ageOf(it))}</span>${it.urgency === 'whenever' ? '' : `<span class="tag ${it.urgency}">${it.urgency}</span>`}</span></span>
     ${it.subtitle && state.fluent ? `<span class="st">${esc(it.subtitle)}</span>` : ''}
-    <span class="m">${meta}<span>${ago(ageOf(it))}</span>${it.urgency === 'whenever' ? '' : `<span class="tag ${it.urgency}">${it.urgency}</span>`}</span>
-    ${it.live && it.session?.model ? `<span class="m"><span>${runsOn(it.session)}</span>${contextUse(it.session, true)}</span>` : ''}
+    ${long && chips ? `<span class="m">${chips}</span>` : ''}
+    ${long && it.live && it.session?.model ? `<span class="m"><span>${runsOn(it.session)}</span>${contextUse(it.session, true)}</span>` : ''}
   </button>`;
 }
 
@@ -830,18 +846,9 @@ function itemDetail(it) {
   }
   return `<div class="inner">
     <div class="crumb"><button class="eff" data-act="effort" data-id="${eff.id}">${esc(eff.name)} ›</button>${kindBadge(it.kind, it.src)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span></div>
-    <h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>
+    <div class="titled"><h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>${itemMenu(it, `<button data-act="park" data-id="${it.id}">Park as open question</button>
+      ${menuPart('move', 'Move to', menuTo('moveTo', it.id, EFFORTS.concat(UNSORTED).filter(e => e.id !== eff.id).map(e => [e.id, e.name])))}`)}</div>
     <div class="need"><div class="label">${spark}What's needed from you</div><p class="ask">${esc(it.ask)}</p>${answer}</div>
-    <div class="bar">
-      <button class="btn" data-act="snooze" data-id="${it.id}" data-for="hour">Snooze 1h</button>
-      <button class="btn" data-act="snooze" data-id="${it.id}" data-for="tomorrow">Until tomorrow</button>
-      <button class="btn" data-act="dismiss" data-id="${it.id}">Dismiss</button>
-      <button class="btn" data-act="park" data-id="${it.id}">Park as open question</button>
-      <select class="btn" data-change="move" data-id="${it.id}" aria-label="Move to another effort">
-        <option value="">Move to…</option>
-        ${EFFORTS.concat(UNSORTED).filter(e => e.id !== eff.id).map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join('')}
-      </select>
-    </div>
     <div class="sec"><div class="label"><span>${spark}What's going on</span><button data-act="rephrase" data-id="${it.id}">↻ ${v === 0 ? 'Shorter' : 'Fuller'}</button></div>
       <p class="prose" id="summary">${esc(it.summary[v])}</p></div>
     <div class="sec"><div class="label"><span>From the source, verbatim</span><button data-act="toggleRaw" data-id="${it.id}">${rawOpen ? 'Hide' : 'Show'}</button></div>
@@ -871,6 +878,7 @@ function viewAttention() {
       ${shut ? '' : g.items.map(i => rowHtml(i)).join('')}`;
   }).join('');
   const seg = ['effort', 'urgency', 'source'].map(b => `<button class="${state.groupBy === b ? 'on' : ''}" data-act="group" data-by="${b}">${cap(b)}</button>`).join('');
+  const rows = ['long', 'short'].map(as => `<button class="${(state.rows || 'long') === as ? 'on' : ''}" data-act="rows" data-as="${as}">${cap(as)}</button>`).join('');
   const sel = state.sel && itemById(state.sel);
   const sided = sel && sel.live && !sel.feed;
   const side = !sided ? '' : state.sideShut
@@ -879,7 +887,8 @@ function viewAttention() {
   return `<div class="split ${sided ? 'sided' : ''} ${sided && state.sideShut ? 'shut' : ''}">
     <section class="pane list" data-scroll="att-list">
       ${briefing(all)}
-      <div class="listbar"><span class="label">Needs you</span><span class="seg" role="group" aria-label="Group by">${seg}</span></div>
+      <div class="listbar"><span class="label">Needs you</span><span class="segs"><span class="seg" role="group" aria-label="Group by">${seg}</span>
+        <span class="seg" role="group" aria-label="How much each row shows" title="Short rows show only the title, how long ago, and the description.">${rows}</span></span></div>
       ${chips}
       ${groups}
       ${handledFooter()}
@@ -1325,11 +1334,27 @@ function sendReply(sessionId, text, done) {
     .catch(() => toast('Could not reach the Slorp service'));
 }
 
-const barFor = (it, extra) => `<div class="bar">
-      <button class="btn" data-act="snooze" data-id="${it.id}" data-for="hour">Snooze 1h</button>
-      <button class="btn" data-act="snooze" data-id="${it.id}" data-for="tomorrow">Until tomorrow</button>
-      <button class="btn" data-act="dismiss" data-id="${it.id}">Dismiss</button>
-      ${extra}</div>`;
+/* The lesser things to do with an item, behind one button beside its title.
+   actsFor is the item whose menu is open, and actsSub the part of it that is. */
+let actsFor = null, actsSub = null;
+const menuPart = (key, name, rows) => `<details data-sub="${key}" ${actsSub === key ? 'open' : ''}><summary>${name}<span>›</span></summary><div>${rows}</div></details>`;
+const menuTo = (act, id, list) => list.map(([to, name]) => `<button data-act="${act}" data-id="${id}" data-to="${to}">${esc(name)}</button>`).join('');
+function itemMenu(it, more) {
+  return `<details class="menu acts" id="acts" data-id="${it.id}" ${actsFor === it.id ? 'open' : ''}><summary class="icon" title="Snooze, dismiss, move and more" aria-label="More to do with this item">⋯</summary>
+    <div class="pop">${menuPart('snooze', 'Snooze', `<button data-act="snooze" data-id="${it.id}" data-for="hour">For an hour</button><button data-act="snooze" data-id="${it.id}" data-for="tomorrow">Until tomorrow</button>`)}
+      <button data-act="dismiss" data-id="${it.id}">Dismiss</button>${more}</div></details>`;
+}
+/* The efforts a live session or repository could be filed under other than cur. */
+const effortsBut = cur => liveEfforts.concat(LIVE_UNSORTED).filter(e => e.id !== cur).map(e => [e.id, e.name]).concat([['__new', 'New effort…']]);
+function sessionMenu(it) {
+  const s = it.session;
+  const roles = knowledge.roles.filter(r => !(r.id === s.role && s.roleVia === 'you')).map(r => [r.id, r.name])
+    .concat(s.role || s.roleVia !== 'you' ? [['__none', 'No role']] : [], [['__new', 'New role…']]);
+  return itemMenu(it, `${s.pending ? '' : `<button data-act="livePark" data-id="${it.id}">Park as open question</button>`}
+    ${menuPart('move', 'Move to', menuTo('liveMoveTo', s.id, effortsBut(s.effort || 'unsorted')))}
+    ${menuPart('role', s.role && s.roleVia === 'you' ? 'Change role' : 'Role', menuTo('liveRoleTo', s.id, roles))}
+    ${s.job ? `<button data-act="stop" data-id="${s.id}" title="Stops this background session. Its conversation is kept, and it can be reopened from Closed sessions.">Stop session</button>` : ''}`);
+}
 /* The other sessions filed under an effort, as rows, and how many there are. */
 const alsoRows = (effort, except) => {
   const others = live.filter(x => x.id !== except && (x.effort || 'unsorted') === effort);
@@ -1358,17 +1383,14 @@ function onBranch(it) {
 
 function feedItemDetail(it) {
   const real = it.effort !== 'unsorted';
-  const move = `<select class="btn" data-change="repoMove" data-id="${it.id}" aria-label="File this repository under an effort">
-    <option value="">File ${esc(it.repo)} under…</option>
-    ${liveEfforts.concat(LIVE_UNSORTED).filter(e => e.id !== it.effort).map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join('')}
-    <option value="__new">New effort…</option></select>`;
+  const menu = itemMenu(it, `<button data-act="livePark" data-id="${it.id}">Park as open question</button>
+    ${menuPart('move', `File ${esc(it.repo)} under`, menuTo('repoMoveTo', it.id, effortsBut(it.effort)))}`);
   return `<div class="inner">
     <div class="crumb">${real ? `<button class="eff" data-act="effort" data-id="${it.effort}">${esc(effortById(it.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${real && VIA_REPO[it.effortVia] ? `<span>${VIA_REPO[it.effortVia]}</span>` : ''}${kindBadge(it.kind, it.src)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span><span class="mono">${esc(it.repo)}</span></div>
-    <h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>
+    <div class="titled"><h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>${menu}</div>
     <div class="need"><div class="label">What's needed from you</div><p class="ask">${esc(it.ask)}</p>
       ${/^https:\/\//.test(it.url || '') ? `<div class="replies"><a class="btn go" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">Open on ${esc(it.src)} ↗</a>
         <span class="none" style="align-self:center">Slorp only reads ${esc(it.src)}. Anything you do there, you do there.</span></div>` : ''}</div>
-    ${barFor(it, `<button class="btn" data-act="livePark" data-id="${it.id}">Park as open question</button>${move}`)}
     ${onBranch(it)}
     <div class="sec"><div class="label"><span>What's going on</span></div><p class="prose">${esc(it.summary)}</p>
       <div class="none" style="margin-top:8px">As ${esc(it.src)} reported it ${ago(minsSince((feeds[it.source] || {}).at || it.at))}. No model wrote any of this.</div></div>
@@ -1490,13 +1512,12 @@ function liveItemDetail(it) {
   }
   return `<div class="inner">
     <div class="crumb">${s.effort ? `<button class="eff" data-act="effort" data-id="${s.effort}">${esc(effortById(s.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${s.effortVia === 'guess' ? `<span>${spark}filed by the model</span>` : ''}${kindBadge(it.kind, it.src)}${roleChip(s)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span>${s.branch ? `<span class="mono">${esc(s.branch)}</span>` : ''}${pullChip(s, true)}${s.model ? `<span>${runsOn(s)}</span>` : ''}${contextUse(s)}</div>
-    ${renaming === s.id
+    <div class="titled">${renaming === s.id
       ? `<form class="rename" data-form="name" data-id="${s.id}"><input name="name" data-keep="name-${s.id}" value="${esc(s.label)}" maxlength="80" placeholder="Leave empty to go back to its own title" aria-label="Name for this session">
           <button class="btn go">Save</button><button type="button" class="btn" data-act="renameCancel">Cancel</button></form>`
-      : `<h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}${state.fluent ? `<button class="pen" data-act="rename" data-id="${s.id}" title="${s.labelVia === 'you' ? 'You named this session. Rename it' : 'Give this session a name of your own'}" aria-label="Rename this session">✎</button>` : ''}</h1>`}
+      : `<h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}${state.fluent ? `<button class="pen" data-act="rename" data-id="${s.id}" title="${s.labelVia === 'you' ? 'You named this session. Rename it' : 'Give this session a name of your own'}" aria-label="Rename this session">✎</button>` : ''}</h1>`}${sessionMenu(it)}</div>
     ${it.subtitle && state.fluent ? `<p class="subt">${spark}${esc(it.subtitle)}</p>` : ''}
     <div class="need"><div class="label">${it.summary ? spark : ''}What's needed from you</div><p class="ask">${esc(it.ask)}</p>${answer}</div>
-    ${barFor(it, `${s.pending ? '' : `<button class="btn" data-act="livePark" data-id="${it.id}">Park as open question</button>`}${moveSelect(s)}${roleSelect(s)}${stopButton(s)}`)}
     <div class="sec going"><div class="label"><span>${it.summary ? spark : ''}What's going on</span></div>${goingOn(it)}</div>
     ${detailTabs(it, s)}
   </div>`;
@@ -1805,6 +1826,9 @@ function render() {
   document.querySelectorAll('[data-keep]').forEach(el => { drafts[el.dataset.keep] = el.value; });
   const focused = document.activeElement?.dataset?.keep, caret = focused && [document.activeElement.selectionStart, document.activeElement.selectionEnd];
   const menuOpen = $('#menu')?.open;
+  const acts = $('#acts');
+  actsFor = acts?.open ? acts.dataset.id : null;
+  actsSub = acts?.open ? acts.querySelector('details[open]')?.dataset.sub || null : null;
 
   document.documentElement.dataset.theme = state.theme;
   const main = RENDER[state.view]();  // first: it may settle the selection
@@ -1848,6 +1872,11 @@ const actions = {
   view: d => go(d.view),
   select: d => { state.sel = d.id; },
   group: d => { state.groupBy = d.by; },
+  rows: d => { state.rows = d.as; },
+  liveMoveTo: d => changes.liveMove(d, { value: d.to }),
+  liveRoleTo: d => changes.liveRole(d, { value: d.to }),
+  repoMoveTo: d => changes.repoMove(d, { value: d.to }),
+  moveTo: d => changes.move(d, { value: d.to }),
   srcFilter: d => { state.srcFilter = d.src; },
   collapse: d => { state.collapsed[d.key] = !state.collapsed[d.key]; },
   noop: () => false,
@@ -2082,6 +2111,8 @@ const changes = {
 
 document.addEventListener('click', e => {
   if (!e.target.closest('#menu')) $('#menu')?.removeAttribute('open');
+  /* An item's menu shuts on a click outside it, and once something in it is chosen. */
+  if (!e.target.closest('#acts') || e.target.closest('#acts [data-act]')) $('#acts')?.removeAttribute('open');
   const el = e.target.closest('[data-act]');
   if (!el) return;
   if (actions[el.dataset.act](el.dataset, el) !== false) { save(); render(); }
@@ -2121,6 +2152,7 @@ document.addEventListener('submit', e => {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && e.target.closest('.rename')) { renaming = null; render(); return; }
   if (e.key === 'Escape' && modal) { modal = null; render(); return; }
+  if (e.key === 'Escape' && $('#acts')?.open) { $('#acts').removeAttribute('open'); return; }
   if ((e.metaKey || e.ctrlKey) && e.key === 'k' && live) { e.preventDefault(); openSearch(); render(); return; }
   /* ⌘↵ in a message box presses the button that sends it. */
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && e.target.tagName === 'TEXTAREA') {
