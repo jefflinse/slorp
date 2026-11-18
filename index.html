@@ -870,12 +870,12 @@ function usageTotal() {
   const of = s => (s.used?.in || 0) + (s.used?.cacheWrite || 0) + (s.used?.cacheRead || 0) + (s.used?.out || 0);
   const counted = live.filter(of), all = counted.reduce((n, s) => n + of(s), 0);
   if (!all) return '';
-  const sum = k => tokens(counted.reduce((n, s) => n + s.used[k], 0));
+  const sum = (...keys) => counted.reduce((n, s) => n + keys.reduce((m, k) => m + s.used[k], 0), 0);
   const priced = live.filter(s => s.costUsd), usd = priced.reduce((n, s) => n + s.costUsd, 0);
-  const about = `Used by the ${num(counted.length)} open session${counted.length === 1 ? '' : 's'} with a transcript, since each began: ${sum('in')} sent fresh, ${sum('cacheWrite')} written to the cache, ${sum('cacheRead')} read back from it, ${sum('out')} written by the model. `
+  const about = `New tokens in the ${num(counted.length)} open session${counted.length === 1 ? '' : 's'} with a transcript, since each began: ${tokens(sum('in', 'cacheWrite'))} sent for the first time and ${tokens(sum('out'))} written by the model. Reading the conversation back from the cache on every request came to another ${tokens(sum('cacheRead'))}, left out of the figure. `
     + (priced.length ? `The cost is each agent's own estimate at list prices, from ${priced.length === live.length ? 'all of them' : `${num(priced.length)} of the ${num(live.length)} open`}; inside a subscription it is not a charge.` : 'No session has reported what it cost.');
   const agents = [...new Set(counted.map(s => s.agent))];
-  return `<span class="used" id="used" style="${agents.length === 1 ? kindColor(agents[0]) : ''}" title="${esc(about)}"><i></i>${tokens(all)} tokens${priced.length ? ` · ≈${money(usd)}` : ''}</span>`;
+  return `<span class="used" id="used" style="${agents.length === 1 ? kindColor(agents[0]) : ''}" title="${esc(about)}"><i></i>${priced.length ? `≈${money(usd)} · ` : ''}${tokens(sum('in', 'cacheWrite', 'out'))} tokens</span>`;
 }
 function runsOn(s) {
   return [s.model && esc(modelName(s.model)), s.reasoning && `<span title="Reasoning effort">${esc(s.reasoning)}</span>`].filter(Boolean).join(' · ');
