@@ -494,7 +494,7 @@ func (h *Hub) restore(s *Session) {
 	}
 	s.Insight, s.insightKey, s.guess, s.guessKey, s.insightAt = d.Insight, d.InsightKey, d.Guess, d.GuessKey, d.InsightAt
 	s.roleGuess, s.roleKey = d.RoleGuess, d.RoleKey
-	s.given, s.pinned, s.Timeline = d.Given, d.Pinned, d.Timeline
+	s.given, s.pinned, s.Timeline = d.Given, d.Pinned, tidy(d.Timeline)
 }
 
 func (h *Hub) remember(s *Session) {
@@ -1229,7 +1229,7 @@ func texts(facts []kb.Fact) []string {
 func (h *Hub) track(s *Session, now time.Time) {
 	said := []rune(strings.Join(strings.Fields(s.LastPrompt), " "))
 	prompt := string(said[:min(len(said), momentLimit)])
-	same := func(m Moment) bool { return m.Prompt == prompt }
+	same := func(m Moment) bool { return samePrompt(m.Prompt, prompt) }
 	n := len(s.Timeline)
 	at := s.PromptAt
 	if at.IsZero() {
@@ -1246,6 +1246,33 @@ func (h *Hub) track(s *Session, now time.Time) {
 		s.Timeline = s.Timeline[n-timelineLimit:]
 	}
 	h.remember(s)
+}
+
+// samePrompt reports whether a and b are one prompt, either of them
+// perhaps cut short with a mark where it was cut.
+func samePrompt(a, b string) bool {
+	cut := func(short, whole string) bool {
+		return strings.HasSuffix(short, "…") && strings.HasPrefix(whole, strings.TrimSpace(strings.TrimSuffix(short, "…")))
+	}
+	return a == b || cut(a, b) || cut(b, a)
+}
+
+// tidy folds each moment into the one before it when both are one prompt,
+// keeping the fuller wording and the later line.
+func tidy(timeline []Moment) []Moment {
+	var out []Moment
+	for _, m := range timeline {
+		n := len(out)
+		if n == 0 || !samePrompt(out[n-1].Prompt, m.Prompt) {
+			out = append(out, m)
+			continue
+		}
+		if strings.HasSuffix(out[n-1].Prompt, "…") {
+			out[n-1].Prompt = m.Prompt
+		}
+		out[n-1].Line = cmp.Or(m.Line, out[n-1].Line)
+	}
+	return out
 }
 
 func contentKey(s *Session) string {

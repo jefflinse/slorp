@@ -936,6 +936,39 @@ func TestLimits(t *testing.T) {
 	}
 }
 
+func TestAStoredTimelineLosesItsRepeats(t *testing.T) {
+	h, _, _ := newHub(t)
+	at := time.Now().Add(-time.Hour).Truncate(time.Second)
+	stored := []Moment{
+		{At: at, Prompt: "push it"},
+		{At: at.Add(time.Minute), Prompt: "one, two, three, four", Line: ""},
+		{At: at.Add(2 * time.Minute), Prompt: "one, two, thr…", Line: "Counted to four"},
+		{At: at.Add(3 * time.Minute), Prompt: "one, two, and stop there"},
+		{At: at.Add(4 * time.Minute), Prompt: "a long one cut sh…", Line: "Old line"},
+		{At: at.Add(5 * time.Minute), Prompt: "a long one cut short by its agent", Line: "New line"},
+	}
+	if err := h.cache.Put("session", "s", sessionDoc{Timeline: stored}); err != nil {
+		t.Fatal(err)
+	}
+	h.SetRoster(agent, []Session{{ID: "s", Agent: agent, Status: Idle}})
+
+	got := session(t, h, "s").Timeline
+	want := []Moment{
+		stored[0],
+		{At: at.Add(time.Minute), Prompt: "one, two, three, four", Line: "Counted to four"},
+		stored[3],
+		{At: at.Add(4 * time.Minute), Prompt: "a long one cut short by its agent", Line: "New line"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("timeline = %+v, want %d moments", got, len(want))
+	}
+	for i := range want {
+		if got[i].Prompt != want[i].Prompt || got[i].Line != want[i].Line || !got[i].At.Equal(want[i].At) {
+			t.Errorf("moment %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
 func TestTimeline(t *testing.T) {
 	h, k, st := newHub(t)
 	t1 := time.Now().Add(-time.Hour)
@@ -982,6 +1015,11 @@ func TestTimeline(t *testing.T) {
 
 	said(h, "do the first thing", time.Time{})
 	want(h, "an earlier prompt reported again with no time", first, second)
+	said(h, "now the sec…", time.Time{})
+	want(h, "the same prompt reported cut short", first, second)
+	said(h, "now the sec…", t3.Add(time.Minute))
+	want(h, "the same prompt reported cut short, and later", first, second)
+	said(h, "now the second", t3)
 
 	h.SetInsight("s", "content the session has moved on from", Insight{Title: "Stale"})
 	want(h, "a description of older content", first, second)

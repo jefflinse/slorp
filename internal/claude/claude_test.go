@@ -185,6 +185,47 @@ func TestTailReadsWhenThePromptWasSaid(t *testing.T) {
 	}
 }
 
+func TestTailKeepsThePromptAsItWasTyped(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	long := "1. Yes!\n2. Yes!\n" + strings.Repeat("and another thing. ", 20) + "the end"
+	note := func(of string) map[string]any {
+		flat := []rune(strings.Join(strings.Fields(of), " "))
+		return map[string]any{"type": "last-prompt", "lastPrompt": string(flat[:min(len(flat), 200)]) + "…"}
+	}
+	typedAt := func(content any, at string) map[string]any {
+		e := user(content)
+		e["timestamp"] = at
+		return e
+	}
+	tl := &tail{path: path}
+	check := func(when, prompt string, at time.Time) {
+		t.Helper()
+		tl.read()
+		if tl.lastPrompt != prompt || !tl.promptAt.Equal(at) {
+			t.Errorf("%s: prompt %q said at %v; want %q at %v", when, tl.lastPrompt, tl.promptAt, prompt, at)
+		}
+	}
+	ten, eleven := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC), time.Date(2026, 11, 17, 11, 0, 0, 0, time.UTC)
+
+	appendTo(t, path, line(t, typedAt(long, "2026-11-17T10:00:00Z"))+line(t, note(long)))
+	check("a long prompt, then Claude Code's short note of it", long, ten)
+
+	pictured := []map[string]any{text("look at this: [Image #1]"), {"type": "image", "source": map[string]any{"data": "…"}}, text("and say what you see")}
+	appendTo(t, path, line(t, typedAt(pictured, "2026-11-17T11:00:00Z"))+
+		line(t, map[string]any{"type": "last-prompt", "lastPrompt": "look at this: [Image #1]  and say what you see"}))
+	check("a prompt with a picture", "look at this: [Image #1]\n\nand say what you see", eleven)
+
+	appendTo(t, path, line(t, typedAt([]map[string]any{text("[Request interrupted by user for tool use]")}, "2026-11-17T12:00:00Z"))+
+		line(t, typedAt([]map[string]any{{"type": "tool_result", "content": "exit 0"}, text("not typed")}, "2026-11-17T12:00:01Z")))
+	check("notices and tool results", "look at this: [Image #1]\n\nand say what you see", eleven)
+
+	appendTo(t, path, line(t, map[string]any{"type": "last-prompt", "lastPrompt": "look at this"}))
+	check("a whole note that only begins like the prompt", "look at this", time.Time{})
+
+	appendTo(t, path, line(t, note("look at that instead")))
+	check("a note of a prompt that was never read", "look at that instead…", time.Time{})
+}
+
 func TestTailReadsIncrementally(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	appendTo(t, path, line(t, assistant(text("first"))))

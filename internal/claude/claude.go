@@ -241,13 +241,13 @@ func (t *tail) apply(line []byte) {
 			t.title = e.AITitle
 		}
 	case "last-prompt":
-		if said := head(e.LastPrompt, promptLimit); said != "" && said != t.lastPrompt {
+		// Claude Code's own note of the prompt is cut short and untimed, so
+		// it stands in only for a prompt that was not read from its entry.
+		if said := head(e.LastPrompt, promptLimit); said != "" && !cutFrom(said, t.lastPrompt) {
 			t.lastPrompt, t.promptAt = said, time.Time{}
 		}
 	case "user":
-		// Typed prompts carry a plain string; tool results and attachments do not.
-		var text string
-		if !e.IsMeta && json.Unmarshal(e.Message.Content, &text) == nil && !strings.HasPrefix(strings.TrimSpace(text), "<") {
+		if text := typed(e.Message.Content); text != "" && !e.IsMeta {
 			t.lastPrompt = head(text, promptLimit)
 			t.promptAt, _ = time.Parse(time.RFC3339, e.Timestamp)
 		}
@@ -278,6 +278,44 @@ func (t *tail) count(id string, now hub.Tokens) {
 	t.used.CacheWrite += now.CacheWrite - was.CacheWrite
 	t.used.CacheRead += now.CacheRead - was.CacheRead
 	t.used.Out += now.Out - was.Out
+}
+
+// typed returns what the user typed in a user entry: its text, with or
+// without attachments. Tool results, command echoes and the harness's own
+// notices are not typed, and give "".
+func typed(content json.RawMessage) string {
+	var text string
+	if json.Unmarshal(content, &text) != nil {
+		var blocks []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(content, &blocks) != nil {
+			return ""
+		}
+		var parts []string
+		for _, b := range blocks {
+			if b.Type == "tool_result" {
+				return ""
+			}
+			if b.Type == "text" {
+				parts = append(parts, b.Text)
+			}
+		}
+		text = strings.Join(parts, "\n\n")
+	}
+	if text = strings.TrimSpace(text); strings.HasPrefix(text, "<") || strings.HasPrefix(text, "[Request interrupted") {
+		return ""
+	}
+	return text
+}
+
+// cutFrom reports whether note is whole, give or take its spacing, or is
+// its beginning with a mark where it was cut.
+func cutFrom(note, whole string) bool {
+	squeeze := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	note, whole = squeeze(note), squeeze(whole)
+	return whole != "" && (note == whole || strings.HasSuffix(note, "…") && strings.HasPrefix(whole, strings.TrimSpace(strings.TrimSuffix(note, "…"))))
 }
 
 func assistantText(content json.RawMessage) string {
