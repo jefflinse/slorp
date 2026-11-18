@@ -57,6 +57,9 @@ h1, h2, h3, p { margin: 0; }
 .count { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 6px; border-radius: 9px; background: var(--fill); color: var(--fill-ink); font-size: 11px; font-weight: 700; text-align: center; line-height: 18px; }
 .tools { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 .model { color: var(--ink3); font-size: 12px; white-space: nowrap; }
+.used { display: inline-flex; align-items: center; padding: 2px 10px 2px 8px; border-radius: 99px; color: var(--ink2); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--k, var(--ink3)) 14%, transparent); border: 1px solid color-mix(in srgb, var(--k, var(--ink3)) 32%, transparent); }
+.used i { width: 6px; height: 6px; border-radius: 50%; margin-right: 6px; background: var(--k, var(--ink3)); }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ink3); margin-right: 6px; vertical-align: 1px; flex: none; }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; background: var(--raised); }
 .seg button { padding: 3px 10px; font-size: 12px; color: var(--ink2); }
@@ -302,7 +305,7 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
 }
 @media (max-width: 860px) {
   .top { gap: 10px; overflow-x: auto; }
-  .model { display: none; }
+  .model, .used { display: none; }
   .split, .split.narrow, .split.sided, .split.sided.shut { grid-template-columns: 1fr; height: auto; }
   .pane.list { border-right: 0; border-bottom: 1px solid var(--line); max-height: 48vh; }
   .pane.detail, .page { padding: 20px 16px 48px; }
@@ -871,7 +874,8 @@ function usageTotal() {
   const priced = live.filter(s => s.costUsd), usd = priced.reduce((n, s) => n + s.costUsd, 0);
   const about = `Used by the ${num(counted.length)} open session${counted.length === 1 ? '' : 's'} with a transcript, since each began: ${sum('in')} sent fresh, ${sum('cacheWrite')} written to the cache, ${sum('cacheRead')} read back from it, ${sum('out')} written by the model. `
     + (priced.length ? `The cost is each agent's own estimate at list prices, from ${priced.length === live.length ? 'all of them' : `${num(priced.length)} of the ${num(live.length)} open`}; inside a subscription it is not a charge.` : 'No session has reported what it cost.');
-  return `<span class="model" id="used" title="${esc(about)}">${tokens(all)} tokens${priced.length ? ` · ≈${money(usd)}` : ''}</span>`;
+  const agents = [...new Set(counted.map(s => s.agent))];
+  return `<span class="used" id="used" style="${agents.length === 1 ? kindColor(agents[0]) : ''}" title="${esc(about)}"><i></i>${tokens(all)} tokens${priced.length ? ` · ≈${money(usd)}` : ''}</span>`;
 }
 function runsOn(s) {
   return [s.model && esc(modelName(s.model)), s.reasoning && `<span title="Reasoning effort">${esc(s.reasoning)}</span>`].filter(Boolean).join(' · ');
