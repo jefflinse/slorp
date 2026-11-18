@@ -942,9 +942,9 @@ func TestAStoredTimelineLosesItsRepeats(t *testing.T) {
 	stored := []Moment{
 		{At: at, Prompt: "push it"},
 		{At: at.Add(time.Minute), Prompt: "one, two, three, four", Line: ""},
-		{At: at.Add(2 * time.Minute), Prompt: "one, two, thr…", Line: "Counted to four"},
+		{At: at.Add(2 * time.Minute), Prompt: "one, two, thr…", Line: "Counted to four", Summary: "It counted."},
 		{At: at.Add(3 * time.Minute), Prompt: "one, two, and stop there"},
-		{At: at.Add(4 * time.Minute), Prompt: "a long one cut sh…", Line: "Old line"},
+		{At: at.Add(4 * time.Minute), Prompt: "a long one cut sh…", Line: "Old line", Summary: "Old summary"},
 		{At: at.Add(5 * time.Minute), Prompt: "a long one cut short by its agent", Line: "New line"},
 	}
 	if err := h.cache.Put("session", "s", sessionDoc{Timeline: stored}); err != nil {
@@ -955,7 +955,7 @@ func TestAStoredTimelineLosesItsRepeats(t *testing.T) {
 	got := session(t, h, "s").Timeline
 	want := []Moment{
 		stored[0],
-		{At: at.Add(time.Minute), Prompt: "one, two, three, four", Line: "Counted to four"},
+		{At: at.Add(time.Minute), Prompt: "one, two, three, four", Line: "Counted to four", Summary: "It counted."},
 		stored[3],
 		{At: at.Add(4 * time.Minute), Prompt: "a long one cut short by its agent", Line: "New line"},
 	}
@@ -963,7 +963,7 @@ func TestAStoredTimelineLosesItsRepeats(t *testing.T) {
 		t.Fatalf("timeline = %+v, want %d moments", got, len(want))
 	}
 	for i := range want {
-		if got[i].Prompt != want[i].Prompt || got[i].Line != want[i].Line || !got[i].At.Equal(want[i].At) {
+		if got[i].Prompt != want[i].Prompt || got[i].Line != want[i].Line || got[i].Summary != want[i].Summary || !got[i].At.Equal(want[i].At) {
 			t.Errorf("moment %d = %+v, want %+v", i, got[i], want[i])
 		}
 	}
@@ -975,7 +975,9 @@ func TestTimeline(t *testing.T) {
 	said := func(h *Hub, prompt string, at time.Time) {
 		h.SetRoster(agent, []Session{{ID: "s", Agent: agent, Status: Idle, LastPrompt: prompt, PromptAt: at}})
 	}
-	line := func(h *Hub, title string) { h.SetInsight("s", h.sessions["s"].key, Insight{Title: title}) }
+	line := func(h *Hub, title string) {
+		h.SetInsight("s", h.sessions["s"].key, Insight{Title: title, Summary: "In full: " + title})
+	}
 	timeline := func(h *Hub) []Moment { return session(t, h, "s").Timeline }
 	want := func(h *Hub, when string, moments ...Moment) {
 		t.Helper()
@@ -996,7 +998,7 @@ func TestTimeline(t *testing.T) {
 	before := h.State()
 	line(h, "Did the first thing")
 	line(h, "Did the first thing, then asked")
-	first.Line = "Did the first thing, then asked"
+	first.Line, first.Summary = "Did the first thing, then asked", "In full: Did the first thing, then asked"
 	want(h, "described twice", first)
 	if got := before.Sessions[0].Timeline[0].Line; got != "" {
 		t.Errorf("a state handed out earlier was changed under its reader: line %q", got)

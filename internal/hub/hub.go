@@ -130,8 +130,10 @@ type Tokens struct {
 type Moment struct {
 	At     time.Time `json:"at"`
 	Prompt string    `json:"prompt"`
-	// Line is empty when the model never described the exchange.
-	Line string `json:"line,omitempty"`
+	// Line is empty when the model never described the exchange, and so
+	// is Summary, its fuller account of where things stood.
+	Line    string `json:"line,omitempty"`
+	Summary string `json:"summary,omitempty"`
 }
 
 const (
@@ -408,6 +410,10 @@ type sessionDoc struct {
 	Given      string    `json:"given"`
 	Pinned     string    `json:"pinned"`
 	Timeline   []Moment  `json:"timeline,omitempty"`
+	// Label and Effort are the session's name and filing when last stored,
+	// for when it is no longer open to ask.
+	Label  string `json:"label,omitempty"`
+	Effort string `json:"effort,omitempty"`
 }
 
 type ReplyState string
@@ -448,6 +454,8 @@ type Hub struct {
 	checkouts map[string][]string
 	// limits is each agent's latest reading of the user's usage windows.
 	limits map[string][]Limit
+	// wrapups is what has been written, or asked to be, about each day.
+	wrapups map[string]Wrapup
 }
 
 type note struct {
@@ -458,7 +466,13 @@ type note struct {
 // New returns a hub restored from what c holds.
 func New(k *kb.Store, c Cache) *Hub {
 	h := &Hub{sessions: map[string]*Session{}, subs: map[chan struct{}]struct{}{}, kb: k, notes: map[string]note{},
-		cache: c, settings: Settings{AnswerPermissions: true}, waiters: map[string]chan Decision{}, feeds: map[string]*feed{}}
+		cache: c, settings: Settings{AnswerPermissions: true}, waiters: map[string]chan Decision{}, feeds: map[string]*feed{}, wrapups: map[string]Wrapup{}}
+	h.warn(c.Each("wrapup", func(day string, body []byte) {
+		var w Wrapup
+		if json.Unmarshal(body, &w) == nil {
+			h.wrapups[day] = w
+		}
+	}))
 	h.warn(c.Each("note", func(id string, body []byte) {
 		var n note
 		if json.Unmarshal(body, &n) == nil {
@@ -498,8 +512,23 @@ func (h *Hub) restore(s *Session) {
 }
 
 func (h *Hub) remember(s *Session) {
+	label, _ := s.label()
+	effort, _ := h.filed(s)
 	h.warn(h.cache.Put("session", s.ID, sessionDoc{Insight: s.Insight, InsightKey: s.insightKey, Guess: s.guess, GuessKey: s.guessKey, InsightAt: s.insightAt,
-		RoleGuess: s.roleGuess, RoleKey: s.roleKey, Given: s.given, Pinned: s.pinned, Timeline: s.Timeline}))
+		RoleGuess: s.roleGuess, RoleKey: s.roleKey, Given: s.given, Pinned: s.pinned, Timeline: s.Timeline, Label: label, Effort: effort}))
+}
+
+// filed returns the effort a session is filed under and how it came to be,
+// or "" when it is unsorted.
+func (h *Hub) filed(s *Session) (effort, via string) {
+	if id, via, ok := h.kb.Resolve(s.ID, s.Cwd); ok {
+		return id, via
+	}
+	// A guess made on older content stands until a newer one replaces it.
+	if s.guess != "" && h.kb.Has(s.guess) {
+		return s.guess, ViaGuess
+	}
+	return "", ""
 }
 
 // SetRoster replaces the known sessions of one agent with the live set an
@@ -538,6 +567,7 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 	}
 	for id, s := range h.sessions {
 		if s.Agent == agent && !seen[id] {
+			h.remember(s)
 			delete(h.sessions, id)
 		}
 	}
@@ -572,6 +602,7 @@ func (h *Hub) Retire(agent string, silence time.Duration) {
 	defer h.mu.Unlock()
 	for id, s := range h.sessions {
 		if s.Agent == agent && time.Since(s.bridgeSeen) > silence {
+			h.remember(s)
 			delete(h.sessions, id)
 		}
 	}
@@ -974,6 +1005,9 @@ type State struct {
 	PullRequests []PullRequest `json:"pullRequests"`
 	// Limits are the user's usage windows as the agents last read them.
 	Limits []Limit `json:"limits"`
+	// Wrapups are the days that have been wrapped up or are waiting to be,
+	// by day.
+	Wrapups map[string]Wrapup `json:"wrapups"`
 }
 
 func (h *Hub) State() State {
@@ -985,7 +1019,7 @@ func (h *Hub) State() State {
 		feeds[id] = f.FeedStatus
 	}
 	return State{Sessions: sessions, Items: append(items(sessions), h.fed()...), Efforts: h.efforts(sessions), Summarizer: h.summ,
-		Settings: h.settings, Knowledge: h.kb.Knowledge(), Lookups: append([]Lookup{}, h.lookups...), Feeds: feeds, PullRequests: h.pulls(), Limits: h.limited()}
+		Settings: h.settings, Knowledge: h.kb.Knowledge(), Lookups: append([]Lookup{}, h.lookups...), Feeds: feeds, PullRequests: h.pulls(), Limits: h.limited(), Wrapups: maps.Clone(h.wrapups)}
 }
 
 func (h *Hub) efforts(sessions []Session) []Effort {
@@ -1152,7 +1186,7 @@ func (h *Hub) SetInsight(sessionID, key string, in Insight) {
 		// nothing about its latest moment.
 		if n := len(s.Timeline); n > 0 && key == s.key {
 			s.Timeline = slices.Clone(s.Timeline)
-			s.Timeline[n-1].Line = in.Title
+			s.Timeline[n-1].Line, s.Timeline[n-1].Summary = in.Title, in.Summary
 		}
 		h.remember(s)
 		h.changed()
@@ -1270,7 +1304,9 @@ func tidy(timeline []Moment) []Moment {
 		if strings.HasSuffix(out[n-1].Prompt, "…") {
 			out[n-1].Prompt = m.Prompt
 		}
-		out[n-1].Line = cmp.Or(m.Line, out[n-1].Line)
+		if m.Line != "" {
+			out[n-1].Line, out[n-1].Summary = m.Line, m.Summary
+		}
 	}
 	return out
 }
@@ -1361,12 +1397,7 @@ func (h *Hub) snapshot() []Session {
 		c.CanReply = time.Since(s.bridgeSeen) < bridgeTTL
 		c.Label, c.LabelVia = s.label()
 		c.Pull = h.pullOn(s, pulls)
-		if id, via, ok := h.kb.Resolve(s.ID, s.Cwd); ok {
-			c.Effort, c.EffortVia = id, via
-		} else if s.guess != "" && h.kb.Has(s.guess) {
-			// A guess made on older content stands until a newer one replaces it.
-			c.Effort, c.EffortVia = s.guess, ViaGuess
-		}
+		c.Effort, c.EffortVia = h.filed(s)
 		if role, ok := h.kb.RoleOf(s.ID); ok {
 			c.Role, c.RoleVia, c.attention = role.ID, kb.ViaUser, role.Attention
 		} else if s.roleGuess != "" && h.kb.HasRole(s.roleGuess) {

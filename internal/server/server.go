@@ -164,6 +164,21 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, uiPath s
 		edited(w, k.Assign(r.PathValue("id"), in.Effort))
 	})
 
+	// The page asks for a day, named as "2006-01-02", to be wrapped up.
+	mux.HandleFunc("POST /api/wrapup", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Day string `json:"day"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		if !h.AskWrapup(in.Day) {
+			http.Error(w, "day must be like 2006-01-02", http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+	})
+
 	mux.HandleFunc("POST /api/sessions/{id}/name", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Name string `json:"name"`

@@ -91,10 +91,22 @@ func (e *Enricher) step(ctx context.Context) {
 	}
 }
 
-// next picks one piece of work: describing a session comes first, then filing
-// it under an effort, then guessing its role, then rewriting an effort's note.
+// next picks one piece of work: a day the user asked to have wrapped up
+// comes first, then describing a session, then filing it under an effort,
+// then guessing its role, then rewriting an effort's note.
 func (e *Enricher) next() (key, what string, job func(context.Context, string) error) {
 	ready := func(key string) bool { return time.Since(e.failed[key]) > retryAfter }
+	for _, w := range e.Hub.Unwrapped() {
+		return "wrapup:" + w.Key, "wrap up " + w.Day.Format("2 January"), func(ctx context.Context, model string) error {
+			headline, efforts, err := e.wrapup(ctx, model, w)
+			failure := ""
+			if err != nil {
+				failure = "The local model could not write it: " + err.Error()
+			}
+			e.Hub.SetWrapup(w, headline, efforts, failure)
+			return err
+		}
+	}
 	for _, w := range e.Hub.Undescribed() {
 		if ready(w.Key) {
 			return w.Key, "describe " + w.Session.Name, func(ctx context.Context, model string) error {

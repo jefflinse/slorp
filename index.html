@@ -59,6 +59,15 @@ h1, h2, h3, p { margin: 0; }
 .model { color: var(--ink3); font-size: 12px; white-space: nowrap; }
 .used { display: inline-flex; align-items: center; padding: 2px 10px 2px 8px; border-radius: 99px; color: var(--ink2); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums;
   background: color-mix(in srgb, var(--k, var(--ink3)) 14%, transparent); border: 1px solid color-mix(in srgb, var(--k, var(--ink3)) 32%, transparent); }
+.veil { position: fixed; inset: 0; z-index: 40; display: flex; justify-content: center; align-items: flex-start; padding: 9vh 16px 16px; overflow-y: auto; background: color-mix(in srgb, #000 48%, transparent); }
+.modal { width: min(720px, 100%); padding: 22px 26px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 18px 60px rgba(0, 0, 0, 0.35); }
+.modal .mhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.modal h2 { font-size: 19px; font-weight: 650; letter-spacing: -0.01em; }
+.modal h3 { margin: 20px 0 4px; font-size: 15px; font-weight: 650; }
+.modal ul { margin: 6px 0 0; padding-left: 20px; }
+.modal li { margin: 3px 0; font-size: 14.5px; line-height: 1.5; }
+.modal ul.open li { color: var(--ink2); }
+.modal .mfoot { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--ink3); font-size: 12px; }
 .lim { color: var(--ink3); font-size: 12px; }
 .lim .meter { width: 44px; }
 .pr { display: inline-flex; align-items: center; white-space: nowrap; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--ink2); font-size: 11.5px; font-weight: 500; line-height: 1.5; text-decoration: none; }
@@ -347,6 +356,7 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
   <div class="tools" id="tools"></div>
 </header>
 <main id="main"></main>
+<div id="modal"></div>
 <div id="toast" role="status"></div>
 <div id="news" role="status"></div>
 
@@ -608,6 +618,8 @@ let state = fresh();
 try { Object.assign(state, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch (e) { /* storage unavailable: run in memory */ }
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* ignore */ } };
 let freshId = null;
+/* Which overlay is open, if any, and how many days back the wrap-up in it looks. */
+let modal = null, wrapBack = 0;
 /* The session whose name is being edited, and whether its box still wants the cursor. */
 let renaming = null, renameFocus = false;
 
@@ -734,7 +746,8 @@ function briefing(items) {
     ].filter(Boolean).join(' ');
   }
   const day = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
-  return `<div class="brief"><div class="when"><span class="label">${day}</span><span class="label">${live ? '' : spark}briefing</span></div><p>${esc(text)}</p></div>`;
+  return `<div class="brief"><div class="when"><span class="label">${day}</span><span class="label">${live ? '' : spark}briefing</span></div><p>${esc(text)}</p>
+    ${live ? `<button class="link" data-act="wrapOpen" style="margin-top:8px;font-size:12.5px" title="What moved today, by effort (w)">Wrap up the day ›</button>` : ''}</div>`;
 }
 
 function rowHtml(it, act = 'select') {
@@ -916,6 +929,43 @@ function contextUse(s, brief) {
   return `<span class="ctx ${pct >= 90 ? 'full' : pct >= 75 ? 'high' : ''}" title="${about}, of what the model can take: ${tokens(s.contextTokens)} of ${tokens(s.contextWindow)}"><span class="meter"><i style="width:${Math.min(100, pct)}%"></i></span>${brief ? `${pct}%` : `${tokens(s.contextTokens)} / ${tokens(s.contextWindow)} (${pct}%)`}</span>`;
 }
 
+/* The day's wrap-up: what moved in each effort, as the local model wrote it from the sessions' timelines. */
+const dayKey = back => { const d = new Date(); d.setDate(d.getDate() - back); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const dayName = key => new Date(key + 'T12:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+function wrapupMarkdown(w) {
+  const part = e => [`## ${e.name}`, e.summary, (e.points || []).map(p => `- ${p}`).join('\n'), (e.open || []).length ? `Still open:\n${e.open.map(p => `- ${p}`).join('\n')}` : ''].filter(Boolean).join('\n\n');
+  return [`# ${dayName(w.day)}`, w.headline].concat((w.efforts || []).map(part)).filter(Boolean).join('\n\n') + '\n';
+}
+function wrapupModal() {
+  const day = dayKey(wrapBack), w = wrapups[day], writer = summarizer.model ? summarizer.model.split('/').pop() : '';
+  const days = [[0, 'Today'], [1, 'Yesterday']].map(([back, name]) => `<button class="${wrapBack === back ? 'on' : ''}" data-act="wrapDay" data-back="${back}">${name}</button>`).join('');
+  const list = (items, cls) => items.length ? `<ul class="${cls}">${items.map(p => `<li>${esc(p)}</li>`).join('')}</ul>` : '';
+  let body, foot = '';
+  if (!w) {
+    body = `<p class="none">Nothing has been written for this day yet. ${writer ? `${esc(writer)} writes it from what you said in each session and how it came out.` : 'It needs a local model, and none is loaded.'}</p>`;
+  } else if (w.state === 'pending') {
+    body = `<p class="prose thinking">Writing up what moved in each effort over the day.</p><p class="prose thinking" style="margin-top:8px">One line for each thing done.</p>
+      <p class="none" style="margin-top:12px">${writer ? `${esc(writer)} is writing it from ${plural(w.moments, 'exchange')}.` : 'Waiting for a local model to be loaded.'}</p>`;
+  } else if (w.state === 'empty') {
+    body = `<p class="none">Nothing was said in any session that day, as far as Slorp saw.</p>`;
+  } else if (w.state === 'failed') {
+    body = `<p class="none"><b>It could not be written.</b> ${esc(w.error || '')}</p>`;
+  } else {
+    body = `<p class="prose">${esc(w.headline)}</p>${(w.efforts || []).map(e => `<h3>${esc(e.name)}</h3><p class="prose">${esc(e.summary)}</p>${list(e.points || [], '')}
+      ${(e.open || []).length ? `<div class="label" style="margin-top:10px">Still open</div>${list(e.open, 'open')}` : ''}`).join('')}`;
+    foot = `${spark}Written ${ago(minsSince(w.at))} from ${plural(w.moments, 'exchange')}.`;
+  }
+  const again = w && w.state !== 'pending';
+  return `<div class="veil" data-act="wrapClose"><div class="modal" data-act="noop" role="dialog" aria-label="Wrap-up">
+    <div class="mhead"><h2>${esc(dayName(day))}</h2><span class="seg" role="group" aria-label="Day">${days}</span></div>
+    ${body}
+    <div class="mfoot"><span>${foot}</span><span style="display:flex;gap:8px">
+      ${w && w.state === 'ready' ? `<button class="btn" data-act="wrapCopy" data-day="${day}">Copy as Markdown</button>` : ''}
+      ${!w || again ? `<button class="btn ${w ? '' : 'go'}" data-act="wrapAsk" data-day="${day}">${w ? 'Write it again' : 'Write it'}</button>` : ''}
+      <button class="btn" data-act="wrapClose">Close</button></span></div>
+  </div></div>`;
+}
+
 /* A session and the pull request made from the branch it is on. */
 const pullKey = p => `${p.repo}#${p.number}`;
 const pullOf = s => s.pull ? pulls.find(p => pullKey(p) === s.pull) : null;
@@ -1084,7 +1134,7 @@ function viewActivity() {
    service's session list; everything outside Activity is still mock data. */
 
 let live = null, liveItems = [], liveEfforts = [], summarizer = {}, settings = {}, isOffline = false;
-let knowledge = { watch: [], questions: [], context: [], routing: [], roles: [] }, integrations = [], lookups = [], feeds = {}, pulls = [], limits = [];
+let knowledge = { watch: [], questions: [], context: [], routing: [], roles: [] }, integrations = [], lookups = [], feeds = {}, pulls = [], limits = [], wrapups = {};
 const LIVE_STATUS = { waiting: ['waiting', 'awaiting you'], failed: ['error', 'failed'], working: ['running', 'working'], idle: ['idle', 'idle'], done: ['done', 'finished'] };
 const minsSince = iso => Math.max(0, (Date.now() - new Date(iso).getTime()) / 60000);
 const tilde = p => p.replace(/^\/Users\/[^/]+/, '~');
@@ -1107,6 +1157,7 @@ async function refresh(force) {
     feeds = data.feeds || {};
     pulls = data.pullRequests || [];
     limits = data.limits || [];
+    wrapups = data.wrapups || {};
     isOffline = false;
     announce(liveItems);
   } catch (e) { isOffline = live !== null; }
@@ -1276,7 +1327,7 @@ function timeline(s) {
   const moments = (s.timeline || []).slice().reverse();
   if (!moments.length) return '';
   return `<div class="label tlhead">Timeline</div><ol class="tl">${moments.map(m => `<li><span class="when" title="${esc(new Date(m.at).toLocaleString())}">${minsSince(m.at) < 1 ? 'now' : span(minsSince(m.at))}</span>
-    <div>${m.line ? `<div class="line">${spark}${esc(m.line)}</div>` : ''}<div class="you" title="${esc(m.prompt)}">${esc(m.prompt)}</div></div></li>`).join('')}</ol>`;
+    <div>${m.line ? `<div class="line" title="${esc(m.summary || '')}">${spark}${esc(m.line)}</div>` : ''}<div class="you" title="${esc(m.prompt)}">${esc(m.prompt)}</div></div></li>`).join('')}</ol>`;
 }
 
 function liveItemDetail(it) {
@@ -1597,6 +1648,7 @@ function render() {
         <button data-act="reset">Reset the demo</button>
         <p>Keys: j/k move · e dismiss · s snooze · r fluent/raw · 1–5 views</p></div></details>`;
   $('#main').innerHTML = main;
+  $('#modal').innerHTML = modal === 'wrapup' ? wrapupModal() : '';
   // The toggle shows only where there is more of what the user said to see.
   document.querySelectorAll('.said').forEach(el => {
     const tx = el.querySelector('.tx');
@@ -1619,6 +1671,15 @@ const actions = {
   srcFilter: d => { state.srcFilter = d.src; },
   collapse: d => { state.collapsed[d.key] = !state.collapsed[d.key]; },
   noop: () => false,
+  wrapOpen: () => { modal = 'wrapup'; },
+  wrapClose: () => { modal = null; },
+  wrapDay: d => { wrapBack = +d.back; },
+  wrapAsk: d => { api('POST', '/api/wrapup', { day: d.day }); return false; },
+  wrapCopy: d => {
+    Promise.resolve().then(() => navigator.clipboard.writeText(wrapupMarkdown(wrapups[d.day])))
+      .then(() => toast('Copied')).catch(() => toast('The browser would not let Slorp copy that'));
+    return false;
+  },
   fill: d => {
     const ta = document.querySelector(`textarea[data-keep="${d.box}"]`);
     ta.value = d.text; ta.focus();
@@ -1832,10 +1893,12 @@ document.addEventListener('submit', e => {
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && e.target.closest('.rename')) { renaming = null; render(); return; }
+  if (e.key === 'Escape' && modal) { modal = null; render(); return; }
   if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
   const att = state.view === 'attention';
   if (/^[1-5]$/.test(e.key)) go(VIEWS[e.key - 1]);
   else if (e.key === 'r') state.fluent = !state.fluent;
+  else if (e.key === 'w' && live) modal = modal === 'wrapup' ? null : 'wrapup';
   else if (att && (e.key === 'j' || e.key === 'k')) {
     const order = visibleOrder(), i = order.indexOf(state.sel) + (e.key === 'j' ? 1 : -1);
     if (order[i]) state.sel = order[i];

@@ -178,6 +178,19 @@ func TestBridgeReportsUsageWindows(t *testing.T) {
 	}
 }
 
+func TestAskingForAWrapup(t *testing.T) {
+	f := newFixture(t)
+	if code := f.post("/api/wrapup", `{"day":"tomorrow"}`); code != http.StatusBadRequest {
+		t.Errorf("asking for no day at all = %d, want 400", code)
+	}
+	if code := f.post("/api/wrapup", `{"day":"2026-11-17"}`); code != http.StatusAccepted {
+		t.Fatalf("asking for a day = %d, want 202", code)
+	}
+	if got := f.state().Wrapups; len(got) != 1 || got["2026-11-17"].State != hub.WrapupEmpty {
+		t.Errorf("wrap-ups = %+v, want that day, empty for want of anything said", got)
+	}
+}
+
 func TestNamingASession(t *testing.T) {
 	f := newFixture(t)
 	f.connect("s1")
