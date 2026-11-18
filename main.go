@@ -102,6 +102,8 @@ func main() {
 	go (&opencode.Adapter{Hub: h, Interval: 2 * time.Second, Silence: 30 * time.Second}).Run(ctx)
 	if *llm != "" {
 		go (&enrich.Enricher{Hub: h, BaseURL: *llm, Model: *model, Offer: tools.Offer}).Run(ctx)
+	} else {
+		h.SetSummarizer(hub.Summarizer{Off: true})
 	}
 
 	poller := feed.New(h, tools, func() (dirs []string) {

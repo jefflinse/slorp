@@ -310,6 +310,10 @@ type Limit struct {
 type Summarizer struct {
 	Model string `json:"model"`
 	Error string `json:"error,omitempty"`
+	// URL is where the local model server is looked for.
+	URL string `json:"url,omitempty"`
+	// Off says Slorp was started without a local model to look for.
+	Off bool `json:"off,omitempty"`
 }
 
 // Undescribed is a settled session whose current content has no insight yet.

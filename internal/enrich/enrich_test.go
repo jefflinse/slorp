@@ -125,8 +125,8 @@ func TestSaysWhichModelIsLoadedWithNothingToDo(t *testing.T) {
 	said := func() hub.Summarizer { return e.Hub.State().Summarizer }
 
 	e.step(ctx)
-	if got := said(); got.Model != "warm" || got.Error != "" {
-		t.Fatalf("summarizer = %+v; want the loaded model named though no session needs describing", got)
+	if got := said(); got.Model != "warm" || got.Error != "" || got.URL != e.BaseURL || got.URL == "" {
+		t.Fatalf("summarizer = %+v; want the loaded model named, and where it was found, though no session needs describing", got)
 	}
 
 	f.models = `{"data":[]}`
@@ -136,8 +136,8 @@ func TestSaysWhichModelIsLoadedWithNothingToDo(t *testing.T) {
 	}
 	e.checked = time.Now().Add(-idleCheck)
 	e.step(ctx)
-	if got := said(); got.Model != "" || got.Error == "" {
-		t.Errorf("summarizer = %+v; want it to say no model is loaded once it looks again", got)
+	if got := said(); got.Model != "" || got.Error == "" || got.URL != e.BaseURL {
+		t.Errorf("summarizer = %+v; want it to say no model is loaded, and where it looked, once it looks again", got)
 	}
 	if f.requests != 0 {
 		t.Errorf("%d requests to the model with nothing to do", f.requests)

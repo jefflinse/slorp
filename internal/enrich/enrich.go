@@ -78,10 +78,10 @@ func (e *Enricher) step(ctx context.Context) {
 	model, err := e.model(ctx)
 	e.checked = time.Now()
 	if err != nil {
-		e.Hub.SetSummarizer(hub.Summarizer{Error: err.Error()})
+		e.Hub.SetSummarizer(hub.Summarizer{Error: err.Error(), URL: e.BaseURL})
 		return
 	}
-	e.Hub.SetSummarizer(hub.Summarizer{Model: model})
+	e.Hub.SetSummarizer(hub.Summarizer{Model: model, URL: e.BaseURL})
 	if job == nil {
 		return
 	}

@@ -108,9 +108,11 @@ a.pr:hover { border-color: var(--k-github); color: var(--ink); }
 
 /* Panes */
 .split { display: grid; grid-template-columns: minmax(320px, 410px) 1fr; height: calc(100vh - var(--top) - var(--notice)); }
-#notice { height: var(--notice); display: flex; align-items: center; gap: 12px; padding: 0 16px; overflow: hidden; border-bottom: 1px solid var(--line); background: var(--sel); font-size: 13px; }
+#notice { height: var(--notice); overflow: hidden; }
 #notice:empty { display: none; }
+#notice div { height: 44px; display: flex; align-items: center; gap: 12px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--sel); font-size: 13px; }
 #notice span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.off, .link.off { color: var(--ink3); cursor: default; text-decoration: none; }
 .split.narrow { grid-template-columns: 250px 1fr; }
 .pane { overflow-y: auto; min-width: 0; }
 .pane.list { border-right: 1px solid var(--line); background: var(--panel); }
@@ -775,7 +777,7 @@ function briefing(items) {
   }
   const day = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
   return `<div class="brief"><div class="when"><span class="label">${day}</span><span class="label">${live ? '' : spark}briefing</span></div><p>${esc(text)}</p>
-    ${live ? `<button class="link" data-act="wrapOpen" style="margin-top:8px;font-size:12.5px" title="What moved today, by effort (w)">Wrap up the day ›</button>` : ''}</div>`;
+    ${live ? `<button class="link ${modelless() ? 'off' : ''}" data-act="wrapOpen" style="margin-top:8px;font-size:12.5px" title="${modelless() ? `${NO_MODEL} to write a wrap-up.` : 'What moved today, by effort (w)'}">Wrap up the day ›</button>` : ''}</div>`;
 }
 
 function rowHtml(it, act = 'select') {
@@ -791,7 +793,9 @@ function rowHtml(it, act = 'select') {
 
 function handledFooter() {
   const done = allItems().filter(i => !isActive(i));
-  const legend = `<p>${spark}marks text written by the local model. <span class="mono">Mono</span> is verbatim from the source.</p>`;
+  const legend = modelless()
+    ? `<p>${NO_MODEL}, so only permission prompts, questions a session puts to you, failures and full contexts are raised here. A session that has simply stopped is under Activity.</p>`
+    : `<p>${spark}marks text written by the local model. <span class="mono">Mono</span> is verbatim from the source.</p>`;
   if (!done.length) return `<div class="foot">${legend}</div>`;
   const list = state.showHandled ? `<div class="handled">${done.map(i => `<div><span class="gen">${esc(i.title)}</span><span style="white-space:nowrap">${esc(state.handled[i.id].how)} · <button class="link" data-act="restore" data-id="${i.id}">restore</button></span></div>`).join('')}</div>` : '';
   return `<div class="foot"><p style="margin-bottom:8px">${done.length} handled or snoozed · <button class="link" data-act="toggleHandled">${state.showHandled ? 'hide' : 'show'}</button></p>${list}${legend}</div>`;
@@ -1008,7 +1012,7 @@ function wrapupModal() {
   const list = (items, cls) => items.length ? `<ul class="${cls}">${items.map(p => `<li>${esc(p)}</li>`).join('')}</ul>` : '';
   let body, foot = '';
   if (!w) {
-    body = `<p class="none">Nothing has been written for this day yet. ${writer ? `${esc(writer)} writes it from what you said in each session and how it came out.` : 'It needs a local model, and none is loaded.'}</p>`;
+    body = `<p class="none">Nothing has been written for this day yet. ${writer ? `${esc(writer)} writes it from what you said in each session and how it came out.` : `${NO_MODEL} to write it.`}</p>`;
   } else if (w.state === 'pending') {
     body = `<p class="prose thinking">Writing up what moved in each effort over the day.</p><p class="prose thinking" style="margin-top:8px">One line for each thing done.</p>
       <p class="none" style="margin-top:12px">${writer ? `${esc(writer)} is writing it from ${plural(w.moments, 'exchange')}.` : 'Waiting for a local model to be loaded.'}</p>`;
@@ -1027,7 +1031,7 @@ function wrapupModal() {
     ${body}
     <div class="mfoot"><span>${foot}</span><span style="display:flex;gap:8px">
       ${w && w.state === 'ready' ? `<button class="btn" data-act="wrapCopy" data-day="${day}">Copy as Markdown</button>` : ''}
-      ${!w || again ? `<button class="btn ${w ? '' : 'go'}" data-act="wrapAsk" data-day="${day}">${w ? 'Write it again' : 'Write it'}</button>` : ''}
+      ${!w || again ? `<button class="btn ${w ? '' : 'go'}" data-act="wrapAsk" data-day="${day}" ${modelless() ? `disabled title="${NO_MODEL} to write it."` : ''}>${w ? 'Write it again' : 'Write it'}</button>` : ''}
       <button class="btn" data-act="wrapClose">Close</button></span></div>
   </div></div>`;
 }
@@ -1114,9 +1118,9 @@ function effortDetailLive(e) {
   const sess = live.filter(s => (s.effort || 'unsorted') === e.id);
   const needs = activeItems().filter(i => i.effort === e.id).sort(byUrgency);
   const real = e.id !== 'unsorted';
-  const stands = !real ? 'Nothing here is filed under an effort. Move a session to an effort and Slorp can remember its directory.'
+  const stands = !real ? `Nothing here is filed under an effort. Move a session to an effort and Slorp can remember its directory.${modelless() ? ` ${NO_MODEL}, so sessions are filed only by an effort's directories or by you.` : ''}`
     : !sess.length ? 'No open sessions are filed here right now.'
-    : e.stands || (summarizer.model ? 'Not written yet.' : 'No local model is available to write this.');
+    : e.stands || (modelless() ? `${NO_MODEL} to write this.` : 'Not written yet.');
   return `<div class="inner">
     <div class="crumb"><span class="mono">${esc(e.raw)}</span></div>
     <h1>${esc(e.name)}</h1>
@@ -1157,7 +1161,7 @@ function viewEffortsLive() {
         <input name="name" data-keep="effort-name" placeholder="New effort, e.g. Snapshot store" required style="flex-basis:100%">
         <input name="about" data-keep="effort-about" placeholder="One line on what it covers" style="flex-basis:100%">
         <button class="btn go">Add effort</button>
-        <p class="none" style="width:100%">${liveEfforts.length ? 'The description is what the model reads when it files sessions.' : 'Declare an effort and Slorp will start filing sessions under it.'}</p>
+        <p class="none" style="width:100%">${modelless() ? `${NO_MODEL}, so sessions are filed by an effort's directories or by you.` : liveEfforts.length ? 'The description is what the model reads when it files sessions.' : 'Declare an effort and Slorp will start filing sessions under it.'}</p>
       </form></section>
     <section class="pane detail" data-scroll="eff-${state.effortSel}">${effortDetailLive(effortById(state.effortSel))}</section>
   </div>`;
@@ -1242,6 +1246,7 @@ async function refresh(force) {
     liveEfforts = (data.efforts || []).map(e => ({ ...e, raw: e.dirs.length ? e.dirs.map(tilde).join(', ') : `effort ${e.id}` }));
     liveItems = toItems(data);
     summarizer = data.summarizer || {};
+    if (summarizer.model) delete state.modelNoticeOff;
     settings = data.settings || {};
     knowledge = { roles: [], ...(data.knowledge || knowledge) };
     integrations = data.integrations || [];
@@ -1285,8 +1290,26 @@ function modNotice() {
   const p = plugins.claude;
   if (!live || !p || (p.installed && p.enabled)) return '';
   const off = p.installed;
-  return `<span>${off ? 'The Slorp mod is turned off in Claude Code' : "Claude Code doesn't have the Slorp mod"}, so its sessions can be watched here but not answered.</span>
-    <button class="btn go" data-act="installMod" ${installing ? 'disabled' : ''}>${installing ? (off ? 'Turning it on…' : 'Installing…') : off ? 'Turn it on' : 'Install it'}</button>`;
+  return `<div><span>${off ? 'The Slorp mod is turned off in Claude Code' : "Claude Code doesn't have the Slorp mod"}, so its sessions can be watched here but not answered.</span>
+    <button class="btn go" data-act="installMod" ${installing ? 'disabled' : ''}>${installing ? (off ? 'Turning it on…' : 'Installing…') : off ? 'Turn it on' : 'Install it'}</button></div>`;
+}
+
+/* Whether Slorp is running with no local model: one was looked for and not
+   found, or Slorp was started without. False until it has looked. */
+const modelless = () => !!live && !summarizer.model && !!(summarizer.off || summarizer.error);
+const NO_MODEL = 'No local model is running';
+/* What is missing without one and why there is none; in full adds how soon one is noticed. */
+function modelWhy(full) {
+  const where = summarizer.url ? ` at ${summarizer.url}` : '';
+  const how = summarizer.off ? 'Slorp was started without one.'
+    : /loaded/.test(summarizer.error || '') ? `LM Studio is running${where} with no model loaded.`
+    : `Slorp looks for LM Studio${where}.`;
+  return `${NO_MODEL}, so sessions are shown as they are: no summaries, suggested replies, automatic filing or wrap-ups. ${how}${full && !summarizer.off ? ' It notices a loaded model within half a minute.' : ''}`;
+}
+/* Says so once, until dismissed, when a model was looked for and not found. */
+function modelNotice() {
+  if (!modelless() || summarizer.off || state.modelNoticeOff) return '';
+  return `<div><span title="${esc(modelWhy(true))}">${esc(modelWhy())}</span><button class="btn" data-act="modelNoticeOff">Dismiss</button></div>`;
 }
 
 function ask(path, body, done, always) {
@@ -1430,7 +1453,7 @@ function detailTabs(it, s) {
 /* The local model's account of a session item: beside it where there is room, within it where there is not. */
 function goingOn(it) {
   const looked = it.session.insight?.lookups || [];
-  return `<p class="prose">${it.summary ? esc(it.summary) : `<span class="none">${summarizer.model ? 'Not summarized yet.' : 'No local model is available to summarize this.'}</span>`}</p>
+  return `<p class="prose">${it.summary ? esc(it.summary) : `<span class="none">${modelless() ? `${NO_MODEL}, so this is not summarized. What the session last said is in full on the left.` : 'Not summarized yet.'}</span>`}</p>
     ${looked.length ? `<div class="none" style="margin-top:8px">${spark}Checked ${esc(listOf(looked))} to write this.</div>` : ''}`;
 }
 
@@ -1440,9 +1463,10 @@ function timeline(s, open) {
   /* Only an open session whose agent keeps a transcript can have its earlier history read, and only when asked. */
   const fill = !(open && s.agent === 'claude') ? ''
     : s.backfilling ? `<span class="none">${spark}Filling in ${plural(s.backfilling, 'earlier exchange')}…</span>`
+    : modelless() ? `<button class="link off" data-act="noop" title="${NO_MODEL} to say how earlier exchanges came out.">Fill in earlier history</button>`
     : `<button class="link" data-act="backfill" data-id="${s.id}" title="Reads this session's transcript and has the local model say how up to forty earlier exchanges came out. It happens only when you ask.">Fill in earlier history</button>`;
   if (!moments.length && !fill) return '';
-  return `<div class="label tlhead"><span>Timeline</span>${fill}</div>${moments.length ? '' : '<div class="none">Nothing has been said in it since Slorp began watching.</div>'}<ol class="tl">${moments.map(m => `<li><span class="when" title="${esc(new Date(m.at).toLocaleString())}">${minsSince(m.at) < 1 ? 'now' : span(minsSince(m.at))}</span>
+  return `<div class="label tlhead"><span>Timeline</span>${fill}</div>${moments.length ? (modelless() && moments.some(m => !m.line) ? `<div class="none">${NO_MODEL}, so new entries are only what you said.</div>` : '') : '<div class="none">Nothing has been said in it since Slorp began watching.</div>'}<ol class="tl">${moments.map(m => `<li><span class="when" title="${esc(new Date(m.at).toLocaleString())}">${minsSince(m.at) < 1 ? 'now' : span(minsSince(m.at))}</span>
     <div>${m.line ? `<div class="line" title="${esc(m.summary || '')}">${spark}${esc(m.line)}</div>` : ''}<div class="you" title="${esc(m.prompt)}">${esc(m.prompt)}</div></div></li>`).join('')}</ol>`;
 }
 
@@ -1687,6 +1711,15 @@ const KB_LIVE_LEDE = {
   roles: 'The kinds of session you tell apart, such as one that reviews pull requests on a loop. Give a session a role from its bar under Attention or Activity. The local model guesses a role for the rest from what each role is about; a guess only labels a session, and never keeps it from asking for you.',
   integrations: 'Tools Slorp reads, and never changes. While one is on, Slorp checks it every few minutes for things that need you and lists them under Attention, with no model involved. The local model may also look things up in it while it describes a session: it picks from the lookups listed and supplies only a number and, where there are several, which repository.',
 };
+/* Says which parts of the knowledge base nothing reads without a local model. */
+const KB_UNREAD = {
+  questions: 'so nothing reads these at the moment. They still show under their effort.',
+  context: 'so nothing reads these at the moment. They are kept for when one is.',
+  routing: 'so nothing reads these at the moment. Directories still file sessions.',
+  roles: 'so a session has a role only when you give it one.',
+  integrations: 'so nothing is looked up while describing a session. Checking for things that need you goes on as before.',
+};
+const kbUnread = k => modelless() && KB_UNREAD[k] ? `<p class="none" style="margin:-6px 0 14px">${NO_MODEL}, ${KB_UNREAD[k]}</p>` : '';
 const kbData = () => live ? knowledge : state.kb;
 const kbSections = () => live ? { ...KB_SECTIONS, roles: { name: 'Session roles' }, integrations: { name: 'Integrations' } } : KB_SECTIONS;
 const kbCount = k => k === 'integrations' ? integrations.filter(i => i.enabled).length : kbData()[k].length;
@@ -1757,7 +1790,7 @@ function viewKnowledge() {
   const s = kbSections()[state.kbSel];
   return `<div class="split narrow">
     <section class="pane list kbnav"><div class="label">Knowledge base</div>${nav}</section>
-    <section class="pane detail" data-scroll="kb-${state.kbSel}"><div class="inner"><h1>${s.name}</h1><p class="lede">${live ? KB_LIVE_LEDE[state.kbSel] : s.lede}</p>${kbBody(state.kbSel)}</div></section>
+    <section class="pane detail" data-scroll="kb-${state.kbSel}"><div class="inner"><h1>${s.name}</h1><p class="lede">${live ? KB_LIVE_LEDE[state.kbSel] : s.lede}</p>${kbUnread(state.kbSel)}${kbBody(state.kbSel)}</div></section>
   </div>`;
 }
 
@@ -1778,7 +1811,7 @@ function render() {
   const n = activeItems().length;
   $('#nav').innerHTML = VIEWS.map(v => `<button class="${state.view === v ? 'on' : ''}" data-act="view" data-view="${v}">${VIEW_NAMES[v] || cap(v)}${v === 'attention' && n ? `<span class="count">${n}</span>` : ''}</button>`).join('');
   $('#tools').innerHTML = `
-    <span class="model"><span class="dot ${live && isOffline ? 'error' : 'running'}"></span>${live ? (isOffline ? 'service offline' : `live · ${summarizer.model ? summarizer.model.split('/').pop() : summarizer.error || 'no local model'}`) : 'qwen3:14b · local · caught up'}</span>${live ? usageTotal() + limitMeters() : ''}
+    <span class="model" ${modelless() ? `title="${esc(modelWhy(true))}"` : ''}><span class="dot ${live && isOffline ? 'error' : modelless() ? 'idle' : 'running'}"></span>${live ? (isOffline ? 'service offline' : `live · ${summarizer.model ? summarizer.model.split('/').pop() : 'no local model'}`) : 'qwen3:14b · local · caught up'}</span>${live ? usageTotal() + limitMeters() : ''}
     <span class="seg" role="group" aria-label="Voice" title="Fluent shows what the model wrote. Raw shows what the sources said. (r)">
       <button class="${state.fluent ? 'on' : ''}" data-act="fluent" data-on="1">Fluent</button><button class="${state.fluent ? '' : 'on'}" data-act="fluent" data-on="0">Raw</button></span>
     ${live ? `<button class="icon" data-act="searchOpen" title="Search sessions (/ or ⌘K)" aria-label="Search sessions">⌕</button>` : ''}
@@ -1790,9 +1823,9 @@ function render() {
         ${live ? '' : '<button data-act="simulate">Simulate an incoming item</button>'}
         <button data-act="reset">Reset the demo</button>
         <p>Keys: j/k move · e dismiss · s snooze · r fluent/raw · 1–5 views</p></div></details>`;
-  const notice = modNotice();
-  document.documentElement.style.setProperty('--notice', notice ? '44px' : '0px');
-  $('#notice').innerHTML = notice;
+  const notices = [modNotice(), modelNotice()].filter(Boolean);
+  document.documentElement.style.setProperty('--notice', `${44 * notices.length}px`);
+  $('#notice').innerHTML = notices.join('');
   $('#main').innerHTML = main;
   $('#modal').innerHTML = modal === 'wrapup' ? wrapupModal() : modal === 'search' ? searchModal() : '';
   if (modalFocus) { modalFocus = false; $('#q')?.focus(); }
@@ -1878,6 +1911,7 @@ const actions = {
   effort: d => { state.effortSel = d.id; go('efforts'); },
   effortSel: d => { state.effortSel = d.id; },
   openItem: d => { state.sel = d.id; go('attention'); },
+  modelNoticeOff: () => { state.modelNoticeOff = true; },
   installMod: () => {
     if (installing) return false;
     installing = true;
