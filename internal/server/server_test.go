@@ -64,6 +64,11 @@ func (l *launcher) Install(context.Context) error {
 	return l.err
 }
 
+func (l *launcher) Uninstall(context.Context) error {
+	l.calls = append(l.calls, "uninstall")
+	return l.err
+}
+
 type asked struct{ checks, rescans int }
 
 func (a *asked) Check()  { a.checks++ }
@@ -548,6 +553,20 @@ func TestInstallingAnAgentsPlugin(t *testing.T) {
 	f.launcher.err = errors.New("blocked by policy")
 	if code, body := f.do("POST", "/api/plugins/claude", `{}`, nil); code != 502 || !strings.Contains(body, "blocked by policy") {
 		t.Errorf("a failed install = %d %q, want 502 with what went wrong", code, body)
+	}
+}
+
+func TestUninstallingAnAgentsPlugin(t *testing.T) {
+	f := newFixture(t)
+	if code, _ := f.do("DELETE", "/api/plugins/claude", ``, nil); code != 204 || len(f.launcher.calls) != 1 || f.launcher.calls[0] != "uninstall" {
+		t.Errorf("uninstall = %d after %v, want it done by the agent's launcher", code, f.launcher.calls)
+	}
+	if code, _ := f.do("DELETE", "/api/plugins/opencode", ``, nil); code != 404 || len(f.launcher.calls) != 1 {
+		t.Errorf("uninstall for an agent with no launcher = %d after %v, want 404 and nothing run", code, f.launcher.calls)
+	}
+	f.launcher.err = errors.New("blocked by policy")
+	if code, body := f.do("DELETE", "/api/plugins/claude", ``, nil); code != 502 || !strings.Contains(body, "blocked by policy") {
+		t.Errorf("a failed uninstall = %d %q, want 502 with what went wrong", code, body)
 	}
 }
 

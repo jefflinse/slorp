@@ -350,6 +350,11 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
 .card .seen { color: var(--ink2); font-size: 13px; margin-top: 6px; }
 .card .meta { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 6px; color: var(--ink3); font-size: 12px; }
 .card .q { font-size: 14.5px; }
+.card .does { display: flex; flex-direction: column; gap: 8px; flex: none; }
+.card.set { align-items: center; }
+.card.set .why { max-width: 58ch; font-size: 13.5px; }
+.icon.on { background: var(--sel); color: var(--ink); border-color: var(--ink3); }
+.facts.keys { gap: 9px 26px; }
 .card input[type="checkbox"] { width: 17px; height: 17px; margin: 4px 0 0 6px; accent-color: var(--accent); flex: none; }
 .x { color: var(--ink3); padding: 2px 8px; border-radius: 6px; font-size: 16px; line-height: 1.2; }
 .x:hover { background: var(--sel); color: var(--err); }
@@ -649,9 +654,11 @@ const KB_SECTIONS = {
 /* ───────────────────────── State ───────────────────────── */
 
 const KEY = 'slorp.proto.v1';
-const VIEWS = ['attention', 'efforts', 'activity', 'pulls', 'knowledge'];
+const VIEWS = ['attention', 'efforts', 'activity', 'pulls', 'knowledge', 'settings'];
+/* The views the top bar names; Settings is reached by its own button. */
+const NAV = VIEWS.slice(0, 5);
 const VIEW_NAMES = { pulls: 'PRs' };
-const fresh = () => ({ view: 'attention', sel: null, effortSel: 'snap', kbSel: 'watch', groupBy: 'effort', srcFilter: 'all', pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto',
+const fresh = () => ({ view: 'attention', sel: null, effortSel: 'snap', kbSel: 'watch', setSel: 'general', groupBy: 'effort', srcFilter: 'all', pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto',
   handled: {}, moved: {}, sessMoved: {}, extra: [], arrived: {}, collapsed: {}, showHandled: false, variant: {}, rawOpen: {},
   actSel: null, expanded: {}, kb: structuredClone(KB_SEED), seq: 100 });
 let state = fresh();
@@ -761,7 +768,7 @@ function resolve(id, how, note, opts = {}) {
 }
 
 /* What is selected in each view, kept with a history entry so Back restores it. */
-const place = () => ({ sel: state.sel, effortSel: state.effortSel, kbSel: state.kbSel, actSel: state.actSel });
+const place = () => ({ sel: state.sel, effortSel: state.effortSel, kbSel: state.kbSel, actSel: state.actSel, setSel: state.setSel });
 
 function go(view) {
   if (view === state.view) return;
@@ -1304,7 +1311,7 @@ function api(method, path, body, done) {
 
 /* Asks the service to do something outside itself, and says why when it could not. */
 /* Says when Claude Code lacks the Slorp mod, and offers to put that right. */
-let installing = false;
+let installing = false, removing = false;
 function modNotice() {
   const p = plugins.claude;
   if (!live || !p || (p.installed && p.enabled)) return '';
@@ -1738,7 +1745,7 @@ function viewPulls() {
   let status = '';
   if (live && !(github && github.enabled && github.available)) {
     lede = 'Pull requests come from GitHub, which is turned off or unavailable.';
-    status = `<button class="link" data-act="kbGo" data-s="integrations">Open integrations ›</button>`;
+    status = `<button class="link" data-act="setGo" data-s="integrations">Open integrations ›</button>`;
   } else if (live) {
     status = `${!feed ? 'Checking GitHub now…' : feed.error ? `The last check, ${ago(minsSince(feed.at))}, failed: ${esc(feed.error)}` : `As GitHub reported them ${ago(minsSince(feed.at))}.`}
       <button class="link" data-act="feedCheck">Check now</button>`;
@@ -1781,8 +1788,7 @@ const KB_LIVE_LEDE = {
   questions: 'Things you have not decided yet. They show under their effort, and the model reads them when it writes that effort\'s status.',
   context: 'Facts the model should always know. It reads them before describing any session, so changing one re-describes everything.',
   routing: 'Plain-language notes on how to file things, read by the model when it guesses an effort. Directories that file automatically are listed under each effort.',
-  roles: 'The kinds of session you tell apart, such as one that reviews pull requests on a loop. Give a session a role from its bar under Attention or Activity. The local model guesses a role for the rest from what each role is about; a guess only labels a session, and never keeps it from asking for you.',
-  integrations: 'Tools Slorp reads, and never changes. While one is on, Slorp checks it every few minutes for things that need you and lists them under Attention, with no model involved. The local model may also look things up in it while it describes a session: it picks from the lookups listed and supplies only a number and, where there are several, which repository.',
+  roles: 'The kinds of session you tell apart, such as one that reviews pull requests on a loop. Give a session a role from the menu beside its name under Attention or Activity. The local model guesses a role for the rest from what each role is about; a guess only labels a session, and never keeps it from asking for you.',
 };
 /* Says which parts of the knowledge base nothing reads without a local model. */
 const KB_UNREAD = {
@@ -1790,12 +1796,11 @@ const KB_UNREAD = {
   context: 'so nothing reads these at the moment. They are kept for when one is.',
   routing: 'so nothing reads these at the moment. Directories still file sessions.',
   roles: 'so a session has a role only when you give it one.',
-  integrations: 'so nothing is looked up while describing a session. Checking for things that need you goes on as before.',
 };
 const kbUnread = k => modelless() && KB_UNREAD[k] ? `<p class="none" style="margin:-6px 0 14px">${NO_MODEL}, ${KB_UNREAD[k]}</p>` : '';
 const kbData = () => live ? knowledge : state.kb;
-const kbSections = () => live ? { ...KB_SECTIONS, roles: { name: 'Session roles' }, integrations: { name: 'Integrations' } } : KB_SECTIONS;
-const kbCount = k => k === 'integrations' ? integrations.filter(i => i.enabled).length : kbData()[k].length;
+const kbSections = () => live ? { ...KB_SECTIONS, roles: { name: 'Session roles' } } : KB_SECTIONS;
+const kbCount = k => kbData()[k].length;
 
 function integrationsBody() {
   const checked = i => {
@@ -1837,7 +1842,6 @@ function rolesBody() {
 }
 
 function kbBody(sec) {
-  if (sec === 'integrations') return integrationsBody();
   if (sec === 'roles') return rolesBody();
   const list = kbData()[sec];
   const rm = id => `<button class="x" data-act="kbRemove" data-sec="${sec}" data-id="${id}" title="Remove" aria-label="Remove">×</button>`;
@@ -1867,9 +1871,94 @@ function viewKnowledge() {
   </div>`;
 }
 
+/* ───────────────────────── Settings ───────────────────────── */
+
+const SETTINGS = { general: 'General', integrations: 'Integrations', model: 'Local model', keys: 'Keyboard' };
+/* One setting: what it is called, what it does, and what changes it. */
+const setting = (name, about, control) => `<div class="card set"><div class="body"><div class="nm">${name}</div><div class="why">${about}</div></div>${control}</div>`;
+const choice = (act, cur, options, about) => `<span class="seg" role="group" aria-label="${about}">${options.map(([to, name]) => `<button class="${to === cur ? 'on' : ''}" data-act="${act}" data-to="${to}">${name}</button>`).join('')}</span>`;
+
+function generalBody() {
+  const blocked = window.Notification?.permission === 'denied';
+  return `${setting('Theme', 'How Slorp looks. There is one theme for now.', choice('noop', 'slorp', [['slorp', 'Slorp']], 'Theme'))}
+    ${setting('Appearance', 'Light, dark, or whichever this computer is set to.', choice('themeTo', state.theme, [['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']], 'Appearance'))}
+    ${live && window.Notification ? setting('Desktop notifications', `Tells you when something new needs you while this page is out of sight. This browser keeps the choice.${blocked ? ' <b>The browser is blocking notifications for this page.</b>' : ''}`,
+      choice('notifyTo', canNotify() ? 'on' : 'off', [['on', 'On'], ['off', 'Off']], 'Desktop notifications')) : ''}
+    ${live ? setting('Permission prompts', 'Where a session\'s permission prompt can be answered. Its terminal always asks; with Slorp or terminal, this page can answer too, and whichever you answer first decides.',
+      choice('holdTo', settings.answerPermissions ? 'both' : 'terminal', [['both', 'Slorp or terminal'], ['terminal', 'Terminal only']], 'Where permission prompts can be answered')) : ''}
+    ${setting('This page', 'Forgets what this browser keeps for the page: what you dismissed or snoozed, what was selected, and choices such as how lists are grouped.',
+      `<button class="btn" data-act="reset">Reset</button>`)}`;
+}
+
+/* The agents Slorp watches, each with the plugin that lets it be answered from here. */
+function agentsBody() {
+  const p = plugins.claude, open = agent => live.filter(s => s.agent === agent), wired = agent => open(agent).filter(s => s.canReply).length;
+  const running = agent => open(agent).length ? `${wired(agent)} of ${plural(open(agent).length, 'open session')} ${wired(agent) === 1 ? 'is' : 'are'} running it` : 'no open sessions';
+  const [word, tone] = !p ? ['checking', 'whenever'] : p.installed && p.enabled ? ['installed', 'blocking'] : p.installed ? ['turned off', 'awaiting'] : ['not installed', 'whenever'];
+  const busy = installing || removing;
+  const claude = `<div class="card"><span class="glyph" style="${kindColor('claude')};color:var(--k)">C</span>
+      <div class="body"><div class="nm">Claude Code <span class="tag ${tone}">${word}</span></div>
+      <div class="why">The Slorp mod for Claude Code. With it you can reply to a session and answer its permission prompts from here, and Slorp is told each session's context window, cost and usage limits. Without it sessions are listed and can only be watched.</div>
+      <div class="meta">${p && p.version ? `<span>version ${esc(p.version)}</span>` : ''}<span>${running('claude')}</span></div>
+      <div class="seen">Sessions already open take up a change after <span class="mono">/reload-plugins</span> or a restart.</div></div>
+      <span class="does">${p && !(p.installed && p.enabled) ? `<button class="btn go" data-act="installMod" ${busy ? 'disabled' : ''}>${installing ? (p.installed ? 'Turning it on…' : 'Installing…') : p.installed ? 'Turn on' : 'Install'}</button>` : ''}
+        ${p && p.installed ? `<button class="btn" data-act="uninstallMod" ${busy ? 'disabled' : ''}>${removing ? 'Uninstalling…' : 'Uninstall'}</button>` : ''}</span></div>`;
+  const opencode = `<div class="card"><span class="glyph" style="${kindColor('opencode')};color:var(--k)">O</span>
+      <div class="body"><div class="nm">OpenCode</div>
+      <div class="why">The Slorp plugin for OpenCode, which is Slorp's only view of its sessions: one appears here at its first prompt, and can be replied to and have its permission prompts answered.</div>
+      <div class="meta"><span>${open('opencode').length ? `${plural(open('opencode').length, 'open session')} reporting` : 'no sessions reporting'}</span></div>
+      <div class="seen">OpenCode cannot be asked whether it has the plugin, so it is installed by hand.</div></div>
+      <a class="btn" href="https://github.com/jefflinse/slorp/tree/main/integrations/opencode#install" target="_blank" rel="noopener noreferrer">How to install ↗</a></div>`;
+  return claude + opencode;
+}
+
+function modelBody() {
+  const facts = [
+    ['Model', summarizer.model ? `<span class="mono">${esc(summarizer.model)}</span>` : 'none'],
+    ['Server', summarizer.off ? 'none; Slorp was started without one' : summarizer.url ? `<span class="mono">${esc(summarizer.url)}</span>` : 'not looked for yet'],
+    summarizer.error && ['Last problem', esc(summarizer.error)],
+  ].filter(Boolean);
+  return `<dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
+    ${modelless() ? `<p class="none" style="margin-top:14px">${esc(modelWhy(true))}</p>` : ''}
+    <div class="sec"><div class="label"><span>Changing it</span></div>
+      <p class="prose" style="font-size:14px">The server and model are chosen when Slorp starts. <span class="mono">-llm</span> gives the address of an OpenAI-compatible server, <span class="mono">-model</span> names a model where the server offers several, and <span class="mono">-llm ""</span> runs without one.</p></div>`;
+}
+
+const KEYS = [['1 – 5', 'Attention, Efforts, Activity, PRs, Knowledge'], [',', 'Settings'], ['j  k', 'Next and previous in the Attention and Activity lists'], ['e', 'Dismiss the selected item'], ['s', 'Snooze the selected item for an hour'],
+  ['r', 'Fluent or raw'], ['/  ⌘K', 'Search sessions'], ['w', 'Wrap up the day'], ['⌘↵', 'Send what is in a message box'], ['Esc', 'Close a menu, the search, or a rename']];
+
+const SETTINGS_LEDE = {
+  general: 'How this page looks and behaves.',
+  integrations: 'What Slorp is connected to: the agents whose sessions it watches, and the tools it reads.',
+  model: 'Summaries, suggested replies, automatic filing and wrap-ups are written by a model running on this machine. Nothing a session says is sent anywhere else.',
+  keys: 'They work anywhere outside a text box.',
+};
+function settingsBody(sec) {
+  if (sec === 'general') return generalBody();
+  if (sec === 'model') return live ? modelBody() : '<div class="none">The demo has no local model to report on.</div>';
+  if (sec === 'keys') return `<dl class="facts keys">${KEYS.map(([k, what]) => `<dt class="mono">${k}</dt><dd>${what}</dd>`).join('')}</dl>`;
+  if (!live) return '<div class="none">Integrations belong to the Slorp service, which this demo is not connected to.</div>';
+  return `<div class="label">Agents</div>${agentsBody()}
+    <div class="label" style="margin-top:34px">Tools</div>
+    <p class="lede" style="margin-bottom:10px">Tools Slorp reads, and never changes. While one is on, Slorp checks it every few minutes for things that need you and lists them under Attention, with no model involved. The local model may also look things up in it while it describes a session: it picks from the lookups listed and supplies only a number and, where there are several, which repository.</p>
+    ${modelless() ? `<p class="none" style="margin-bottom:10px">${NO_MODEL}, so nothing is looked up while describing a session. Checking for things that need you goes on as before.</p>` : ''}
+    ${integrationsBody()}`;
+}
+
+function viewSettings() {
+  if (!SETTINGS[state.setSel]) state.setSel = 'general';
+  const on = (plugins.claude?.installed && plugins.claude.enabled ? 1 : 0) + integrations.filter(i => i.enabled).length;
+  const aside = { integrations: live ? on : '', model: live ? (summarizer.model ? 'on' : 'none') : '' };
+  const nav = Object.entries(SETTINGS).map(([k, name]) => `<button class="${state.setSel === k ? 'on' : ''}" data-act="setSel" data-s="${k}">${name}<span>${aside[k] ?? ''}</span></button>`).join('');
+  return `<div class="split narrow">
+    <section class="pane list kbnav"><div class="label">Settings</div>${nav}</section>
+    <section class="pane detail" data-scroll="set-${state.setSel}"><div class="inner"><h1>${SETTINGS[state.setSel]}</h1><p class="lede">${SETTINGS_LEDE[state.setSel]}</p>${settingsBody(state.setSel)}</div></section>
+  </div>`;
+}
+
 /* ───────────────────────── Shell ───────────────────────── */
 
-const RENDER = { attention: viewAttention, efforts: viewEfforts, activity: viewActivity, pulls: viewPulls, knowledge: viewKnowledge };
+const RENDER = { attention: viewAttention, efforts: viewEfforts, activity: viewActivity, pulls: viewPulls, knowledge: viewKnowledge, settings: viewSettings };
 
 function render() {
   const scrolls = {};
@@ -1885,20 +1974,18 @@ function render() {
   document.documentElement.dataset.theme = state.theme;
   const main = RENDER[state.view]();  // first: it may settle the selection
   const n = activeItems().length;
-  $('#nav').innerHTML = VIEWS.map(v => `<button class="${state.view === v ? 'on' : ''}" data-act="view" data-view="${v}">${VIEW_NAMES[v] || cap(v)}${v === 'attention' && n ? `<span class="count">${n}</span>` : ''}</button>`).join('');
+  $('#nav').innerHTML = NAV.map(v => `<button class="${state.view === v ? 'on' : ''}" data-act="view" data-view="${v}">${VIEW_NAMES[v] || cap(v)}${v === 'attention' && n ? `<span class="count">${n}</span>` : ''}</button>`).join('');
   $('#tools').innerHTML = `
     <span class="model" ${modelless() ? `title="${esc(modelWhy(true))}"` : ''}><span class="dot ${live && isOffline ? 'error' : modelless() ? 'idle' : 'running'}"></span>${live ? (isOffline ? 'service offline' : `live · ${summarizer.model ? summarizer.model.split('/').pop() : 'no local model'}`) : 'qwen3:14b · local · caught up'}</span>${live ? usageTotal() + limitMeters() : ''}
     <span class="seg" role="group" aria-label="Voice" title="Fluent shows what the model wrote. Raw shows what the sources said. (r)">
       <button class="${state.fluent ? 'on' : ''}" data-act="fluent" data-on="1">Fluent</button><button class="${state.fluent ? '' : 'on'}" data-act="fluent" data-on="0">Raw</button></span>
     ${live ? `<button class="icon" data-act="searchOpen" title="Search sessions (/ or ⌘K)" aria-label="Search sessions">⌕</button>` : ''}
     <button class="icon" data-act="theme" title="Light or dark" aria-label="Toggle theme">◐</button>
-    <details class="menu" id="menu" ${menuOpen ? 'open' : ''}><summary class="icon" title="Prototype controls" aria-label="Prototype controls">⋯</summary>
-      <div class="pop"><p>Prototype controls</p>
-        ${live ? `<button data-act="toggleHold">Permission prompts: ${settings.answerPermissions ? 'Slorp or terminal' : 'terminal only'}</button>` : ''}
-        ${live && window.Notification ? `<button data-act="toggleNotify">Desktop notifications: ${canNotify() ? 'on' : 'off'}</button>` : ''}
-        ${live ? '' : '<button data-act="simulate">Simulate an incoming item</button>'}
-        <button data-act="reset">Reset the demo</button>
-        <p>Keys: j/k move · e dismiss · s snooze · r fluent/raw · 1–5 views</p></div></details>`;
+    <button class="icon ${state.view === 'settings' ? 'on' : ''}" data-act="view" data-view="settings" title="Settings (,)" aria-label="Settings">⚙</button>
+    ${live ? '' : `<details class="menu" id="menu" ${menuOpen ? 'open' : ''}><summary class="icon" title="Demo controls" aria-label="Demo controls">⋯</summary>
+      <div class="pop"><p>Demo controls</p>
+        <button data-act="simulate">Simulate an incoming item</button>
+        <button data-act="reset">Reset the demo</button></div></details>`}`;
   const notices = [modNotice(), modelNotice()].filter(Boolean);
   document.documentElement.style.setProperty('--notice', `${44 * notices.length}px`);
   $('#notice').innerHTML = notices.join('');
@@ -1952,6 +2039,9 @@ const actions = {
   renameCancel: () => { renaming = null; },
   side: () => { state.sideShut = !state.sideShut; },
   fluent: d => { state.fluent = d.on === '1'; },
+  themeTo: d => { state.theme = d.to; },
+  setSel: d => { state.setSel = d.s; },
+  setGo: d => { state.setSel = d.s; go('settings'); },
   theme: () => {
     const dark = state.theme === 'dark' || (state.theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
     state.theme = dark ? 'light' : 'dark';
@@ -1997,6 +2087,17 @@ const actions = {
     if (installing) return false;
     installing = true;
     ask('/api/plugins/claude', {}, () => toast('Done. Sessions already open pick it up after /reload-plugins or a restart.'), () => { installing = false; });
+  },
+  uninstallMod: () => {
+    if (installing || removing) return false;
+    toast('Uninstall the Slorp mod from Claude Code? Its sessions could then only be watched.', () => {
+      removing = true;
+      fetch('/api/plugins/claude', { method: 'DELETE' })
+        .then(async res => { if (!res.ok) throw new Error((await res.text()).trim() || res.status); toast('Uninstalled. Sessions already open keep it until /reload-plugins or a restart.'); })
+        .catch(err => toast(err instanceof TypeError ? 'Could not reach the Slorp service' : `That did not work: ${err.message}`))
+        .finally(() => { removing = false; refresh(true); });
+    }, 'Uninstall');
+    return false;
   },
   expand: d => { state.expanded[d.id] = !state.expanded[d.id]; },
   actSel: d => { state.actSel = d.id; },
@@ -2064,8 +2165,9 @@ const actions = {
   },
   feedCheck: () => { api('POST', '/api/feed/check', {}, () => toast('Checking now')); return false; },
   integrationToggle: d => { api('POST', `/api/integrations/${d.id}`, { enabled: d.on === '1' }); return false; },
-  toggleNotify: () => {
-    if (canNotify()) { state.notify = false; return; }
+  notifyTo: d => {
+    if (d.to === 'off') { state.notify = false; return; }
+    if (canNotify()) return false;
     Notification.requestPermission().then(answer => {
       state.notify = answer === 'granted';
       toast(state.notify ? 'Slorp will notify you while this page is out of sight' : 'The browser is blocking notifications for this page');
@@ -2073,7 +2175,7 @@ const actions = {
     });
     return false;
   },
-  toggleHold: () => { api('POST', '/api/settings', { answerPermissions: !settings.answerPermissions }); return false; },
+  holdTo: d => { api('POST', '/api/settings', { answerPermissions: d.to === 'both' }); return false; },
   startOpen: d => { starting = d.id; },
   startCancel: () => { starting = null; },
   stop: d => {
@@ -2111,7 +2213,12 @@ const actions = {
     freshId = next.id;
     toast(`New in ${effortById(next.effort).name}: ${next.title}`);
   },
-  reset: () => { const { view, theme } = state; state = Object.assign(fresh(), { view, theme }); toast('Demo reset'); },
+  reset: () => {
+    const wipe = () => { const { view, theme, setSel } = state; state = Object.assign(fresh(), { view, theme, setSel }); };
+    if (!live) { wipe(); toast('Demo reset'); return; }
+    toast('Forget what this browser keeps for the page?', wipe, 'Reset');
+    return false;
+  },
 };
 const changes = {
   liveMove: (d, el) => {
@@ -2218,6 +2325,7 @@ document.addEventListener('keydown', e => {
   if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
   const att = state.view === 'attention';
   if (/^[1-5]$/.test(e.key)) go(VIEWS[e.key - 1]);
+  else if (e.key === ',') go('settings');
   else if (e.key === 'r') state.fluent = !state.fluent;
   else if (e.key === 'w' && live) modal = modal === 'wrapup' ? null : 'wrapup';
   else if (e.key === '/' && live) openSearch();

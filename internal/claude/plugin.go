@@ -3,6 +3,7 @@ package claude
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"time"
 
@@ -86,6 +87,29 @@ func (a *Adapter) Install(ctx context.Context) error {
 	}
 	if err != nil {
 		return err
+	}
+	if p, err = a.plugin(ctx); err != nil {
+		return err
+	}
+	a.Hub.SetPlugin(Agent, p)
+	return nil
+}
+
+// Uninstall takes the Slorp plugin away from Claude Code. Sessions already
+// open keep it until they next reload their plugins. It fails when Plugin
+// is set, since the plugin then comes from that directory.
+func (a *Adapter) Uninstall(ctx context.Context) error {
+	if a.Plugin != "" {
+		return errors.New("Slorp was started with -plugin, which hands sessions the plugin from a directory, so there is nothing to uninstall")
+	}
+	p, err := a.plugin(ctx)
+	if err != nil {
+		return err
+	}
+	if p.Installed {
+		if _, err := a.run(ctx, launchTimeout, "", "plugin", "uninstall", pluginID); err != nil {
+			return err
+		}
 	}
 	if p, err = a.plugin(ctx); err != nil {
 		return err

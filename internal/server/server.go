@@ -75,6 +75,8 @@ type Launcher interface {
 	Stop(ctx context.Context, job string) error
 	// Install gives the agent the Slorp plugin, or turns it back on.
 	Install(ctx context.Context) error
+	// Uninstall takes the Slorp plugin away from the agent.
+	Uninstall(ctx context.Context) error
 }
 
 // directory returns path as the absolute directory it names, reading a
@@ -301,6 +303,19 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			return
 		}
 		if err := launcher.Install(r.Context()); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("DELETE /api/plugins/{agent}", func(w http.ResponseWriter, r *http.Request) {
+		launcher := launchers[r.PathValue("agent")]
+		if launcher == nil {
+			http.Error(w, "Slorp cannot uninstall a plugin for this agent", http.StatusNotFound)
+			return
+		}
+		if err := launcher.Uninstall(r.Context()); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}

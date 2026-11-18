@@ -13,7 +13,7 @@ import (
 )
 
 // pluginClaude is a stand-in for Claude Code that keeps its plugin list in a
-// file, which installing and enabling the Slorp plugin rewrite.
+// file, which installing, enabling and uninstalling the Slorp plugin rewrite.
 func pluginClaude(t *testing.T, listed string) (bin string, calls func() []string) {
 	t.Helper()
 	bin, calls = fakeClaude(t, `[]`, `
@@ -22,6 +22,7 @@ case "$1 $2" in
 "plugin list") cat "$dir/plugins" ;;
 "plugin install") echo '[{"id":"other@slorp","enabled":true},{"id":"slorp@slorp","version":"0.1.4","enabled":true}]' > "$dir/plugins" ;;
 "plugin enable") echo '[{"id":"slorp@slorp","version":"0.1.3","enabled":true}]' > "$dir/plugins" ;;
+"plugin uninstall") echo '[{"id":"other@slorp","enabled":true}]' > "$dir/plugins" ;;
 esac`)
 	if err := os.WriteFile(filepath.Join(filepath.Dir(bin), "plugins"), []byte(listed), 0o600); err != nil {
 		t.Fatal(err)
@@ -90,6 +91,55 @@ func TestInstall(t *testing.T) {
 		}
 		if _, told := h.State().Plugins[Agent]; told {
 			t.Error("the hub was told of a plugin after an install that failed")
+		}
+	})
+}
+
+func TestUninstall(t *testing.T) {
+	tests := []struct {
+		name, listed, want string
+	}{
+		{"installed", `[{"id":"slorp@slorp","version":"0.1.4","enabled":true}]`, "plugin|uninstall|slorp@slorp"},
+		{"installed and turned off", `[{"id":"slorp@slorp","version":"0.1.4","enabled":false}]`, "plugin|uninstall|slorp@slorp"},
+		{"not installed", `[{"id":"slorp@elsewhere","enabled":true}]`, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bin, calls := pluginClaude(t, tt.listed)
+			st := testdb.Open(t)
+			h := hub.New(testdb.KB(t, st), st)
+			if err := (&Adapter{Hub: h, Bin: bin}).Uninstall(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := ran(calls); got != tt.want {
+				t.Errorf("ran %q, want %q", got, tt.want)
+			}
+			if got, told := h.State().Plugins[Agent]; !told || got != (hub.Plugin{}) {
+				t.Errorf("the hub was told %+v (%v), want that the plugin is gone", got, told)
+			}
+		})
+	}
+
+	t.Run("Claude Code refuses", func(t *testing.T) {
+		listed := `[{"id":"slorp@slorp","version":"0.1.4","enabled":true}]`
+		bin, _ := fakeClaude(t, `[]`, `[ "$2" = list ] && { echo '`+listed+`'; exit 0; }; echo "Failed to uninstall: managed by policy" >&2; exit 1`)
+		st := testdb.Open(t)
+		h := hub.New(testdb.KB(t, st), st)
+		err := (&Adapter{Hub: h, Bin: bin}).Uninstall(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "managed by policy") {
+			t.Errorf("err = %v, want what Claude Code said", err)
+		}
+		if _, told := h.State().Plugins[Agent]; told {
+			t.Error("the hub was told of a plugin after an uninstall that failed")
+		}
+	})
+
+	t.Run("handed to sessions from a directory", func(t *testing.T) {
+		bin, calls := pluginClaude(t, `[{"id":"slorp@slorp","version":"0.1.4","enabled":true}]`)
+		st := testdb.Open(t)
+		err := (&Adapter{Hub: hub.New(testdb.KB(t, st), st), Bin: bin, Plugin: t.TempDir()}).Uninstall(context.Background())
+		if err == nil || ran(calls) != "" {
+			t.Errorf("err = %v after %q, want it refused and nothing run", err, ran(calls))
 		}
 	})
 }
