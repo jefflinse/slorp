@@ -2,6 +2,8 @@
 
 Slorp helps make sense of the dozens of agent sessions running on your machine.
 
+![Slorp's Attention view: the sessions that need you on the left, one of them open with its question, suggested replies and timeline](docs/slorp-screenshot.png)
+
 ## Getting Started
 
 You need [Go](https://go.dev/dl/) 1.27 or later and [Claude Code](https://claude.com/claude-code).
