@@ -75,10 +75,12 @@ type Session struct {
 	// Timeline is what the user has said in the session since Slorp began
 	// watching it, oldest first.
 	Timeline []Moment `json:"timeline,omitempty"`
-	Pending  *Pending `json:"pending,omitempty"`
-	CanReply bool     `json:"canReply"`
-	Replies  []Reply  `json:"replies,omitempty"`
-	Insight  *Insight `json:"insight,omitempty"`
+	// Backfilling counts the earlier exchanges still waiting for the model.
+	Backfilling int      `json:"backfilling,omitempty"`
+	Pending     *Pending `json:"pending,omitempty"`
+	CanReply    bool     `json:"canReply"`
+	Replies     []Reply  `json:"replies,omitempty"`
+	Insight     *Insight `json:"insight,omitempty"`
 	// Effort is the effort this session is filed under, empty when unsorted.
 	Effort    string `json:"effort"`
 	EffortVia string `json:"effortVia,omitempty"`
@@ -467,6 +469,9 @@ type Hub struct {
 	archive   map[string]sessionDoc
 	unsettled map[string]sessionDoc
 	started   time.Time
+	// backfill holds, by session, the exchanges waiting for the model to
+	// say how each came out.
+	backfill map[string][]Exchange
 }
 
 type note struct {
@@ -1304,8 +1309,7 @@ func texts(facts []kb.Fact) []string {
 // something new. What was said before the latest moment is not new, however
 // late its agent reports it; nor is an untimed repeat of a recent moment.
 func (h *Hub) track(s *Session, now time.Time) {
-	said := []rune(strings.Join(strings.Fields(s.LastPrompt), " "))
-	prompt := string(said[:min(len(said), momentLimit)])
+	prompt := momentPrompt(s.LastPrompt)
 	same := func(m Moment) bool { return samePrompt(m.Prompt, prompt) }
 	n := len(s.Timeline)
 	at := s.PromptAt
@@ -1440,6 +1444,7 @@ func (h *Hub) snapshot() []Session {
 		c.CanReply = time.Since(s.bridgeSeen) < bridgeTTL
 		c.Label, c.LabelVia = s.label()
 		c.Pull = h.pullOn(s, pulls)
+		c.Backfilling = len(h.backfill[s.ID])
 		c.Effort, c.EffortVia = h.filed(s)
 		if role, ok := h.kb.RoleOf(s.ID); ok {
 			c.Role, c.RoleVia, c.attention = role.ID, kb.ViaUser, role.Attention

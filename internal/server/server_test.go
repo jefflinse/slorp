@@ -3,11 +3,13 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +29,8 @@ type fixture struct {
 	feeds *asked
 	// probes counts how often the integration's availability was checked.
 	probes *int
+	// record is what a Claude session's own record is read as holding.
+	record *record
 }
 
 type asked struct{ checks, rescans int }
@@ -53,9 +57,21 @@ func newFixture(t *testing.T) *fixture {
 		Scope: func(string) (string, bool) { return "", true },
 		Tools: []integrations.Tool{{Name: "fake_lookup", Description: "Look something up."}},
 	})
-	srv := httptest.NewServer(New(h, k, tools, feeds, page))
+	rec := &record{}
+	srv := httptest.NewServer(New(h, k, tools, feeds, map[string]History{"claude": rec.read}, page))
 	t.Cleanup(srv.Close)
-	return &fixture{t, srv, h, k, feeds, probes}
+	return &fixture{t, srv, h, k, feeds, probes, rec}
+}
+
+type record struct {
+	exchanges []hub.Exchange
+	err       error
+	asked     []string
+}
+
+func (r *record) read(sessionID string, limit int) ([]hub.Exchange, error) {
+	r.asked = append(r.asked, sessionID+" "+strconv.Itoa(limit))
+	return r.exchanges, r.err
 }
 
 // do sends a request the way the web UI or a bridge would. edit may change
@@ -175,6 +191,42 @@ func TestBridgeReportsUsageWindows(t *testing.T) {
 	f.post("/api/bridge/poll", `{"sessionId":"s1"}`)
 	if got := f.state().Limits; len(got) != 8 {
 		t.Errorf("a poll with no reading left %d windows, want the last reading kept", len(got))
+	}
+}
+
+func TestBackfillingASession(t *testing.T) {
+	f := newFixture(t)
+	f.connect("s1")
+	f.post("/api/bridge/poll", `{"agent":"opencode","sessionId":"o1"}`)
+	at := time.Now().Add(-time.Hour)
+	f.record.exchanges = []hub.Exchange{{At: at, Prompt: "fix the rounding", Reply: "Fixed."}, {At: at.Add(time.Minute), Prompt: "now ship it"}}
+
+	if code := f.post("/api/sessions/nobody/backfill", ""); code != http.StatusNotFound {
+		t.Errorf("backfilling a session nobody knows = %d, want 404", code)
+	}
+	if code := f.post("/api/sessions/o1/backfill", ""); code != http.StatusBadRequest || len(f.record.asked) != 0 {
+		t.Errorf("backfilling a session whose agent keeps no record = %d, having read %v; want 400 and nothing read", code, f.record.asked)
+	}
+	code, body := f.do("POST", "/api/sessions/s1/backfill", "", nil)
+	if code != http.StatusAccepted || !strings.Contains(body, `"exchanges":2`) || !strings.Contains(body, `"queued":1`) {
+		t.Fatalf("backfilling = %d %s; want it taken, counting what was read and what waits for the model", code, body)
+	}
+	if len(f.record.asked) != 1 || f.record.asked[0] != "s1 "+strconv.Itoa(hub.BackfillLimit) {
+		t.Errorf("read %v, want that session's record once, up to the limit", f.record.asked)
+	}
+	var got hub.Session
+	for _, s := range f.state().Sessions {
+		if s.ID == "s1" {
+			got = s
+		}
+	}
+	if len(got.Timeline) != 2 || got.Timeline[0].Prompt != "fix the rounding" || got.Backfilling != 1 {
+		t.Errorf("session = %+v; want both exchanges in its timeline and one waiting", got)
+	}
+
+	f.record.err = errors.New("no transcript was found for the session")
+	if code, body := f.do("POST", "/api/sessions/s1/backfill", "", nil); code != http.StatusBadGateway || !strings.Contains(body, "no transcript") {
+		t.Errorf("a record that cannot be read = %d %s, want 502 saying why", code, body)
 	}
 }
 

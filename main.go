@@ -85,7 +85,8 @@ func main() {
 
 	h := hub.New(k, st)
 	tools := integrations.NewManager(func() map[string]bool { return h.Settings().Integrations }, integrations.GitHub(integrations.Exec))
-	go (&claude.Adapter{Hub: h, Bin: *claudeBin, Home: home, Interval: 5 * time.Second}).Run(ctx)
+	transcripts := &claude.Adapter{Hub: h, Bin: *claudeBin, Home: home, Interval: 5 * time.Second}
+	go transcripts.Run(ctx)
 	go (&opencode.Adapter{Hub: h, Interval: 2 * time.Second, Silence: 30 * time.Second}).Run(ctx)
 	if *llm != "" {
 		go (&enrich.Enricher{Hub: h, BaseURL: *llm, Model: *model, Offer: tools.Offer}).Run(ctx)
@@ -99,7 +100,7 @@ func main() {
 	})
 	go poller.Run(ctx)
 
-	srv := &http.Server{Addr: *addr, Handler: server.New(h, k, tools, poller, *ui)}
+	srv := &http.Server{Addr: *addr, Handler: server.New(h, k, tools, poller, map[string]server.History{claude.Agent: transcripts.Exchanges}, *ui)}
 	go func() {
 		<-ctx.Done()
 		srv.Close()

@@ -226,6 +226,76 @@ func TestTailKeepsThePromptAsItWasTyped(t *testing.T) {
 	check("a note of a prompt that was never read", "look at that instead…", time.Time{})
 }
 
+func TestExchanges(t *testing.T) {
+	home := t.TempDir()
+	project := filepath.Join(home, ".claude", "projects", "-w")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	a := &Adapter{Home: home}
+	at := func(e map[string]any, when string) map[string]any {
+		e["timestamp"] = when
+		return e
+	}
+	with := func(e map[string]any, key string) map[string]any {
+		e[key] = true
+		return e
+	}
+	appendTo(t, filepath.Join(project, "abc-123.jsonl"), strings.Join([]string{
+		line(t, with(user("This session is being continued from a previous conversation."), "isCompactSummary")),
+		line(t, assistant(text("an answer to nothing the user said"))),
+		line(t, at(user("fix the rounding"), "2026-11-17T10:00:00Z")),
+		line(t, assistant(text("Looking."), map[string]any{"type": "tool_use", "name": "Bash"})),
+		line(t, user([]map[string]any{{"type": "tool_result", "content": "exit 0"}})),
+		line(t, with(user("a prompt inside a subagent"), "isSidechain")),
+		line(t, with(user("[Image: source: /tmp/x.png]"), "isMeta")),
+		line(t, assistant(text("Fixed it. "+strings.Repeat("y", exchangeReply)))),
+		line(t, with(assistant(text("a subagent's answer")), "isSidechain")),
+		"not JSON\n",
+		line(t, at(user([]map[string]any{text("now look: [Image #1]"), {"type": "image"}}), "2026-11-17T11:00:00Z")),
+		line(t, assistant(text("I see a chart."))),
+		line(t, at(user("and ship it"), "2026-11-17T12:00:00Z")),
+	}, ""))
+
+	got, err := a.Exchanges("abc-123", 10)
+	if err != nil || len(got) != 3 {
+		t.Fatalf("Exchanges = %+v, %v; want the three things the user typed", got, err)
+	}
+	if x := got[0]; x.Prompt != "fix the rounding" || !x.At.Equal(time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)) || x.Reply != "…"+strings.Repeat("y", exchangeReply) {
+		t.Errorf("first = %q at %v, answered %d runes; want the prompt, its time, and the end of the main thread's last answer", x.Prompt, x.At, len([]rune(x.Reply)))
+	}
+	if x := got[1]; x.Prompt != "now look: [Image #1]" || x.Reply != "I see a chart." {
+		t.Errorf("second = %+v, want the prompt with a picture and its answer", x)
+	}
+	if x := got[2]; x.Prompt != "and ship it" || x.Reply != "" {
+		t.Errorf("third = %+v, want the prompt not yet answered", x)
+	}
+	if got, _ := a.Exchanges("abc-123", 2); len(got) != 2 || got[0].Prompt != "now look: [Image #1]" {
+		t.Errorf("limited to two: %+v, want the latest two", got)
+	}
+
+	for _, id := range []string{"", "*", "../abc-123", "abc-123/..", "abc 123"} {
+		if got, err := a.Exchanges(id, 10); err == nil {
+			t.Errorf("Exchanges(%q) = %+v; want it refused as no session id", id, got)
+		}
+	}
+	if _, err := a.Exchanges("nowhere", 10); err == nil {
+		t.Error("a session with no transcript read as empty rather than failing")
+	}
+}
+
+func TestTailDoesNotTakeACompactionSummaryForAPrompt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	summary := user("This session is being continued from a previous conversation.")
+	summary["isCompactSummary"] = true
+	appendTo(t, path, line(t, user("the real prompt"))+line(t, summary))
+	tl := &tail{path: path}
+	tl.read()
+	if tl.lastPrompt != "the real prompt" {
+		t.Errorf("lastPrompt = %q", tl.lastPrompt)
+	}
+}
+
 func TestTailReadsIncrementally(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	appendTo(t, path, line(t, assistant(text("first"))))

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -49,7 +50,13 @@ type Feeds interface {
 }
 
 // New returns the handler. uiPath is the page served at /.
-func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, uiPath string) http.Handler {
+// History reads what was said in a session from its agent's own record,
+// oldest first and at most limit of it.
+type History func(sessionID string, limit int) ([]hub.Exchange, error)
+
+// New serves the page and its API. history is by agent; an agent with none
+// keeps no record Slorp can read.
+func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history map[string]History, uiPath string) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
@@ -162,6 +169,29 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, uiPath s
 			return
 		}
 		edited(w, k.Assign(r.PathValue("id"), in.Effort))
+	})
+
+	// The page asks, for one session and only when the user says so, for its
+	// timeline to be filled in from the session's own record.
+	mux.HandleFunc("POST /api/sessions/{id}/backfill", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		at := slices.IndexFunc(h.Sessions(), func(s hub.Session) bool { return s.ID == id })
+		if at < 0 {
+			http.Error(w, "no such session", http.StatusNotFound)
+			return
+		}
+		read := history[h.Sessions()[at].Agent]
+		if read == nil {
+			http.Error(w, "this agent keeps no record Slorp can read", http.StatusBadRequest)
+			return
+		}
+		exchanges, err := read(id, hub.BackfillLimit)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		queued, _ := h.Backfill(id, exchanges)
+		writeJSON(w, http.StatusAccepted, map[string]int{"exchanges": len(exchanges), "queued": queued})
 	})
 
 	// The page searches the sessions, open and closed.

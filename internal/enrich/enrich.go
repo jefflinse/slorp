@@ -91,9 +91,10 @@ func (e *Enricher) step(ctx context.Context) {
 	}
 }
 
-// next picks one piece of work: a day the user asked to have wrapped up
-// comes first, then describing a session, then filing it under an effort,
-// then guessing its role, then rewriting an effort's note.
+// next picks one piece of work: what the user asked for comes first, a day
+// to wrap up and then a session's earlier exchanges to fill in; then
+// describing a session, filing it under an effort, guessing its role, and
+// rewriting an effort's note.
 func (e *Enricher) next() (key, what string, job func(context.Context, string) error) {
 	ready := func(key string) bool { return time.Since(e.failed[key]) > retryAfter }
 	for _, w := range e.Hub.Unwrapped() {
@@ -104,6 +105,15 @@ func (e *Enricher) next() (key, what string, job func(context.Context, string) e
 				failure = "The local model could not write it: " + err.Error()
 			}
 			e.Hub.SetWrapup(w, headline, efforts, failure)
+			return err
+		}
+	}
+	for _, u := range e.Hub.Unfilled() {
+		return "backfill:" + u.SessionID, "fill in " + u.Label, func(ctx context.Context, model string) error {
+			lines, err := e.backfill(ctx, model, u)
+			// Exchanges the model could not be asked about are left as they
+			// are, for the user to ask again.
+			e.Hub.SetFilled(u, lines)
 			return err
 		}
 	}

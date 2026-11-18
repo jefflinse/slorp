@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -27,6 +28,8 @@ const (
 
 	maxFirstRead = 64 << 20
 	promptLimit  = 8000
+	// exchangeReply is how much of an answer Exchanges keeps, in runes.
+	exchangeReply = 2000
 )
 
 type Adapter struct {
@@ -152,10 +155,13 @@ type entry struct {
 	GitBranch   string `json:"gitBranch"`
 	IsSidechain bool   `json:"isSidechain"`
 	IsMeta      bool   `json:"isMeta"`
-	Subtype     string `json:"subtype"`
-	Timestamp   string `json:"timestamp"`
-	Effort      string `json:"effort"`
-	Message     struct {
+	// IsSummary marks the account of an earlier conversation that Claude
+	// Code writes in the user's place when it compacts one.
+	IsSummary bool   `json:"isCompactSummary"`
+	Subtype   string `json:"subtype"`
+	Timestamp string `json:"timestamp"`
+	Effort    string `json:"effort"`
+	Message   struct {
 		Content json.RawMessage `json:"content"`
 		ID      string          `json:"id"`
 		Model   string          `json:"model"`
@@ -247,7 +253,7 @@ func (t *tail) apply(line []byte) {
 			t.lastPrompt, t.promptAt = said, time.Time{}
 		}
 	case "user":
-		if text := typed(e.Message.Content); text != "" && !e.IsMeta {
+		if text := e.said(); text != "" {
 			t.lastPrompt = head(text, promptLimit)
 			t.promptAt, _ = time.Parse(time.RFC3339, e.Timestamp)
 		}
@@ -278,6 +284,59 @@ func (t *tail) count(id string, now hub.Tokens) {
 	t.used.CacheWrite += now.CacheWrite - was.CacheWrite
 	t.used.CacheRead += now.CacheRead - was.CacheRead
 	t.used.Out += now.Out - was.Out
+}
+
+// said returns what the user typed, when the entry is the user typing.
+func (e entry) said() string {
+	if e.Type != "user" || e.IsMeta || e.IsSummary || e.IsSidechain {
+		return ""
+	}
+	return typed(e.Message.Content)
+}
+
+// Exchanges reads the whole of a session's transcript and returns the
+// latest things the user said in it, oldest first, each with the end of
+// what the agent last answered before the user spoke again. At most limit
+// are returned.
+func (a *Adapter) Exchanges(sessionID string, limit int) ([]hub.Exchange, error) {
+	if sessionID == "" || strings.ContainsFunc(sessionID, func(r rune) bool {
+		return !(r == '-' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z')
+	}) {
+		return nil, fmt.Errorf("%q is not a session id", sessionID)
+	}
+	found, _ := filepath.Glob(filepath.Join(a.Home, ".claude", "projects", "*", sessionID+".jsonl"))
+	if len(found) == 0 {
+		return nil, fmt.Errorf("no transcript was found for the session")
+	}
+	f, err := os.Open(found[0])
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var out []hub.Exchange
+	for r := bufio.NewReaderSize(f, 1<<20); ; {
+		line, err := r.ReadBytes('\n')
+		if err != nil {
+			break
+		}
+		if !bytes.Contains(line, []byte(`"type":"assistant"`)) && !bytes.Contains(line, []byte(`"type":"user"`)) {
+			continue
+		}
+		var e entry
+		if json.Unmarshal(line, &e) != nil {
+			continue
+		}
+		if text := e.said(); text != "" {
+			at, _ := time.Parse(time.RFC3339, e.Timestamp)
+			out = append(out, hub.Exchange{At: at, Prompt: head(text, promptLimit)})
+		} else if e.Type == "assistant" && !e.IsSidechain && len(out) > 0 {
+			if text := assistantText(e.Message.Content); text != "" {
+				out[len(out)-1].Reply = Tail(text, exchangeReply)
+			}
+		}
+	}
+	return out[max(0, len(out)-limit):], nil
 }
 
 // typed returns what the user typed in a user entry: its text, with or

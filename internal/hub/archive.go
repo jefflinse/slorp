@@ -67,6 +67,7 @@ func (h *Hub) archived(id string, d sessionDoc) Archived {
 // leave stores a session as it goes and files it in the archive, unless
 // nothing was ever said in it or about it.
 func (h *Hub) leave(s *Session) {
+	delete(h.backfill, s.ID)
 	d := h.doc(s)
 	d.Ended = time.Now()
 	h.shelve(s.ID, d)
