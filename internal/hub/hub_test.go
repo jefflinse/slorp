@@ -1350,6 +1350,46 @@ func TestApplyReportsSessionsItCreates(t *testing.T) {
 	}
 }
 
+func TestBridgeCannotOpenASessionItsRosterDoesNotList(t *testing.T) {
+	h, _, _ := newHub(t)
+	h.Rostered(agent)
+	closed := Session{ID: "closed", Agent: agent, Status: Idle, Cwd: "/w", LastPrompt: "add flange support", PromptAt: time.Now().Add(-time.Hour)}
+	h.SetRoster(agent, []Session{idle("open", "/w", ""), closed})
+	h.SetRoster(agent, []Session{idle("open", "/w", "")})
+	was, ok := h.Archive("closed")
+	if !ok {
+		t.Fatal("a session the roster stopped listing was not archived")
+	}
+
+	for _, id := range []string{"closed", "never-listed"} {
+		ran := false
+		if h.Apply(agent, id, func(*Session) { ran = true }) || ran {
+			t.Errorf("a report about %q, which the roster does not list, was taken", id)
+		}
+	}
+	if p := h.Ask(agent, "closed", Pending{Tool: "Bash"}, true); p.Answerable || len(h.waiters) != 0 {
+		t.Errorf("a prompt from a session the roster does not list is offered for an answer: %+v", p)
+	}
+	if got := h.Sessions(); len(got) != 1 || got[0].ID != "open" {
+		t.Errorf("sessions = %+v, want only the one the roster lists", got)
+	}
+	if now, ok := h.Archive("closed"); !ok || !now.EndedAt.Equal(was.EndedAt) {
+		t.Errorf("archived = %+v, %v; want the closed session left as it was at %v", now, ok, was.EndedAt)
+	}
+
+	ran := false
+	if h.Apply(agent, "open", func(*Session) { ran = true }) || !ran {
+		t.Error("a report about a session the roster lists was not applied")
+	}
+	if !h.Apply("opencode", "o", nil) {
+		t.Error("an agent without a roster could not have its bridge open a session")
+	}
+	h.SetRoster(agent, []Session{idle("open", "/w", ""), closed})
+	if _, archived := h.Archive("closed"); archived || session(t, h, "closed").ID != "closed" {
+		t.Error("a session the roster lists again did not reopen")
+	}
+}
+
 func TestRetireDropsSessionsWhoseBridgeWentSilent(t *testing.T) {
 	h, _, _ := newHub(t)
 	for _, id := range []string{"silent", "polling"} {

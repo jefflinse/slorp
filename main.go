@@ -91,6 +91,7 @@ func main() {
 	}
 
 	h := hub.New(k, st)
+	h.Rostered(claude.Agent)
 	tools := integrations.NewManager(func() map[string]bool { return h.Settings().Integrations }, integrations.GitHub(integrations.Exec))
 	transcripts := &claude.Adapter{Hub: h, Bin: *claudeBin, Home: home, Interval: 5 * time.Second, Plugin: *plugin}
 	go transcripts.Run(ctx)

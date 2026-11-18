@@ -515,6 +515,27 @@ func TestBridgeNamesItsAgent(t *testing.T) {
 	}
 }
 
+func TestABridgeIsNotHeardAboutASessionTheRosterDoesNotList(t *testing.T) {
+	f := newFixture(t)
+	f.hub.Rostered("claude")
+	f.hub.SetRoster("claude", []hub.Session{{ID: "listed", Agent: "claude", Status: hub.Idle}})
+
+	code, res := f.do("POST", "/api/bridge/poll", `{"sessionId":"stray","cwd":"/w","title":"Left behind"}`, nil)
+	if code != 200 || !strings.Contains(res, `"fresh":false`) {
+		t.Errorf("poll = %d %s, want it answered without a session being opened", code, res)
+	}
+	if code := f.post("/api/bridge/event", `{"sessionId":"stray","type":"turn.start","text":"hello"}`); code != 204 {
+		t.Errorf("event = %d", code)
+	}
+	code, res = f.do("POST", "/api/bridge/permission", `{"sessionId":"stray","tool":"Bash","summary":"ls","input":"ls","canAnswer":true}`, nil)
+	if code != 200 || !strings.Contains(res, `"answerable":false`) {
+		t.Errorf("permission = %d %s, want the prompt left to the terminal", code, res)
+	}
+	if got := f.state().Sessions; len(got) != 1 || got[0].ID != "listed" {
+		t.Errorf("sessions = %+v, want only the one the roster lists", got)
+	}
+}
+
 func TestAQuestionOverHTTP(t *testing.T) {
 	f := newFixture(t)
 	_, body := f.do("POST", "/api/bridge/permission", `{"sessionId":"s1","tool":"AskUserQuestion","summary":"Which one?","input":"{}","canAnswer":true,"question":true}`, nil)

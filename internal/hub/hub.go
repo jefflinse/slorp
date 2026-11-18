@@ -478,6 +478,8 @@ type Hub struct {
 	// backfill holds, by session, the exchanges waiting for the model to
 	// say how each came out.
 	backfill map[string][]Exchange
+	// rostered holds the agents whose open sessions a roster lists.
+	rostered map[string]bool
 }
 
 type note struct {
@@ -621,12 +623,27 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 	h.changed()
 }
 
+// Rostered declares that the open sessions of agent are the ones SetRoster
+// lists, whatever a bridge reports.
+func (h *Hub) Rostered(agent string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.rostered == nil {
+		h.rostered = map[string]bool{}
+	}
+	h.rostered[agent] = true
+}
+
 // Apply records a bridge's report about one session. It creates the session
-// if nothing has listed it yet, and reports whether it did.
+// if nothing has listed it yet, and reports whether it did. A report about a
+// session its agent's roster does not list is dropped.
 func (h *Hub) Apply(agent, id string, fn func(*Session)) (created bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	s, ok := h.sessions[id]
+	if !ok && h.rostered[agent] {
+		return false
+	}
 	if !ok {
 		now := time.Now()
 		s = &Session{ID: id, Agent: agent, Kind: "interactive", Status: Idle, StartedAt: now, ActiveAt: now}
