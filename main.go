@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"flag"
 	"log"
@@ -24,6 +25,9 @@ import (
 	"github.com/jefflinse/slorp/internal/server"
 	"github.com/jefflinse/slorp/internal/store"
 )
+
+//go:embed index.html
+var page []byte
 
 // importJSON carries a knowledge base from the JSON file earlier versions
 // wrote into the database, once, leaving the file in place.
@@ -50,7 +54,7 @@ func importJSON(st *store.Store, path string) {
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:4747", "loopback address to listen on")
-	ui := flag.String("ui", "index.html", "path to the web UI page")
+	ui := flag.String("ui", "", "path to a web UI page to serve in place of the one built in, read afresh for each request")
 	claudeBin := flag.String("claude", "claude", "Claude Code executable")
 	llm := flag.String("llm", "http://localhost:1234", "OpenAI-compatible local model server; empty disables summaries")
 	model := flag.String("model", "", "model to summarize with (default: whichever one is loaded)")
@@ -108,7 +112,7 @@ func main() {
 	})
 	go poller.Run(ctx)
 
-	srv := &http.Server{Addr: *addr, Handler: server.New(h, k, tools, poller, map[string]server.History{claude.Agent: transcripts.Exchanges}, map[string]server.Launcher{claude.Agent: transcripts}, *ui)}
+	srv := &http.Server{Addr: *addr, Handler: server.New(h, k, tools, poller, map[string]server.History{claude.Agent: transcripts.Exchanges}, map[string]server.Launcher{claude.Agent: transcripts}, server.Page(page, *ui))}
 	go func() {
 		<-ctx.Done()
 		srv.Close()

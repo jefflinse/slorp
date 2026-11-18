@@ -57,7 +57,6 @@ type Feeds interface {
 	Rescan()
 }
 
-// New returns the handler. uiPath is the page served at /.
 // History reads what was said in a session from its agent's own record,
 // oldest first and at most limit of it.
 type History func(sessionID string, limit int) ([]hub.Exchange, error)
@@ -96,15 +95,27 @@ func directory(path string) (string, error) {
 	return filepath.Clean(path), nil
 }
 
+// Page serves built as the web UI, or the file at path when one is given,
+// read afresh for each request.
+func Page(built []byte, path string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if path != "" {
+			http.ServeFile(w, r, path)
+			return
+		}
+		w.Write(built)
+	})
+}
+
 // New serves the page and its API. history and launchers are by agent; an
 // agent with no history keeps no record Slorp can read, and one with no
 // launcher has sessions Slorp can only watch.
-func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history map[string]History, launchers map[string]Launcher, uiPath string) http.Handler {
+func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history map[string]History, launchers map[string]Launcher, page http.Handler) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		http.ServeFile(w, r, uiPath)
+		page.ServeHTTP(w, r)
 	})
 
 	mux.HandleFunc("GET /api/sessions", func(w http.ResponseWriter, r *http.Request) {

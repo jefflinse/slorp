@@ -69,10 +69,6 @@ func newFixture(t *testing.T) *fixture {
 	st := testdb.Open(t)
 	k := testdb.KB(t, st)
 	h := hub.New(k, st)
-	page := filepath.Join(t.TempDir(), "index.html")
-	if err := os.WriteFile(page, []byte("<title>slorp</title>"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	feeds, probes := &asked{}, new(int)
 	tools := integrations.NewManager(func() map[string]bool { return h.Settings().Integrations }, integrations.Integration{
 		ID: "fake", Name: "Fake", About: "A stand-in.",
@@ -84,7 +80,7 @@ func newFixture(t *testing.T) *fixture {
 		Tools: []integrations.Tool{{Name: "fake_lookup", Description: "Look something up."}},
 	})
 	rec, launch := &record{}, &launcher{}
-	srv := httptest.NewServer(New(h, k, tools, feeds, map[string]History{"claude": rec.read}, map[string]Launcher{"claude": launch}, page))
+	srv := httptest.NewServer(New(h, k, tools, feeds, map[string]History{"claude": rec.read}, map[string]Launcher{"claude": launch}, Page([]byte("<title>slorp</title>"), "")))
 	t.Cleanup(srv.Close)
 	return &fixture{t, srv, h, k, feeds, probes, rec, launch}
 }
@@ -533,6 +529,32 @@ func TestABridgeIsNotHeardAboutASessionTheRosterDoesNotList(t *testing.T) {
 	}
 	if got := f.state().Sessions; len(got) != 1 || got[0].ID != "listed" {
 		t.Errorf("sessions = %+v, want only the one the roster lists", got)
+	}
+}
+
+func TestPage(t *testing.T) {
+	get := func(h http.Handler) (string, string) {
+		t.Helper()
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+		if w.Code != 200 {
+			t.Fatalf("status = %d", w.Code)
+		}
+		return w.Body.String(), w.Header().Get("Content-Type")
+	}
+	built := []byte("<title>built in</title>")
+	if body, kind := get(Page(built, "")); body != "<title>built in</title>" || kind != "text/html; charset=utf-8" {
+		t.Errorf("with no path, served %q as %q; want the built-in page as HTML", body, kind)
+	}
+
+	path := filepath.Join(t.TempDir(), "index.html")
+	for _, want := range []string{"<title>on disk</title>", "<title>edited</title>"} {
+		if err := os.WriteFile(path, []byte(want), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if body, kind := get(Page(built, path)); body != want || kind != "text/html; charset=utf-8" {
+			t.Errorf("with a path, served %q as %q; want the file as it now stands", body, kind)
+		}
 	}
 }
 
