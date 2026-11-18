@@ -7,6 +7,8 @@ const SUMMARY_LIMIT = 400
 const INPUT_LIMIT = 8000
 /** How long Slorp may answer a prompt before only the terminal can. */
 const ANSWER_MAX_MS = 60 * 60_000
+/** How much of a subagent's account of what it is doing is passed on. */
+const DOING_LIMIT = 300
 /** Tools whose prompt only the terminal's own dialog can answer. */
 const NEEDS_PERSON = new Set(['ExitPlanMode'])
 
@@ -51,12 +53,37 @@ async function deliver($: EngineInterface, reply: Reply) {
   await post($, '/api/bridge/ack', { id: reply.id, state })
 }
 
+/**
+ * The session's subagents as the engine has them now, each with how its loop
+ * stands, what it says it is doing and its latest token readings. Undefined
+ * where the engine cannot list them, which is not the same as having none.
+ */
+async function subagents($: EngineInterface) {
+  try {
+    return (await $.agent.list()).map(a => ({
+      id: a.id,
+      type: a.type,
+      description: a.description,
+      status: a.status,
+      doing: a.label === a.description ? '' : a.label.slice(0, DOING_LIMIT),
+      parentId: a.parentId,
+      model: a.model,
+      startTime: a.startTime,
+      tokenSamples: a.tokenSamples,
+      costUsd: a.cost?.usd,
+    }))
+  } catch {
+    return undefined
+  }
+}
+
 async function poll($: EngineInterface) {
   if (isPolling) return
   isPolling = true
   try {
     const sessionId = await $.session.id()
-    const claimed = await post($, '/api/bridge/poll', { agent: AGENT, sessionId, cwd, contextWindow, costUsd, rateLimits, measuredAt })
+    const agents = await subagents($)
+    const claimed = await post($, '/api/bridge/poll', { agent: AGENT, sessionId, cwd, contextWindow, costUsd, rateLimits, measuredAt, agents })
     for (const reply of (claimed?.replies ?? []) as Reply[]) {
       void deliver($, reply).catch(() => {})
     }
@@ -72,9 +99,10 @@ async function poll($: EngineInterface) {
  * asking, and resolves to the user's `allow` or `deny` from Slorp. Resolves to
  * `terminal` when the answer will not come from Slorp: the dialog was
  * answered or the turn interrupted, the tool needs the person, the input is
- * too long to judge there, or Slorp is not running.
+ * too long to judge there, or Slorp is not running. agentId is the subagent
+ * that asks, when one does.
  */
-async function askSlorp($: EngineInterface, tool: string, input: unknown, abandoned: AbortSignal) {
+async function askSlorp($: EngineInterface, tool: string, input: unknown, agentId: string | undefined, abandoned: AbortSignal) {
   const { command, questions } = (input ?? {}) as { command?: unknown; questions?: unknown }
   const full = typeof command === 'string' ? command : JSON.stringify(input, null, 2)
   const asks = tool === 'AskUserQuestion' && Array.isArray(questions) ? questions.map(q => String(q?.question ?? '')).join(' ') : full
@@ -86,6 +114,7 @@ async function askSlorp($: EngineInterface, tool: string, input: unknown, abando
     input: full.slice(0, INPUT_LIMIT),
     canAnswer: !NEEDS_PERSON.has(tool) && full.length <= INPUT_LIMIT,
     question: tool === 'AskUserQuestion',
+    agentId,
   })
   if (!asked?.answerable) return { state: 'terminal' }
 
@@ -105,12 +134,13 @@ async function askSlorp($: EngineInterface, tool: string, input: unknown, abando
  * Bridges one Claude Code session to the Slorp service at the `url` option,
  * or at SLORP_URL when that is set. Every POLL_MS it
  * claims replies queued for this session and submits each as the user's own
- * prompt; alongside, it reports turn events. A permission prompt is offered
+ * prompt; alongside, it reports turn events. A permission prompt, a
+ * subagent's included, is offered
  * to Slorp as well as the terminal's own dialog, and whichever the user
  * answers first decides it; a question is answered there with the options
  * the user picked. Each poll also carries the size of the model's context
- * window, the engine's estimate of the session's cost, and the account's
- * usage windows as this session last read them.
+ * window, the engine's estimate of the session's cost, the account's usage
+ * windows as this session last read them, and how its subagents stand.
  */
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
@@ -140,7 +170,7 @@ export const register: Register = (on, options) => {
   })
 
   on('classic.PermissionRequest', async ($, e, next) => {
-    const answer = await askSlorp($, e.tool_name, e.tool_input, next.signal).catch(() => ({ state: 'terminal' }))
+    const answer = await askSlorp($, e.tool_name, e.tool_input, e.agent_id, next.signal).catch(() => ({ state: 'terminal' }))
     if (answer.state === 'allow' && e.tool_name === 'AskUserQuestion') {
       if (!answer.answers) return next(e)
       return { decision: { behavior: 'allow' as const, updatedInput: { ...(e.tool_input as object), answers: answer.answers } } }

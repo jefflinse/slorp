@@ -1628,3 +1628,58 @@ func TestUnroled(t *testing.T) {
 		t.Errorf("the old guess vanished while a new one is pending: %q", s.Role)
 	}
 }
+
+func TestBridgeSaysHowSubagentsStand(t *testing.T) {
+	h, _, _ := newHub(t)
+	roster := []Session{{ID: "s1", Agent: "claude", Subagents: []Subagent{
+		{ID: "read", Type: "Explore", Description: "Find the callers", Tools: 3},
+		{ID: "quiet", Description: "Write the fix", Done: true},
+	}}}
+	h.SetRoster("claude", roster)
+	subagents := func() []Subagent { return h.State().Sessions[0].Subagents }
+	if got := subagents(); len(got) != 2 || got[0].Status != "" {
+		t.Fatalf("subagents = %+v, want the two the roster listed, as it listed them", got)
+	}
+
+	h.Apply("claude", "s1", func(s *Session) {
+		s.Delegated([]Subagent{
+			{ID: "read", Type: "general-purpose", Description: "Something else", Model: "claude-haiku-5-5", Status: "failed", Doing: "Reading hub.go", Samples: []int{10, 20}, CostUSD: 0.5, ParentID: "quiet"},
+			{ID: "new", Type: "Plan", Description: "Plan the change", Status: "running"},
+			{ID: "gone", Status: "killed"},
+		})
+	})
+	got := subagents()
+	if len(got) != 4 || got[0].ID != "read" || got[1].ID != "quiet" || got[2].ID != "new" || got[3].ID != "gone" {
+		t.Fatalf("subagents = %+v, want those read from the record and then those only the bridge knows of", got)
+	}
+	read := got[0]
+	if read.Status != "failed" || read.Doing != "Reading hub.go" || len(read.Samples) != 2 || read.CostUSD != 0.5 || read.ParentID != "quiet" || !read.Done {
+		t.Errorf("one the bridge spoke of = %+v, want how it stands, and that it is over", read)
+	}
+	if read.Type != "Explore" || read.Description != "Find the callers" || read.Model != "claude-haiku-5-5" || read.Tools != 3 {
+		t.Errorf("one the bridge spoke of = %+v, want its record to stand where it says, and the bridge to fill in the rest", read)
+	}
+	if got[1].Status != "" || !got[1].Done {
+		t.Errorf("one the bridge did not speak of = %+v, want it as its record has it", got[1])
+	}
+	if got[2].Done || got[2].Description != "Plan the change" || !got[3].Done {
+		t.Errorf("those only the bridge knows of = %+v and %+v, want one running and one over", got[2], got[3])
+	}
+
+	h.SetRoster("claude", roster)
+	if got := subagents(); len(got) != 4 || got[0].Status != "failed" {
+		t.Errorf("subagents = %+v after the roster was read again, want what the bridge said kept", got)
+	}
+	h.Apply("claude", "s1", func(s *Session) { s.Delegated(nil) })
+	if got := subagents(); len(got) != 2 || got[0].Status != "" || got[0].Done {
+		t.Errorf("subagents = %+v once the bridge has none to speak of, want the record alone", got)
+	}
+
+	h.Apply("claude", "s1", func(s *Session) { s.Delegated([]Subagent{{ID: "read", Status: "running"}}) })
+	h.mu.Lock()
+	h.sessions["s1"].bridgeSeen = time.Now().Add(-2 * bridgeTTL)
+	h.mu.Unlock()
+	if got := subagents(); len(got) != 2 || got[0].Status != "" {
+		t.Errorf("subagents = %+v with the bridge gone quiet, want nothing of what it last said", got)
+	}
+}

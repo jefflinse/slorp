@@ -232,6 +232,11 @@ h1 .pen:hover { color: var(--accent); background: var(--sel); }
 .role .spark { margin-right: 4px; }
 .subs { display: inline-flex; align-items: center; white-space: nowrap; color: var(--ink3); font-size: 12px; }
 .subs.live { color: var(--ink2); }
+.subs b { color: var(--err); font-weight: 600; }
+.lane .doing { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin-top: 1px; color: var(--ink2); font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+.lane .stand { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.sparkl { flex: none; overflow: visible; }
+.sparkl polyline { fill: none; stroke: var(--k-local); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
 .run { margin-top: 16px; }
 .rhead { display: flex; justify-content: space-between; gap: 10px; padding-bottom: 4px; border-bottom: 1px solid var(--line); color: var(--ink3); font-size: 12px; font-variant-numeric: tabular-nums; }
 .lane { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(90px, 1fr) 128px; gap: 3px 16px; align-items: center; width: 100%; padding: 9px 0; border-bottom: 1px solid var(--line); text-align: left; }
@@ -243,6 +248,8 @@ h1 .pen:hover { color: var(--accent); background: var(--sel); }
 .lane .track i { position: absolute; top: 0; bottom: 0; min-width: 3px; border-radius: 99px; background: var(--ink3); }
 .lane .track i.running { background: var(--k-local); animation: pulse 1.8s ease-in-out infinite; }
 .lane .track i.idle { background: transparent; box-shadow: inset 0 0 0 1.5px var(--ink3); }
+.lane .track i.waiting { background: var(--fill); box-shadow: inset 0 0 0 1.5px var(--accent); }
+.lane .track i.error { background: var(--err); }
 .lane .num { display: flex; gap: 12px; justify-content: flex-end; color: var(--ink2); font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .lane .num span:last-child { min-width: 44px; text-align: right; }
 .lane .stand { grid-column: 2 / -1; color: var(--ink3); font-size: 12px; }
@@ -1508,14 +1515,23 @@ function md(src) {
 const SUB_QUIET = 10;
 const newTokens = u => (u?.in || 0) + (u?.cacheWrite || 0) + (u?.out || 0);
 const subQuiet = a => a.activeAt ? minsSince(a.activeAt) : 0;
-const subRunning = a => !a.done && subQuiet(a) < SUB_QUIET;
-/* How a subagent stands, as a dot and a word. One in a closed session that never finished did not finish. */
-const subStatus = (a, closed) => a.done ? ['done', 'finished'] : closed ? ['idle', 'did not finish'] : subRunning(a) ? ['running', 'running'] : ['idle', `no word for ${span(subQuiet(a))}`];
+/* How a subagent stands by its session's own word, where the session runs the Slorp mod and so says. */
+const SUB_SAID = { running: ['running', 'running'], waiting: ['waiting', 'waiting'], pending: ['idle', 'yet to start'], idle: ['idle', 'idle'], completed: ['done', 'finished'], failed: ['error', 'failed'], killed: ['error', 'stopped'] };
+const subRunning = a => a.status ? ['running', 'waiting', 'pending'].includes(a.status) : !a.done && subQuiet(a) < SUB_QUIET;
+/* How a subagent stands, as a dot and a word: as its session says, else as its record suggests. One in a closed session that never finished did not finish. */
+const subStatus = (a, closed) => SUB_SAID[a.status] || (a.done ? ['done', 'finished'] : closed ? ['idle', 'did not finish'] : subRunning(a) ? ['running', 'running'] : ['idle', `no word for ${span(subQuiet(a))}`]);
+/* A subagent's latest token readings as a line. */
+function sparkline(v) {
+  if (!v || v.length < 2) return '';
+  const lo = Math.min(...v), hi = Math.max(...v), w = 64, h = 14;
+  const pts = v.map((n, i) => `${(i * w / (v.length - 1)).toFixed(1)},${(h - 1 - (hi === lo ? 0 : (n - lo) * (h - 2) / (hi - lo))).toFixed(1)}`).join(' ');
+  return `<svg class="sparkl" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="Its tokens over the last minute or so"><title>Its tokens over the last minute or so: ${tokens(v[0])} to ${tokens(v[v.length - 1])}</title><polyline points="${pts}"/></svg>`;
+}
 const lasted = ms => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s` : `${Math.floor(s / 3600)}h ${String(Math.floor(s % 3600 / 60)).padStart(2, '0')}m`; };
 function subChip(s) {
-  const all = s.subagents || [], going = all.filter(subRunning).length;
+  const all = s.subagents || [], going = all.filter(subRunning).length, failed = all.filter(a => a.status === 'failed').length;
   if (!all.length) return '';
-  return `<span class="subs ${going ? 'live' : ''}" title="Agents this session started to do parts of its work">${going ? `<span class="dot running"></span>${going} of ${all.length}` : all.length} subagent${all.length === 1 ? '' : 's'}${going ? ' running' : ''}</span>`;
+  return `<span class="subs ${going ? 'live' : ''}" title="Agents this session started to do parts of its work">${going ? `<span class="dot running"></span>${going} of ${all.length}` : all.length} subagent${all.length === 1 ? '' : 's'}${going ? ' running' : ''}${failed ? `<b>, ${failed} failed</b>` : ''}</span>`;
 }
 
 /* What each subagent was asked and reported, fetched when its lane is opened and again as it gets further. */
@@ -1550,7 +1566,10 @@ function subsBody(sessionId, list, closed, used) {
     const lanes = run.spans.map(({ a, from, to }) => {
       const [dot, word] = subStatus(a, closed), key = `sub:${sessionId}/${a.id}`, open = state.expanded[key], doc = subDocs[`${sessionId}/${a.id}`];
       if (open) fetchSub(sessionId, a);
-      const about = [a.type, a.model && modelName(a.model), a.effort, plural(a.tools, 'tool call'), a.background ? 'in the background' : ''].filter(Boolean).map(esc).join(' · ');
+      const parent = a.parentId && list.find(x => x.id === a.parentId);
+      const about = [a.type, a.model && modelName(a.model), a.effort, a.tools || a.startedAt ? plural(a.tools || 0, 'tool call') : '', a.background ? 'in the background' : '', a.costUsd ? `≈${money(a.costUsd)}` : '',
+        parent ? `started by ${clip(parent.description || parent.type || 'another subagent', 40)}` : ''].filter(Boolean).map(esc).join(' · ');
+      const live = subRunning(a) && !closed;
       const said = !open ? '' : !doc ? '<div class="subdoc"><div class="none">Fetching what it was asked and reported…</div></div>'
         : doc.missing ? '<div class="subdoc"><div class="none">Claude Code no longer has this subagent\'s record.</div></div>'
         : doc.failed ? '<div class="subdoc"><div class="none">Could not reach the Slorp service for what it was asked and reported.</div></div>'
@@ -1559,10 +1578,10 @@ function subsBody(sessionId, list, closed, used) {
           <div class="label" style="margin-bottom:6px">${doc.handed ? 'What it reported' : a.done || closed ? 'The last thing it said' : 'The last thing it has said'}</div>
           ${doc.report ? md(doc.report) : '<div class="none">Nothing yet.</div>'}</div>`;
       return `<button class="lane ${open ? 'open' : ''}" data-act="expand" data-id="${key}" style="${a.depth > 1 ? `padding-left:${(a.depth - 1) * 16}px` : ''}" aria-expanded="${!!open}">
-          <span class="what"><span class="t">${esc(a.description || a.type || a.id)}</span><span class="m">${about}</span></span>
+          <span class="what"><span class="t">${esc(a.description || a.type || a.id)}</span>${live && a.doing ? `<span class="doing" title="What it says it is doing">${esc(a.doing)}</span>` : ''}<span class="m">${about}</span></span>
           <span class="track" title="${esc(`${new Date(from).toLocaleTimeString()} to ${subRunning(a) && !closed ? 'now' : new Date(to).toLocaleTimeString()}`)}"><i class="${dot}" style="left:${(100 * (from - run.from) / width).toFixed(2)}%;width:${(100 * (to - from) / width).toFixed(2)}%"></i></span>
-          <span class="num"><span>${lasted(to - from)}</span><span>${tokens(newTokens(a.used))}</span></span>
-          <span class="stand">${stat(dot, word)}</span>
+          <span class="num"><span>${lasted(to - from)}</span><span>${tokens(newTokens(a.used) || (a.samples || []).at(-1) || 0)}</span></span>
+          <span class="stand">${stat(dot, word)}${live ? sparkline(a.samples) : ''}</span>
         </button>${said}`;
     }).join('');
     return `<div class="run"><div class="rhead"><span>${began.toDateString() === today ? '' : `${began.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}, `}${began.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
@@ -1716,7 +1735,17 @@ function questionBox(qs, p) {
       ${q.multiSelect ? '<div class="none" style="margin-top:6px">More than one may be chosen.</div>' : ''}</div>`).join('');
 }
 
+/* Which of a session's subagents put a prompt to the user, when one did. */
+function askedBy(s) {
+  if (!s.pending.agentId) return '';
+  const a = (s.subagents || []).find(x => x.id === s.pending.agentId);
+  return `<div class="none" style="margin-bottom:8px">Asked by its subagent${a ? `, ${esc(a.description || a.type)}` : ''}.</div>`;
+}
+
 function pendingBox(s) {
+  return askedBy(s) + promptBox(s);
+}
+function promptBox(s) {
   const p = s.pending, qs = askedQuestions(p);
   const inTerminal = `<div class="none" style="margin-top:10px">Answer in the session's terminal. Slorp cannot pick an option for you.</div>`;
   if (qs && p.answerable) {

@@ -1217,3 +1217,45 @@ func TestASessionsSubagentsCanBeRead(t *testing.T) {
 		t.Errorf("listed = %+v, want it without its subagents", listed)
 	}
 }
+
+func TestABridgeReportsItsSubagents(t *testing.T) {
+	f := newFixture(t)
+	f.connect("s1")
+	subagents := func() []hub.Subagent { return f.state().Sessions[0].Subagents }
+	long := strings.Repeat("é", doingLimit+50)
+	samples := strings.TrimSuffix(strings.Repeat("7,", samplesKept+4), ",")
+	f.post("/api/bridge/poll", `{"sessionId":"s1","agents":[
+		{"id":"a1","type":"Explore","description":"Find the callers","status":"running","doing":"  `+long+`  ","parentId":"a0","model":"claude-haiku-5-5","startTime":1700000000000,"tokenSamples":[1,2,`+samples+`],"costUsd":0.25},
+		{"id":"","status":"running"}]}`)
+	got := subagents()
+	if len(got) != 1 {
+		t.Fatalf("subagents = %+v, want the one that has an id", got)
+	}
+	a := got[0]
+	if a.ID != "a1" || a.Type != "Explore" || a.Description != "Find the callers" || a.Status != "running" || a.ParentID != "a0" || a.Model != "claude-haiku-5-5" || a.CostUSD != 0.25 || a.StartedAt.UnixMilli() != 1700000000000 {
+		t.Errorf("subagent = %+v, want what the bridge said of it", a)
+	}
+	if len([]rune(a.Doing)) != doingLimit || !strings.HasPrefix(a.Doing, "é") || len(a.Samples) != samplesKept || a.Samples[0] != 7 {
+		t.Errorf("kept %d runes of what it is doing and %d readings from %d; want %d and the latest %d", len([]rune(a.Doing)), len(a.Samples), a.Samples[0], doingLimit, samplesKept)
+	}
+
+	f.post("/api/bridge/poll", `{"sessionId":"s1"}`)
+	if got := subagents(); len(got) != 1 {
+		t.Errorf("subagents = %+v after a bridge that says nothing of them, want them kept", got)
+	}
+	f.post("/api/bridge/poll", `{"sessionId":"s1","agents":[]}`)
+	if got := subagents(); len(got) != 0 {
+		t.Errorf("subagents = %+v after a bridge that says it has none, want none", got)
+	}
+
+	many := strings.TrimSuffix(strings.Repeat(`{"id":"x","status":"running"},`, subagentsHeard+5), ",")
+	f.post("/api/bridge/poll", `{"sessionId":"s1","agents":[`+many+`]}`)
+	if got := subagents(); len(got) != subagentsHeard {
+		t.Errorf("%d subagents kept, want no more than %d from one bridge", len(got), subagentsHeard)
+	}
+
+	f.post("/api/bridge/permission", `{"sessionId":"s1","tool":"Bash","summary":"rm -rf build","input":"rm -rf build","canAnswer":true,"agentId":"a1"}`)
+	if p := f.state().Sessions[0].Pending; p == nil || p.AgentID != "a1" {
+		t.Errorf("pending = %+v, want it to name the subagent that asked", p)
+	}
+}

@@ -112,6 +112,8 @@ type Session struct {
 	Subagents []Subagent `json:"subagents,omitempty"`
 
 	bridgeSeen time.Time
+	// live is how the session's bridge last said its subagents stand.
+	live       []Subagent
 	key        string
 	keySince   time.Time
 	insightKey string
@@ -351,7 +353,58 @@ type Subagent struct {
 	// Tools counts the tool calls it has made.
 	Tools int    `json:"tools"`
 	Used  Tokens `json:"used"`
+
+	// The rest is what the session's bridge says of it, and is there only
+	// while the bridge is heard from. Status is how its loop stands, in its
+	// agent's own word: "running", "waiting", "idle", "completed", "failed",
+	// "killed" or "pending".
+	Status string `json:"status,omitempty"`
+	// Doing is its own latest account of what it is doing.
+	Doing string `json:"doing,omitempty"`
+	// Samples are its latest token readings, oldest first and a few seconds
+	// apart: at each, the size of its last request and all it has written.
+	Samples []int `json:"samples,omitempty"`
+	// CostUSD is its agent's estimate of what it has cost, zero for none.
+	CostUSD float64 `json:"costUsd,omitempty"`
+	// ParentID is the subagent that started it, empty when its session did.
+	ParentID string `json:"parentId,omitempty"`
 }
+
+// ended reports whether a status a bridge gave says the subagent's work is
+// over, however it went.
+func ended(status string) bool {
+	return status == "completed" || status == "failed" || status == "killed"
+}
+
+// withLive returns the subagents read from a session's record with what its
+// bridge says of each, and after them those only the bridge knows of yet.
+func withLive(known, live []Subagent) []Subagent {
+	if len(live) == 0 {
+		return known
+	}
+	out := slices.Clone(known)
+	at := map[string]int{}
+	for i, a := range out {
+		at[a.ID] = i
+	}
+	for _, l := range live {
+		i, ok := at[l.ID]
+		if !ok {
+			l.Done = ended(l.Status)
+			out = append(out, l)
+			continue
+		}
+		a := &out[i]
+		a.Status, a.Doing, a.Samples, a.CostUSD, a.ParentID = l.Status, l.Doing, l.Samples, l.CostUSD, l.ParentID
+		a.Type, a.Description, a.Model = cmp.Or(a.Type, l.Type), cmp.Or(a.Description, l.Description), cmp.Or(a.Model, l.Model)
+		a.Done = a.Done || ended(l.Status)
+	}
+	return out
+}
+
+// Delegated records how a session's bridge says its subagents stand, in
+// place of what it said before.
+func (s *Session) Delegated(live []Subagent) { s.live = live }
 
 // SubagentReport is what a subagent was asked and what came of it.
 type SubagentReport struct {
@@ -411,8 +464,10 @@ type Pending struct {
 	Input string `json:"input"`
 	// Answerable is true while Slorp may answer the request as well as the
 	// session's own terminal, whose dialog is asking at the same time.
-	Answerable bool      `json:"answerable"`
-	At         time.Time `json:"at"`
+	Answerable bool `json:"answerable"`
+	// AgentID is the subagent that asks, empty when the session itself does.
+	AgentID string    `json:"agentId,omitempty"`
+	At      time.Time `json:"at"`
 
 	// questions is what a question asks, read from its input.
 	questions []asked
@@ -690,7 +745,7 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 		s := live[i]
 		seen[s.ID] = true
 		if old, ok := h.sessions[s.ID]; ok {
-			s.bridgeSeen = old.bridgeSeen
+			s.bridgeSeen, s.live = old.bridgeSeen, old.live
 			s.key, s.keySince, s.insightKey, s.Insight = old.key, old.keySince, old.insightKey, old.Insight
 			s.guess, s.guessKey, s.insightAt = old.guess, old.guessKey, old.insightAt
 			s.roleGuess, s.roleKey = old.roleGuess, old.roleKey
@@ -1584,6 +1639,9 @@ func (h *Hub) snapshot() []Session {
 	for _, s := range h.sessions {
 		c := *s
 		c.CanReply = time.Since(s.bridgeSeen) < bridgeTTL
+		if c.CanReply {
+			c.Subagents = withLive(s.Subagents, s.live)
+		}
 		c.Label, c.LabelVia = s.label()
 		c.Pull = h.pullOn(s, pulls)
 		c.Backfilling = len(h.backfill[s.ID])

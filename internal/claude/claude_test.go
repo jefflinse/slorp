@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -662,7 +663,7 @@ func TestPollListsASessionsSubagents(t *testing.T) {
 		t.Errorf("session used %+v, want the subagent's later tokens in place of its earlier", s.Used)
 	}
 
-	if got := a.Subagents("aaa"); len(got) != 2 || got[0] != early {
+	if got := a.Subagents("aaa"); len(got) != 2 || !reflect.DeepEqual(got[0], early) {
 		t.Errorf("read afresh = %+v, want what the roster has", got)
 	}
 	if got := a.Subagents("zzz"); got != nil {

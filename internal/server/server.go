@@ -35,7 +35,21 @@ const (
 	// startLimit is how long the first prompt of a session started here may
 	// be, in bytes. It travels as a command-line argument.
 	startLimit = 200_000
+	// subagentsHeard is how many subagents one bridge may report, doingLimit
+	// how much of what each says it is doing is kept, in runes, and
+	// samplesKept how many of its token readings.
+	subagentsHeard = 200
+	doingLimit     = 300
+	samplesKept    = 16
 )
+
+// first returns the first n runes of s.
+func first(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+	return s
+}
 
 // agentOf returns the agent a bridge names, Claude Code's when it names
 // none, and refuses one Slorp does not know.
@@ -562,6 +576,20 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 				ResetsAt    string  `json:"resetsAt"`
 			} `json:"rateLimits"`
 			MeasuredAt int64 `json:"measuredAt"`
+			// Agents are the session's subagents as its agent has them now;
+			// absent from a bridge that does not say.
+			Agents *[]struct {
+				ID           string  `json:"id"`
+				Type         string  `json:"type"`
+				Description  string  `json:"description"`
+				Status       string  `json:"status"`
+				Doing        string  `json:"doing"`
+				ParentID     string  `json:"parentId"`
+				Model        string  `json:"model"`
+				StartTime    int64   `json:"startTime"`
+				TokenSamples []int   `json:"tokenSamples"`
+				CostUSD      float64 `json:"costUsd"`
+			} `json:"agents"`
 		}
 		if !readJSON(w, r, &in) || in.SessionID == "" {
 			return
@@ -570,7 +598,24 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		if !ok {
 			return
 		}
+		var live []hub.Subagent
+		if in.Agents != nil {
+			for _, a := range (*in.Agents)[:min(len(*in.Agents), subagentsHeard)] {
+				if a.ID == "" {
+					continue
+				}
+				sub := hub.Subagent{ID: a.ID, Type: a.Type, Description: a.Description, Status: a.Status, Doing: first(strings.TrimSpace(a.Doing), doingLimit),
+					ParentID: a.ParentID, Model: a.Model, CostUSD: a.CostUSD, Samples: a.TokenSamples[max(0, len(a.TokenSamples)-samplesKept):]}
+				if a.StartTime > 0 {
+					sub.StartedAt = time.UnixMilli(a.StartTime)
+				}
+				live = append(live, sub)
+			}
+		}
 		fresh := h.Apply(agent, in.SessionID, func(s *hub.Session) {
+			if in.Agents != nil {
+				s.Delegated(live)
+			}
 			if in.ContextWindow > 0 {
 				s.ContextWindow = in.ContextWindow
 			}
@@ -652,6 +697,8 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			Input     string `json:"input"`
 			CanAnswer bool   `json:"canAnswer"`
 			Question  bool   `json:"question"`
+			// AgentID is the subagent that asks, when one does.
+			AgentID string `json:"agentId"`
 		}
 		if !readJSON(w, r, &in) || in.SessionID == "" {
 			return
@@ -660,7 +707,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		if !ok {
 			return
 		}
-		p := h.Ask(agent, in.SessionID, hub.Pending{Tool: in.Tool, Summary: in.Summary, Input: in.Input, Question: in.Question}, in.CanAnswer)
+		p := h.Ask(agent, in.SessionID, hub.Pending{Tool: in.Tool, Summary: in.Summary, Input: in.Input, Question: in.Question, AgentID: in.AgentID}, in.CanAnswer)
 		writeJSON(w, http.StatusOK, map[string]any{"id": p.ID, "answerable": p.Answerable})
 	})
 

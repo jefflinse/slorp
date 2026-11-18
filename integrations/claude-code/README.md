@@ -4,7 +4,8 @@ A Claude Code plugin that connects each session to the local [Slorp](../../) ser
 
 - Reports each turn as it starts and ends, so Slorp can show what the session is doing and what it last said.
 - Delivers replies written in Slorp to the session as your own prompts.
-- Offers each permission prompt to Slorp as well as the terminal. Whichever you answer first decides it. Slorp can allow or deny a single call; questions and plan approvals are shown in Slorp but answered in the terminal.
+- Reports how the session's subagents stand: which are running, waiting or have failed, what each says it is doing, and its latest token readings and cost.
+- Offers each permission prompt, a subagent's included, to Slorp as well as the terminal. Whichever you answer first decides it. Slorp can allow or deny a single call; questions and plan approvals are shown in Slorp but answered in the terminal.
 
 Slorp finds the sessions themselves with `claude agents --json`, so a session without the plugin is still listed. It just cannot be replied to or answered from Slorp.
 
