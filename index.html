@@ -689,7 +689,7 @@ const KB_SECTIONS = {
 /* ───────────────────────── State ───────────────────────── */
 
 const KEY = 'slorp.proto.v1';
-const VIEWS = ['attention', 'efforts', 'activity', 'pulls', 'knowledge', 'settings'];
+const VIEWS = ['attention', 'efforts', 'sessions', 'pulls', 'knowledge', 'settings'];
 /* The views the top bar names; Settings is reached by its own button. */
 const NAV = VIEWS.slice(0, 5);
 const VIEW_NAMES = { pulls: 'PRs' };
@@ -698,6 +698,9 @@ const fresh = () => ({ view: 'attention', sel: null, effortSel: 'snap', kbSel: '
   actSel: null, expanded: {}, kb: structuredClone(KB_SEED), seq: 100 });
 let state = fresh();
 try { Object.assign(state, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch (e) { /* storage unavailable: run in memory */ }
+/* The view a name leads to, whether it is one or what one used to be called. */
+const viewNamed = v => VIEWS.includes(v) ? v : { activity: 'sessions' }[v];
+state.view = viewNamed(state.view) || 'attention';
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* ignore */ } };
 let freshId = null;
 /* Which overlay is open, if any, and how many days back the wrap-up in it looks. */
@@ -850,7 +853,7 @@ function rowHtml(it, act = 'select') {
 function handledFooter() {
   const done = allItems().filter(i => !isActive(i));
   const legend = modelless()
-    ? `<p>${NO_MODEL}, so only permission prompts, questions a session puts to you, failures and full contexts are raised here. A session that has simply stopped is under Activity.</p>`
+    ? `<p>${NO_MODEL}, so only permission prompts, questions a session puts to you, failures and full contexts are raised here. A session that has simply stopped is under Sessions.</p>`
     : `<p>${spark}marks text written by the local model. <span class="mono">Mono</span> is verbatim from the source.</p>`;
   if (!done.length) return `<div class="foot">${legend}</div>`;
   const list = state.showHandled ? `<div class="handled">${done.map(i => `<div><span class="gen">${esc(i.title)}</span><span style="white-space:nowrap">${esc(state.handled[i.id].how)} · <button class="link" data-act="restore" data-id="${i.id}">restore</button></span></div>`).join('')}</div>` : '';
@@ -1028,7 +1031,7 @@ function openHit(x) {
   else {
     state.actSel = x.sessionId;
     delete state.collapsed[x.closed ? 'act:closed' : 'act:active'];
-    go('activity');
+    go('sessions');
   }
   save(); render();
   $('.row.sel')?.scrollIntoView({ block: 'center' });
@@ -1221,10 +1224,10 @@ function viewEfforts() {
   </div>`;
 }
 
-/* ───────────────────────── Activity ───────────────────────── */
+/* ───────────────────────── Sessions ───────────────────────── */
 
-/* The Activity list: the sessions in two parts that fold, each a run of rows, beside the page of the one selected. */
-function activityView(parts, detail, side = '') {
+/* The Sessions list: the sessions in two parts that fold, each a run of rows, beside the page of the one selected. */
+function sessionsView(parts, detail, side = '') {
   const rows = ['long', 'short'].map(as => `<button class="${(state.rows || 'long') === as ? 'on' : ''}" data-act="rows" data-as="${as}">${cap(as)}</button>`).join('');
   const list = parts.map(([key, name, n, line, html]) => {
     const shut = state.collapsed['act:' + key];
@@ -1240,13 +1243,13 @@ function activityView(parts, detail, side = '') {
     ${side}
   </div>`;
 }
-/* The ids of the sessions the Activity list shows, top to bottom, given those of its two parts. */
+/* The ids of the sessions the Sessions list shows, top to bottom, given those of its two parts. */
 const actShown = (active, closed) => (state.collapsed['act:active'] ? [] : active).concat(state.collapsed['act:closed'] ? [] : closed);
 const stat = (dot, word) => `<span class="stat"><span class="dot ${dot}"></span>${word}</span>`;
 
-function viewActivity() {
-  if (live) return viewActivityLive();
-  const [active, closed] = mockActivity();
+function viewSessions() {
+  if (live) return viewSessionsLive();
+  const [active, closed] = mockSessions();
   const all = active.concat(closed);
   if (!all.some(s => s.id === state.actSel)) state.actSel = actShown(active, closed).map(s => s.id)[0] || null;
   const row = s => `<button class="row ${s.id === state.actSel ? 'sel' : ''}" data-act="actSel" data-id="${s.id}" style="${kindColor(s.kind)}">
@@ -1263,20 +1266,20 @@ function viewActivity() {
     ${it ? `<div class="need"><div class="label">${spark}What's needed from you</div><p class="ask">${esc(it.ask)}</p><div class="replies"><button class="btn go" data-act="openItem" data-id="${it.id}">Answer it under Attention ›</button></div></div>` : ''}
     <div class="sec"><div class="label"><span>Its last output, verbatim</span></div>${rawBlock(s.tail.map(t => ['last output', t]))}</div>
   </div>`;
-  return activityView([
+  return sessionsView([
     ['active', 'Active', active.length, `${spark}${cap(num(count('waiting')))} awaiting you, ${num(count('error'))} failed overnight, and the rest are getting on with it.`, active.map(row).join('')],
     ['closed', 'Closed', closed.length, '', closed.map(row).join('')],
   ], detail);
 }
-/* The demo's sessions as Activity lists them: those still going, the latest to do anything first, and those finished. */
-function mockActivity() {
+/* The demo's sessions as Sessions lists them: those still going, the latest to do anything first, and those finished. */
+function mockSessions() {
   const recent = (a, b) => a.last - b.last;
   return [SESSIONS.filter(s => s.status !== 'done').sort(recent), SESSIONS.filter(s => s.status === 'done').sort(recent)];
 }
 
 /* ───────────────────────── Live sessions ─────────────────────────
    Present only when the page is served by the slorp service. `live` is the
-   service's session list; everything outside Activity is still mock data. */
+   service's session list; everything outside Sessions is still mock data. */
 
 let live = null, liveItems = [], liveEfforts = [], summarizer = {}, settings = {}, isOffline = false;
 let knowledge = { watch: [], questions: [], context: [], routing: [], roles: [] }, integrations = [], lookups = [], feeds = {}, pulls = [], limits = [], wrapups = {}, archive = [], plugins = {}, archiveDocs = {};
@@ -1405,7 +1408,7 @@ function sessionMenu(s, it) {
     .concat(s.role || s.roleVia !== 'you' ? [['__none', 'No role']] : [], [['__new', 'New role…']]);
   const rows = `${menuPart('move', 'Move to', menuTo('liveMoveTo', s.id, effortsBut(s.effort || 'unsorted')))}
     ${menuPart('role', s.role && s.roleVia === 'you' ? 'Change role' : 'Role', menuTo('liveRoleTo', s.id, roles))}
-    ${s.job ? `<button data-act="stop" data-id="${s.id}" title="Stops this background session. Its conversation is kept, and it can be reopened from the closed sessions under Activity.">Stop session</button>` : ''}`;
+    ${s.job ? `<button data-act="stop" data-id="${s.id}" title="Stops this background session. Its conversation is kept, and it can be reopened from the closed sessions under Sessions.">Stop session</button>` : ''}`;
   return it ? itemMenu(it, `${s.pending ? '' : `<button data-act="livePark" data-id="${it.id}">Park as open question</button>`}${rows}`)
     : actsMenu(s.id, 'Move, give a role and more', rows);
 }
@@ -1602,21 +1605,23 @@ function aboutSession(s) {
     ['Last active', `<span title="${esc(new Date(s.activeAt).toLocaleString())}">${ago(minsSince(s.activeAt))}</span>`],
     s.model && ['Model', runsOn(s)],
     s.contextTokens && ['Context', contextUse(s)],
-    fresh + out > 0 && ['Used', `${tokens(fresh)} tokens sent for the first time and ${tokens(out)} written by the model${read ? `, with another ${tokens(read)} read back from the cache` : ''}${s.costUsd ? `. Its agent puts that at about ${money(s.costUsd)} at list prices` : ''}.${theirs ? ` Of the new tokens, ${tokens(theirs)} went to its ${subs.length === 1 ? 'subagent' : `${num(subs.length)} subagents`}.` : ''}`],
+    fresh + out > 0 && ['Used', `<span title="Tokens sent for the first time, tokens the model wrote, and tokens read back from the cache.">${tokens(fresh)} new, ${tokens(out)} written${read ? `, ${tokens(read)} cached` : ''}</span>`],
+    s.costUsd && ['Cost', `<span title="What its agent puts its use at, at list prices.">about ${money(s.costUsd)}</span>`],
+    theirs && ['Subagents', `${num(subs.length)}, using ${tokens(theirs)} of the new tokens`],
     ['Filed under', `${esc(effortById(s.effort || 'unsorted').name)}${s.effort && VIA[s.effortVia] ? `, ${VIA[s.effortVia]}` : ''}`],
     s.role && roleById(s.role) && ['Role', `${esc(roleById(s.role).name)}, ${s.roleVia === 'guess' ? 'guessed by the model' : 'given by you'}`],
     ['Session', `<span class="mono">${esc(s.id)}</span> <button class="link" data-act="copyText" data-text="${esc(s.id)}">copy</button>`],
   ].filter(Boolean);
   const sent = (s.replies || []).map(r => `<div><b>${esc(r.state)}</b> · ${esc(r.text)}</div>`).join('');
-  return `<dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
+  return `<div class="label tlhead"><span>Details</span></div><dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
     ${sent ? `<div class="label" style="margin-top:22px">Sent from here</div><div class="livebox"><div class="sent">${sent}</div></div>` : ''}`;
 }
 
-/* The tabs under a session: what the agent last said, rendered or as it was
-   written, what else is going on in the same effort, and its particulars. */
+/* The tabs under a session: the latest of its conversation, rendered or as it
+   was written, its subagents, and what else is going on in the same effort. */
 function detailTabs(s) {
   const effort = s.effort || 'unsorted', others = alsoRows(effort, s.id), subs = s.subagents || [];
-  const on = ['also', 'about'].concat(subs.length ? 'subs' : []).includes(state.detailTab) ? state.detailTab : 'source';
+  const on = ['also'].concat(subs.length ? 'subs' : []).includes(state.detailTab) ? state.detailTab : 'source';
   const tab = (key, name) => `<button class="label ${on === key ? 'on' : ''}" data-act="detailTab" data-t="${key}">${name}</button>`;
   const shown = state.sourceRaw ? `<div class="rawblock"><div class="tx">${esc(s.lastReply)}</div></div>` : md(s.lastReply);
   const open = state.expanded['said:' + s.id];
@@ -1624,10 +1629,10 @@ function detailTabs(s) {
       <button class="link" data-act="expand" data-id="said:${s.id}" hidden>${open ? 'Show less' : 'Show all of it'}</button></div>` : ''}
     ${s.lastReply ? shown : '<div class="none">No response found for this session.</div>'}
     <div class="none mono" style="margin-top:12px">${esc(rawOf(s))}</div>`;
-  return `<div class="tabs" role="tablist">${tab('source', 'Most Recent Agent Response')}${subs.length ? tab('subs', `Subagents<span class="n">${subs.length}</span>`) : ''}${tab('also', `Also In ${esc(effortById(effort).name)}<span class="n">${others.count}</span>`)}${tab('about', 'Details')}
+  return `<div class="tabs" role="tablist">${tab('source', 'Conversation')}${subs.length ? tab('subs', `Subagents<span class="n">${subs.length}</span>`) : ''}${tab('also', `Also In ${esc(effortById(effort).name)}<span class="n">${others.count}</span>`)}
       ${on !== 'source' ? '' : `<span class="tools">${s.lastReply ? `<button class="btn" data-act="copyReply" data-id="${s.id}" title="Copy the response as it was written">Copy</button>` : ''}
         <span class="seg" role="group" aria-label="How the response is shown"><button class="${state.sourceRaw ? '' : 'on'}" data-act="sourceRaw" data-on="0">Rendered</button><button class="${state.sourceRaw ? 'on' : ''}" data-act="sourceRaw" data-on="1">Raw</button></span></span>`}</div>
-    <div class="tabbody">${on === 'also' ? others.html : on === 'about' ? aboutSession(s) : on === 'subs' ? subsBody(s.id, subs, false, s.used) : source()}</div>`;
+    <div class="tabbody">${on === 'also' ? others.html : on === 'subs' ? subsBody(s.id, subs, false, s.used) : source()}</div>`;
 }
 
 /* The local model's account of a session: beside its page where there is room, within it where there is not.
@@ -1685,15 +1690,16 @@ function sessionPage(s, it, stands) {
     <div class="need ${needs ? '' : 'bare'}">${needs}${answerBox(s, it)}</div>
     <div class="sec going"><div class="label"><span>${summary ? spark : ''}What's going on</span></div>${goingOn(s, summary, !it && s.status === 'working')}</div>
     ${detailTabs(s)}
+    <div class="going">${aboutSession(s)}${timeline(s, true)}</div>
   </div>`;
 }
 
-/* The pane beside a session's page: the model's account of it and its timeline, or the rail that brings them back. */
+/* The pane beside a session's page: the model's account of it, its particulars and its timeline, or the rail that brings them back. */
 function sessionSide(s, summary, stale, key) {
   const label = `<span class="label">${summary ? spark : ''}What's going on</span>`;
   return state.sideShut
     ? `<aside class="pane side"><button class="rail" data-act="side" title="Show what's going on" aria-expanded="false"><span>‹</span>${label}</button></aside>`
-    : `<aside class="pane side" data-scroll="${key}"><div class="head">${label}<button data-act="side" title="Hide this panel" aria-expanded="true">›</button></div>${goingOn(s, summary, stale)}${timeline(s, true)}</aside>`;
+    : `<aside class="pane side" data-scroll="${key}"><div class="head">${label}<button data-act="side" title="Hide this panel" aria-expanded="true">›</button></div>${goingOn(s, summary, stale)}${aboutSession(s)}${timeline(s, true)}</aside>`;
 }
 
 function liveItemDetail(it) {
@@ -1769,9 +1775,9 @@ function promptBox(s) {
 const doingNow = s => s.pending ? (s.pending.question ? `Asks: ${s.pending.summary}` : `Wants to run ${s.pending.tool}: ${s.pending.summary}`)
   : s.status !== 'working' && s.insight?.title ? s.insight.title : s.lastPrompt ? `You last said: ${s.lastPrompt}` : '';
 
-/* The sessions as Activity lists them: the open ones, the latest to do anything first, and the closed, the latest to close first.
+/* The sessions as Sessions lists them: the open ones, the latest to do anything first, and the closed, the latest to close first.
    Open sessions whose ages read the same keep one order between them, so two that are both working do not trade places. */
-function liveActivity() {
+function liveSessions() {
   const age = s => Math.floor(minsSince(s.activeAt));
   return [live.slice().sort((a, b) => age(a) - age(b) || new Date(b.startedAt) - new Date(a.startedAt) || a.id.localeCompare(b.id)), archive];
 }
@@ -1817,8 +1823,8 @@ function closedPage(a) {
   </div>`;
 }
 
-function viewActivityLive() {
-  const [open, closed] = liveActivity();
+function viewSessionsLive() {
+  const [open, closed] = liveSessions();
   const find = id => open.find(s => s.id === id) || closed.find(a => a.id === id);
   if (!find(state.actSel)) state.actSel = actShown(open, closed).map(x => x.id)[0] || null;
   const sel = find(state.actSel), isOpen = sel && open.includes(sel), it = isOpen && itemOf(sel);
@@ -1831,7 +1837,7 @@ function viewActivityLive() {
     detail = sessionPage(sel, it, `${stat(dot, sel.waitingFor ? `${word}, ${esc(sel.waitingFor)}` : word)}<span>active ${ago(minsSince(sel.activeAt))}</span>`);
     side = sessionSide(sel, it ? it.summary : sel.insight?.summary, stale, 'act-side');
   } else if (sel) detail = closedPage(sel);
-  return activityView([
+  return sessionsView([
     ['active', 'Active', open.length, line, open.map(sessionRowLive).join('')],
     ['closed', 'Closed', closed.length, closed.length ? 'Each as it stood when it closed.' : 'Sessions are kept here once they close.', closed.map(closedRow).join('')],
   ], detail, side);
@@ -1917,7 +1923,7 @@ const KB_LIVE_LEDE = {
   questions: 'Things you have not decided yet. They show under their effort, and the model reads them when it writes that effort\'s status.',
   context: 'Facts the model should always know. It reads them before describing any session, so changing one re-describes everything.',
   routing: 'Plain-language notes on how to file things, read by the model when it guesses an effort. Directories that file automatically are listed under each effort.',
-  roles: 'The kinds of session you tell apart, such as one that reviews pull requests on a loop. Give a session a role from the menu beside its name under Attention or Activity. The local model guesses a role for the rest from what each role is about; a guess only labels a session, and never keeps it from asking for you.',
+  roles: 'The kinds of session you tell apart, such as one that reviews pull requests on a loop. Give a session a role from the menu beside its name under Attention or Sessions. The local model guesses a role for the rest from what each role is about; a guess only labels a session, and never keeps it from asking for you.',
 };
 /* Says which parts of the knowledge base nothing reads without a local model. */
 const KB_UNREAD = {
@@ -2100,7 +2106,7 @@ function modelBody() {
     </form>`;
 }
 
-const KEYS = [['1 – 5', 'Attention, Efforts, Activity, PRs, Knowledge'], [',', 'Settings'], ['j  k', 'Next and previous in the Attention and Activity lists'], ['e', 'Dismiss the selected item'], ['s', 'Snooze the selected item for an hour'],
+const KEYS = [['1 – 5', 'Attention, Efforts, Sessions, PRs, Knowledge'], [',', 'Settings'], ['j  k', 'Next and previous in the Attention and Sessions lists'], ['e', 'Dismiss the selected item'], ['s', 'Snooze the selected item for an hour'],
   ['r', 'Fluent or raw'], ['/  ⌘K', 'Search sessions'], ['w', 'Wrap up the day'], ['⌘↵', 'Send what is in a message box'], ['Esc', 'Close a menu, the search, or a rename']];
 
 const SETTINGS_LEDE = {
@@ -2134,7 +2140,7 @@ function viewSettings() {
 
 /* ───────────────────────── Shell ───────────────────────── */
 
-const RENDER = { attention: viewAttention, efforts: viewEfforts, activity: viewActivity, pulls: viewPulls, knowledge: viewKnowledge, settings: viewSettings };
+const RENDER = { attention: viewAttention, efforts: viewEfforts, sessions: viewSessions, pulls: viewPulls, knowledge: viewKnowledge, settings: viewSettings };
 
 function render() {
   const scrolls = {};
@@ -2359,7 +2365,7 @@ const actions = {
   startCancel: () => { starting = null; },
   stop: d => {
     const s = live.find(x => x.id === d.id);
-    toast(`Stop "${clip(s ? s.label : d.id, 50)}"? Its conversation is kept.`, () => { ask(`/api/sessions/${d.id}/stop`, {}, () => toast('Stopped. Reopen it from the closed sessions under Activity.')); }, 'Stop');
+    toast(`Stop "${clip(s ? s.label : d.id, 50)}"? Its conversation is kept.`, () => { ask(`/api/sessions/${d.id}/stop`, {}, () => toast('Stopped. Reopen it from the closed sessions under Sessions.')); }, 'Stop');
     return false;
   },
   reopen: d => { ask(`/api/archive/${d.id}/resume`, {}, () => toast('Reopened in the background')); return false; },
@@ -2521,8 +2527,8 @@ document.addEventListener('keydown', e => {
     const order = visibleOrder(), i = order.indexOf(state.sel) + (e.key === 'j' ? 1 : -1);
     if (order[i]) state.sel = order[i];
   }
-  else if (state.view === 'activity' && (e.key === 'j' || e.key === 'k')) {
-    const order = actShown(...(live ? liveActivity() : mockActivity())).map(x => x.id), i = order.indexOf(state.actSel) + (e.key === 'j' ? 1 : -1);
+  else if (state.view === 'sessions' && (e.key === 'j' || e.key === 'k')) {
+    const order = actShown(...(live ? liveSessions() : mockSessions())).map(x => x.id), i = order.indexOf(state.actSel) + (e.key === 'j' ? 1 : -1);
     if (order[i]) state.actSel = order[i];
   }
   else if (att && state.sel && e.key === 'e') actions.dismiss({ id: state.sel });
@@ -2539,8 +2545,8 @@ window.addEventListener('popstate', () => {
   save(); render();
 });
 
-if (VIEWS.includes(location.hash.slice(1))) state.view = location.hash.slice(1);
-else history.replaceState(null, '', '#' + state.view);
+state.view = viewNamed(location.hash.slice(1)) || state.view;
+history.replaceState(null, '', '#' + state.view);
 render();
 connect();
 </script>
