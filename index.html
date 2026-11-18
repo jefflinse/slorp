@@ -88,6 +88,13 @@ h1, h2, h3, p { margin: 0; }
 .pane.side .head button:hover, .rail:hover { color: var(--accent); background: var(--sel); }
 .pane.side .prose { font-size: 14.5px; }
 .split.shut .pane.side { padding: 0; overflow: hidden; }
+.tlhead { margin: 28px 0 12px; padding-top: 18px; border-top: 1px solid var(--line); }
+.tl { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.tl li { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 8px; font-size: 13px; line-height: 1.45; }
+.tl .when { padding-top: 1px; color: var(--ink3); font-size: 12px; font-variant-numeric: tabular-nums; }
+.tl .line { color: var(--ink); }
+.tl .you { color: var(--ink3); overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.tl .line + .you { margin-top: 2px; }
 .rail { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; height: 100%; padding: 26px 0; color: var(--ink3); }
 .rail .label { writing-mode: vertical-rl; color: inherit; white-space: nowrap; }
 .page { padding: 28px 36px 60px; max-width: 1240px; margin: 0 auto; }
@@ -811,7 +818,7 @@ function viewAttention() {
   const sided = sel && sel.live && !sel.feed;
   const side = !sided ? '' : state.sideShut
     ? `<aside class="pane side"><button class="rail" data-act="side" title="Show what's going on" aria-expanded="false"><span>‹</span><span class="label">${sel.summary ? spark : ''}What's going on</span></button></aside>`
-    : `<aside class="pane side" data-scroll="att-side"><div class="head"><span class="label">${sel.summary ? spark : ''}What's going on</span><button data-act="side" title="Hide this panel" aria-expanded="true">›</button></div>${goingOn(sel)}</aside>`;
+    : `<aside class="pane side" data-scroll="att-side"><div class="head"><span class="label">${sel.summary ? spark : ''}What's going on</span><button data-act="side" title="Hide this panel" aria-expanded="true">›</button></div>${goingOn(sel)}${timeline(sel.session)}</aside>`;
   return `<div class="split ${sided ? 'sided' : ''} ${sided && state.sideShut ? 'shut' : ''}">
     <section class="pane list" data-scroll="att-list">
       ${briefing(all)}
@@ -1196,6 +1203,14 @@ function goingOn(it) {
   const looked = it.session.insight?.lookups || [];
   return `<p class="prose">${it.summary ? esc(it.summary) : `<span class="none">${summarizer.model ? 'Not summarized yet.' : 'No local model is available to summarize this.'}</span>`}</p>
     ${looked.length ? `<div class="none" style="margin-top:8px">${spark}Checked ${esc(listOf(looked))} to write this.</div>` : ''}`;
+}
+
+/* What the user said in a session, newest first, each with the model's line on how it came out. */
+function timeline(s) {
+  const moments = (s.timeline || []).slice().reverse();
+  if (!moments.length) return '';
+  return `<div class="label tlhead">Timeline</div><ol class="tl">${moments.map(m => `<li><span class="when" title="${esc(new Date(m.at).toLocaleString())}">${minsSince(m.at) < 1 ? 'now' : span(minsSince(m.at))}</span>
+    <div>${m.line ? `<div class="line">${spark}${esc(m.line)}</div>` : ''}<div class="you" title="${esc(m.prompt)}">${esc(m.prompt)}</div></div></li>`).join('')}</ol>`;
 }
 
 function liveItemDetail(it) {

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -839,6 +841,83 @@ func TestASessionGoesByALastingName(t *testing.T) {
 	check(h2, "after the user took the name back", "Its agent's later title", "")
 	roster(h2, "dir-9c", "")
 	check(h2, "after a restart, with no title from its agent", "First thing it did", ViaGuess)
+}
+
+func TestTimeline(t *testing.T) {
+	h, k, st := newHub(t)
+	t1 := time.Now().Add(-time.Hour)
+	said := func(h *Hub, prompt string, at time.Time) {
+		h.SetRoster(agent, []Session{{ID: "s", Agent: agent, Status: Idle, LastPrompt: prompt, PromptAt: at}})
+	}
+	line := func(h *Hub, title string) { h.SetInsight("s", h.sessions["s"].key, Insight{Title: title}) }
+	timeline := func(h *Hub) []Moment { return session(t, h, "s").Timeline }
+	want := func(h *Hub, when string, moments ...Moment) {
+		t.Helper()
+		got := timeline(h)
+		if !slices.Equal(got, moments) {
+			t.Fatalf("%s:\n got %+v\nwant %+v", when, got, moments)
+		}
+	}
+
+	h.SetRoster(agent, []Session{{ID: "s", Agent: agent, Status: Idle}})
+	want(h, "before anything was said")
+
+	said(h, "do the\n  first thing", t1)
+	said(h, "do the\n  first thing", t1)
+	first := Moment{At: t1, Prompt: "do the first thing"}
+	want(h, "a prompt reported twice", first)
+
+	before := h.State()
+	line(h, "Did the first thing")
+	line(h, "Did the first thing, then asked")
+	first.Line = "Did the first thing, then asked"
+	want(h, "described twice", first)
+	if got := before.Sessions[0].Timeline[0].Line; got != "" {
+		t.Errorf("a state handed out earlier was changed under its reader: line %q", got)
+	}
+
+	t3 := t1.Add(10 * time.Minute)
+	h.Apply(agent, "s", func(s *Session) { s.LastPrompt, s.PromptAt = "now the second", t3 })
+	second := Moment{At: t3, Prompt: "now the second"}
+	want(h, "a second prompt", first, second)
+	said(h, "do the first thing", t1)
+	want(h, "a roster still reporting the earlier prompt", first, second)
+	said(h, "now  the second", t3.Add(-time.Second))
+	want(h, "the same prompt from another witness", first, second)
+	said(h, "now the second", t3.Add(time.Second))
+	want(h, "the same prompt from a witness whose clock runs ahead", first, second)
+
+	said(h, "do the first thing", time.Time{})
+	want(h, "an earlier prompt reported again with no time", first, second)
+
+	h.SetInsight("s", "content the session has moved on from", Insight{Title: "Stale"})
+	want(h, "a description of older content", first, second)
+
+	said(h, strings.Repeat("é", momentLimit+50), time.Time{})
+	got := timeline(h)
+	if len(got) != 3 || got[2].Prompt != strings.Repeat("é", momentLimit) || time.Since(got[2].At) > time.Minute {
+		t.Fatalf("a long prompt with no time of its own: %+v; want it cut to %d runes and timed now", got, momentLimit)
+	}
+	third := got[2]
+
+	h2 := New(k, st)
+	said(h2, "", time.Time{})
+	if got := timeline(h2); len(got) != 3 || got[0].Prompt != first.Prompt || got[0].Line != first.Line || !got[0].At.Equal(t1) ||
+		got[2].Prompt != third.Prompt || !got[2].At.Equal(third.At) {
+		t.Fatalf("after a restart: %+v; want the same three moments", got)
+	}
+	said(h2, strings.Repeat("é", momentLimit+50), time.Time{})
+	if got := timeline(h2); len(got) != 3 {
+		t.Fatalf("the prompt it already had, reported again after a restart: %+v", got)
+	}
+
+	for i := range timelineLimit + 5 {
+		said(h2, "prompt "+strconv.Itoa(i), time.Now().Add(time.Duration(i+1)*time.Second))
+	}
+	got = timeline(h2)
+	if len(got) != timelineLimit || got[0].Prompt != "prompt 5" || got[timelineLimit-1].Prompt != "prompt "+strconv.Itoa(timelineLimit+4) {
+		t.Errorf("after many prompts: %d moments, from %q to %q; want the latest %d", len(got), got[0].Prompt, got[len(got)-1].Prompt, timelineLimit)
+	}
 }
 
 func TestSetRoster(t *testing.T) {

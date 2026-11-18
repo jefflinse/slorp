@@ -276,7 +276,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, uiPath s
 			case "turn.start":
 				s.Status, s.WaitingFor, s.Pending, s.ActiveAt = hub.Working, "", nil, now
 				if in.Text != "" {
-					s.LastPrompt = in.Text
+					s.LastPrompt, s.PromptAt = in.Text, now
 				}
 			case "turn.complete":
 				s.Status, s.WaitingFor, s.Pending, s.ActiveAt = hub.Idle, "", nil, now

@@ -87,7 +87,7 @@ func (a *Adapter) poll(ctx context.Context) error {
 		}
 		if t := a.tail(r.SessionID); t != nil {
 			t.read()
-			s.Title, s.Branch, s.LastPrompt, s.LastReply = t.title, t.branch, t.lastPrompt, t.lastReply
+			s.Title, s.Branch, s.LastPrompt, s.LastReply, s.PromptAt = t.title, t.branch, t.lastPrompt, t.lastReply, t.promptAt
 			s.Model, s.Reasoning, s.ContextTokens, s.Used = t.model, t.reasoning, t.contextTokens, t.used
 			if !t.modTime.IsZero() {
 				s.ActiveAt = t.modTime
@@ -134,7 +134,9 @@ type tail struct {
 	modTime time.Time
 
 	title, branch, lastPrompt, lastReply string
-	model, reasoning                     string
+	// promptAt is when lastPrompt was said, zero when the file does not say.
+	promptAt         time.Time
+	model, reasoning string
 	// contextTokens is zero from a compaction until the next response.
 	contextTokens int
 	// used totals every response in the file, subagents' included. counted
@@ -151,6 +153,7 @@ type entry struct {
 	IsSidechain bool   `json:"isSidechain"`
 	IsMeta      bool   `json:"isMeta"`
 	Subtype     string `json:"subtype"`
+	Timestamp   string `json:"timestamp"`
 	Effort      string `json:"effort"`
 	Message     struct {
 		Content json.RawMessage `json:"content"`
@@ -238,14 +241,15 @@ func (t *tail) apply(line []byte) {
 			t.title = e.AITitle
 		}
 	case "last-prompt":
-		if e.LastPrompt != "" {
-			t.lastPrompt = head(e.LastPrompt, promptLimit)
+		if said := head(e.LastPrompt, promptLimit); said != "" && said != t.lastPrompt {
+			t.lastPrompt, t.promptAt = said, time.Time{}
 		}
 	case "user":
 		// Typed prompts carry a plain string; tool results and attachments do not.
 		var text string
 		if !e.IsMeta && json.Unmarshal(e.Message.Content, &text) == nil && !strings.HasPrefix(strings.TrimSpace(text), "<") {
 			t.lastPrompt = head(text, promptLimit)
+			t.promptAt, _ = time.Parse(time.RFC3339, e.Timestamp)
 		}
 	case "assistant":
 		if text := assistantText(e.Message.Content); text != "" {

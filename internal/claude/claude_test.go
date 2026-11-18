@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jefflinse/slorp/internal/hub"
 	"github.com/jefflinse/slorp/internal/testdb"
@@ -155,6 +156,32 @@ func TestTailTotalsWhatWasUsed(t *testing.T) {
 	}
 	if tl.contextTokens != 321 {
 		t.Errorf("context = %d tokens; a subagent's response is not what the session was last answered over", tl.contextTokens)
+	}
+}
+
+func TestTailReadsWhenThePromptWasSaid(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	typed := user("build the thing")
+	typed["timestamp"] = "2026-11-17T10:00:00.250Z"
+	appendTo(t, path, line(t, typed)+line(t, map[string]any{"type": "last-prompt", "lastPrompt": "build the thing"}))
+	tl := &tail{path: path}
+	tl.read()
+	if want := time.Date(2026, 11, 17, 10, 0, 0, 250e6, time.UTC); !tl.promptAt.Equal(want) {
+		t.Fatalf("promptAt = %v, want %v from the prompt's own entry", tl.promptAt, want)
+	}
+
+	appendTo(t, path, line(t, map[string]any{"type": "last-prompt", "lastPrompt": "and a picture"}))
+	tl.read()
+	if tl.lastPrompt != "and a picture" || !tl.promptAt.IsZero() {
+		t.Errorf("prompt %q said at %v; a prompt with no entry of its own has no time", tl.lastPrompt, tl.promptAt)
+	}
+
+	untimed := user("no clock")
+	untimed["timestamp"] = "yesterday"
+	appendTo(t, path, line(t, typed)+line(t, untimed))
+	tl.read()
+	if tl.lastPrompt != "no clock" || !tl.promptAt.IsZero() {
+		t.Errorf("prompt %q said at %v; a time that cannot be read is no time", tl.lastPrompt, tl.promptAt)
 	}
 }
 

@@ -66,10 +66,15 @@ type Session struct {
 	ActiveAt   time.Time `json:"activeAt"`
 	LastPrompt string    `json:"lastPrompt"`
 	LastReply  string    `json:"lastReply"`
-	Pending    *Pending  `json:"pending,omitempty"`
-	CanReply   bool      `json:"canReply"`
-	Replies    []Reply   `json:"replies,omitempty"`
-	Insight    *Insight  `json:"insight,omitempty"`
+	// PromptAt is when the user said LastPrompt, zero when its agent did not say.
+	PromptAt time.Time `json:"-"`
+	// Timeline is what the user has said in the session since Slorp began
+	// watching it, oldest first.
+	Timeline []Moment `json:"timeline,omitempty"`
+	Pending  *Pending `json:"pending,omitempty"`
+	CanReply bool     `json:"canReply"`
+	Replies  []Reply  `json:"replies,omitempty"`
+	Insight  *Insight `json:"insight,omitempty"`
 	// Effort is the effort this session is filed under, empty when unsorted.
 	Effort    string `json:"effort"`
 	EffortVia string `json:"effortVia,omitempty"`
@@ -115,6 +120,25 @@ type Tokens struct {
 	// Out is what the model wrote.
 	Out int `json:"out"`
 }
+
+// Moment is one thing the user said in a session, and the model's line on
+// where the session stood once it had answered.
+type Moment struct {
+	At     time.Time `json:"at"`
+	Prompt string    `json:"prompt"`
+	// Line is empty when the model never described the exchange.
+	Line string `json:"line,omitempty"`
+}
+
+const (
+	// momentLimit is how much of what the user said a moment keeps, in runes.
+	momentLimit = 240
+	// timelineLimit is how many moments a session keeps.
+	timelineLimit = 40
+	// untimedLookback is how many of the latest moments a prompt with no
+	// time of its own is checked against before it counts as new.
+	untimedLookback = 3
+)
 
 // ViaGuess marks a filing the model chose, as opposed to the user or a rule.
 const ViaGuess = "guess"
@@ -360,6 +384,7 @@ type sessionDoc struct {
 	RoleKey    string    `json:"roleKey"`
 	Given      string    `json:"given"`
 	Pinned     string    `json:"pinned"`
+	Timeline   []Moment  `json:"timeline,omitempty"`
 }
 
 type ReplyState string
@@ -441,12 +466,12 @@ func (h *Hub) restore(s *Session) {
 	}
 	s.Insight, s.insightKey, s.guess, s.guessKey, s.insightAt = d.Insight, d.InsightKey, d.Guess, d.GuessKey, d.InsightAt
 	s.roleGuess, s.roleKey = d.RoleGuess, d.RoleKey
-	s.given, s.pinned = d.Given, d.Pinned
+	s.given, s.pinned, s.Timeline = d.Given, d.Pinned, d.Timeline
 }
 
 func (h *Hub) remember(s *Session) {
 	h.warn(h.cache.Put("session", s.ID, sessionDoc{Insight: s.Insight, InsightKey: s.insightKey, Guess: s.guess, GuessKey: s.guessKey, InsightAt: s.insightAt,
-		RoleGuess: s.roleGuess, RoleKey: s.roleKey, Given: s.given, Pinned: s.pinned}))
+		RoleGuess: s.roleGuess, RoleKey: s.roleKey, Given: s.given, Pinned: s.pinned, Timeline: s.Timeline}))
 }
 
 // SetRoster replaces the known sessions of one agent with the live set an
@@ -463,7 +488,7 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 			s.key, s.keySince, s.insightKey, s.Insight = old.key, old.keySince, old.insightKey, old.Insight
 			s.guess, s.guessKey, s.insightAt = old.guess, old.guessKey, old.insightAt
 			s.roleGuess, s.roleKey = old.roleGuess, old.roleKey
-			s.given, s.pinned = old.given, old.pinned
+			s.given, s.pinned, s.Timeline = old.given, old.pinned, old.Timeline
 			s.ContextWindow, s.CostUSD = old.ContextWindow, old.CostUSD
 			// The roster stops saying "waiting" once the terminal's dialog is
 			// answered. A request it has not caught up with yet is kept.
@@ -476,7 +501,7 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 				s.LastReply = old.LastReply
 			}
 			if s.LastPrompt == "" {
-				s.LastPrompt = old.LastPrompt
+				s.LastPrompt, s.PromptAt = old.LastPrompt, old.PromptAt
 			}
 		} else {
 			h.restore(&s)
@@ -1022,6 +1047,12 @@ func (h *Hub) SetInsight(sessionID, key string, in Insight) {
 		if s.pinned == "" {
 			s.pinned = in.Title
 		}
+		// A description of what the session has since moved on from says
+		// nothing about its latest moment.
+		if n := len(s.Timeline); n > 0 && key == s.key {
+			s.Timeline = slices.Clone(s.Timeline)
+			s.Timeline[n-1].Line = in.Title
+		}
 		h.remember(s)
 		h.changed()
 	}
@@ -1091,6 +1122,31 @@ func texts(facts []kb.Fact) []string {
 }
 
 // contentKey identifies what a session is currently showing the user.
+// track opens a moment in a session's timeline when the user has said
+// something new. What was said before the latest moment is not new, however
+// late its agent reports it; nor is an untimed repeat of a recent moment.
+func (h *Hub) track(s *Session, now time.Time) {
+	said := []rune(strings.Join(strings.Fields(s.LastPrompt), " "))
+	prompt := string(said[:min(len(said), momentLimit)])
+	same := func(m Moment) bool { return m.Prompt == prompt }
+	n := len(s.Timeline)
+	at := s.PromptAt
+	if at.IsZero() {
+		if slices.ContainsFunc(s.Timeline[max(0, n-untimedLookback):], same) {
+			return
+		}
+		at = now
+	}
+	if prompt == "" || n > 0 && (same(s.Timeline[n-1]) || !at.After(s.Timeline[n-1].At)) {
+		return
+	}
+	s.Timeline = append(s.Timeline, Moment{At: at, Prompt: prompt})
+	if n := len(s.Timeline); n > timelineLimit {
+		s.Timeline = s.Timeline[n-timelineLimit:]
+	}
+	h.remember(s)
+}
+
 func contentKey(s *Session) string {
 	state, pending := "open", ""
 	switch {
@@ -1269,6 +1325,7 @@ func (h *Hub) changed() {
 		if k := contentKey(s) + context; k != s.key {
 			s.key, s.keySince = k, now
 		}
+		h.track(s, now)
 	}
 	snap := h.snapshot()
 	b, _ := json.Marshal(map[string]any{"s": snap, "i": items(snap), "f": h.fed(), "e": h.efforts(snap), "m": h.summ})

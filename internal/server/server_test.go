@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jefflinse/slorp/internal/hub"
 	"github.com/jefflinse/slorp/internal/integrations"
@@ -126,6 +127,21 @@ func TestBridgeSaysHowMuchItsModelCanTake(t *testing.T) {
 	f.post("/api/bridge/poll", `{"sessionId":"s1","contextWindow":200000}`)
 	if got := window(); got != 200000 {
 		t.Errorf("window = %d after the session changed model", got)
+	}
+}
+
+func TestATurnOpensAMomentInTheTimeline(t *testing.T) {
+	f := newFixture(t)
+	f.connect("s1")
+	f.post("/api/bridge/event", `{"sessionId":"s1","type":"turn.start","text":"fix the rounding"}`)
+	f.post("/api/bridge/event", `{"sessionId":"s1","type":"turn.complete","text":"Done."}`)
+	f.post("/api/bridge/event", `{"sessionId":"s1","type":"turn.start","text":"now ship it"}`)
+	f.post("/api/bridge/event", `{"sessionId":"s1","type":"turn.start","text":"fix the rounding"}`)
+
+	got := f.state().Sessions[0].Timeline
+	if len(got) != 3 || got[0].Prompt != "fix the rounding" || got[1].Prompt != "now ship it" || got[2].Prompt != "fix the rounding" ||
+		!got[1].At.After(got[0].At) || time.Since(got[0].At) > time.Minute {
+		t.Errorf("timeline = %+v; want every prompt in order, timed as it arrived, a repeated one included", got)
 	}
 }
 
