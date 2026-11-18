@@ -26,7 +26,7 @@ To try Slorp without installing it, `go run github.com/jefflinse/slorp@latest` d
 
 Slorp lists Claude Code sessions with or without the plugin. The plugin is what lets you reply to a session and answer its permission prompts from the page. See [its README](integrations/claude-code/README.md) to install it by hand or configure it.
 
-Summaries, suggested replies, automatic filing and wrap-ups are written by a local model. Slorp looks for [LM Studio](https://lmstudio.ai) at `http://localhost:1234` and uses whichever model is loaded; `-llm` points it elsewhere and `-model` names a model on any OpenAI-compatible server. Without a model Slorp still lists your sessions and lets you answer them, and the page marks what is missing. Pass `-llm ""` to run that way on purpose. `slorp -h` lists the other options.
+Summaries, suggested replies, automatic filing and wrap-ups are written by a local model. Slorp looks for an OpenAI-compatible LLM server, such as LM Studio, Ollama or llama.cpp, at `http://localhost:1234` and uses the model it has loaded; `-llm` points it elsewhere, and `-model` names the model where a server offers several. Without a model Slorp still lists your sessions and lets you answer them, and the page marks what is missing. Pass `-llm ""` to run that way on purpose. `slorp -h` lists the other options.
 
 OpenCode sessions are supported through [a plugin of their own](integrations/opencode/README.md).
 
