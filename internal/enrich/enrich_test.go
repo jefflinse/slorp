@@ -12,6 +12,7 @@ import (
 
 	"github.com/jefflinse/slorp/internal/hub"
 	"github.com/jefflinse/slorp/internal/kb"
+	"github.com/jefflinse/slorp/internal/testdb"
 )
 
 // fakeLLM stands in for an OpenAI-compatible server. It answers every chat
@@ -113,6 +114,33 @@ func TestModelUsesWhatIsAlreadyLoaded(t *testing.T) {
 				t.Errorf("model = %q, err %v; want %q, error %v", got, err, tt.want, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestSaysWhichModelIsLoadedWithNothingToDo(t *testing.T) {
+	f := &fakeLLM{models: `{"data":[{"id":"warm","type":"llm","state":"loaded"}]}`}
+	e := f.enricher(t)
+	st := testdb.Open(t)
+	e.Hub = hub.New(testdb.KB(t, st), st)
+	said := func() hub.Summarizer { return e.Hub.State().Summarizer }
+
+	e.step(ctx)
+	if got := said(); got.Model != "warm" || got.Error != "" {
+		t.Fatalf("summarizer = %+v; want the loaded model named though no session needs describing", got)
+	}
+
+	f.models = `{"data":[]}`
+	e.step(ctx)
+	if got := said(); got.Model != "warm" {
+		t.Errorf("summarizer = %+v; the server was asked again at once", got)
+	}
+	e.checked = time.Now().Add(-idleCheck)
+	e.step(ctx)
+	if got := said(); got.Model != "" || got.Error == "" {
+		t.Errorf("summarizer = %+v; want it to say no model is loaded once it looks again", got)
+	}
+	if f.requests != 0 {
+		t.Errorf("%d requests to the model with nothing to do", f.requests)
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 const (
 	tick       = 2 * time.Second
 	retryAfter = time.Minute
+	idleCheck  = 30 * time.Second
 	// maxTokens leaves room for models that reason before answering.
 	maxTokens = 3000
 	// maxLookups caps what one description may look up.
@@ -45,6 +46,8 @@ type Enricher struct {
 
 	client *http.Client
 	failed map[string]time.Time
+	// checked is when the model was last asked after.
+	checked time.Time
 }
 
 // Run describes undescribed sessions, one at a time, until ctx ends. Session
@@ -60,20 +63,31 @@ func (e *Enricher) Run(ctx context.Context) {
 			return
 		case <-t.C:
 		}
-		key, what, job := e.next()
-		if job == nil {
-			continue
-		}
-		model, err := e.model(ctx)
-		if err != nil {
-			e.Hub.SetSummarizer(hub.Summarizer{Error: err.Error()})
-			continue
-		}
-		e.Hub.SetSummarizer(hub.Summarizer{Model: model})
-		if err := job(ctx, model); err != nil && ctx.Err() == nil {
-			log.Printf("enrich: %s: %v", what, err)
-			e.failed[key] = time.Now()
-		}
+		e.step(ctx)
+	}
+}
+
+// step does one piece of work if there is one, and tells the hub which model
+// is there to do it: before each piece, and every idleCheck while there is
+// none.
+func (e *Enricher) step(ctx context.Context) {
+	key, what, job := e.next()
+	if job == nil && time.Since(e.checked) < idleCheck {
+		return
+	}
+	model, err := e.model(ctx)
+	e.checked = time.Now()
+	if err != nil {
+		e.Hub.SetSummarizer(hub.Summarizer{Error: err.Error()})
+		return
+	}
+	e.Hub.SetSummarizer(hub.Summarizer{Model: model})
+	if job == nil {
+		return
+	}
+	if err := job(ctx, model); err != nil && ctx.Err() == nil {
+		log.Printf("enrich: %s: %v", what, err)
+		e.failed[key] = time.Now()
 	}
 }
 
