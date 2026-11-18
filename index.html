@@ -2064,6 +2064,13 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && e.target.closest('.rename')) { renaming = null; render(); return; }
   if (e.key === 'Escape' && modal) { modal = null; render(); return; }
   if ((e.metaKey || e.ctrlKey) && e.key === 'k' && live) { e.preventDefault(); openSearch(); render(); return; }
+  /* ⌘↵ in a message box presses the button that sends it. */
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && e.target.tagName === 'TEXTAREA') {
+    const bar = e.target.nextElementSibling;
+    const send = bar?.matches('.send') && [...bar.querySelectorAll('button')].pop();
+    if (send) { e.preventDefault(); send.click(); }
+    return;
+  }
   if (modal === 'search' && (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter')) {
     e.preventDefault();
     if (e.key === 'Enter') { openHit(hits[hitSel]); return; }
