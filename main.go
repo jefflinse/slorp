@@ -55,6 +55,7 @@ func main() {
 	llm := flag.String("llm", "http://localhost:1234", "OpenAI-compatible local model server; empty disables summaries")
 	model := flag.String("model", "", "model to summarize with (default: whichever one is loaded)")
 	data := flag.String("data", "", "directory for Slorp's database (default: ~/.slorp)")
+	plugin := flag.String("plugin", "", "directory of the Slorp plugin to load into sessions started here; empty when Claude Code has it installed")
 	flag.Parse()
 
 	host, _, err := net.SplitHostPort(*addr)
@@ -72,6 +73,12 @@ func main() {
 	if *data == "" {
 		*data = filepath.Join(home, ".slorp")
 	}
+	// Sessions start in other directories, where a relative path would not hold.
+	if *plugin != "" {
+		if *plugin, err = filepath.Abs(*plugin); err != nil {
+			log.Fatalf("-plugin: %v", err)
+		}
+	}
 	st, err := store.Open(filepath.Join(*data, "slorp.db"))
 	if err != nil {
 		log.Fatalf("database: %v", err)
@@ -85,7 +92,7 @@ func main() {
 
 	h := hub.New(k, st)
 	tools := integrations.NewManager(func() map[string]bool { return h.Settings().Integrations }, integrations.GitHub(integrations.Exec))
-	transcripts := &claude.Adapter{Hub: h, Bin: *claudeBin, Home: home, Interval: 5 * time.Second}
+	transcripts := &claude.Adapter{Hub: h, Bin: *claudeBin, Home: home, Interval: 5 * time.Second, Plugin: *plugin}
 	go transcripts.Run(ctx)
 	go (&opencode.Adapter{Hub: h, Interval: 2 * time.Second, Silence: 30 * time.Second}).Run(ctx)
 	if *llm != "" {
@@ -100,7 +107,7 @@ func main() {
 	})
 	go poller.Run(ctx)
 
-	srv := &http.Server{Addr: *addr, Handler: server.New(h, k, tools, poller, map[string]server.History{claude.Agent: transcripts.Exchanges}, *ui)}
+	srv := &http.Server{Addr: *addr, Handler: server.New(h, k, tools, poller, map[string]server.History{claude.Agent: transcripts.Exchanges}, map[string]server.Launcher{claude.Agent: transcripts}, *ui)}
 	go func() {
 		<-ctx.Done()
 		srv.Close()

@@ -1,6 +1,7 @@
 // Package claude observes Claude Code sessions on this machine: the live
 // roster from `claude agents --json`, and each session's title and last
-// exchange from its transcript file.
+// exchange from its transcript file. It also starts, resumes and stops
+// sessions in the background through Claude Code's own commands.
 package claude
 
 import (
@@ -15,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jefflinse/slorp/internal/hub"
@@ -22,6 +24,9 @@ import (
 
 const (
 	Agent = "claude"
+
+	// background is the kind of a session Claude Code runs without a terminal.
+	background = "background"
 
 	// ReplyLimit is how much of a session's last message is kept, in runes.
 	ReplyLimit = 30000
@@ -37,8 +42,19 @@ type Adapter struct {
 	Bin      string
 	Home     string
 	Interval time.Duration
+	// Plugin is a directory holding the Slorp plugin, loaded into every
+	// session started here. Empty when Claude Code has it installed.
+	Plugin string
 
 	tails map[string]*tail
+	once  sync.Once
+	wake  chan struct{}
+}
+
+// woken is signalled when the roster is worth reading before the next tick.
+func (a *Adapter) woken() chan struct{} {
+	a.once.Do(func() { a.wake = make(chan struct{}, 1) })
+	return a.wake
 }
 
 // Run polls until ctx ends.
@@ -54,11 +70,14 @@ func (a *Adapter) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+		case <-a.woken():
 		}
 	}
 }
 
 type agentRow struct {
+	// ID is what Claude Code's own commands call a background session.
+	ID         string `json:"id"`
 	Cwd        string `json:"cwd"`
 	Kind       string `json:"kind"`
 	StartedAt  int64  `json:"startedAt"`
@@ -69,13 +88,24 @@ type agentRow struct {
 	Name       string `json:"name"`
 }
 
-func (a *Adapter) poll(ctx context.Context) error {
-	out, err := exec.CommandContext(ctx, a.Bin, "agents", "--json").Output()
+// roster lists the sessions Claude Code has open, and with all also the
+// background sessions that have stopped.
+func (a *Adapter) roster(ctx context.Context, all bool) ([]agentRow, error) {
+	args := []string{"agents", "--json"}
+	if all {
+		args = append(args, "--all")
+	}
+	out, err := exec.CommandContext(ctx, a.Bin, args...).Output()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var rows []agentRow
-	if err := json.Unmarshal(out, &rows); err != nil {
+	return rows, json.Unmarshal(out, &rows)
+}
+
+func (a *Adapter) poll(ctx context.Context) error {
+	rows, err := a.roster(ctx, false)
+	if err != nil {
 		return err
 	}
 	live := make([]hub.Session, 0, len(rows))
@@ -87,6 +117,9 @@ func (a *Adapter) poll(ctx context.Context) error {
 			ID: r.SessionID, Agent: Agent, Kind: r.Kind, Name: r.Name, Cwd: r.Cwd,
 			Status: status(r), WaitingFor: r.WaitingFor,
 			StartedAt: time.UnixMilli(r.StartedAt), ActiveAt: time.UnixMilli(r.StartedAt),
+		}
+		if r.Kind == background {
+			s.Job = r.ID
 		}
 		if t := a.tail(r.SessionID); t != nil {
 			t.read()
@@ -102,16 +135,19 @@ func (a *Adapter) poll(ctx context.Context) error {
 	return nil
 }
 
+// status reads a row that may say how its session stands twice: Status for
+// one with a process, State for one in the background, and both for a
+// background session whose process is alive.
 func status(r agentRow) hub.Status {
-	switch r.Status + r.State {
-	case "busy", "working":
-		return hub.Working
-	case "waiting", "blocked":
+	switch {
+	case r.Status == "waiting" || r.State == "blocked":
 		return hub.Waiting
-	case "done":
-		return hub.Done
-	case "failed":
+	case r.Status == "busy" || r.State == "working":
+		return hub.Working
+	case r.State == "failed":
 		return hub.Failed
+	case r.State == "done":
+		return hub.Done
 	}
 	return hub.Idle
 }

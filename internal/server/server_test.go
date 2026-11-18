@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -31,6 +32,31 @@ type fixture struct {
 	probes *int
 	// record is what a Claude session's own record is read as holding.
 	record *record
+	// launcher is what the server asked of Claude Code's launcher.
+	launcher *launcher
+}
+
+// launcher records what it was asked to start, reopen and stop.
+type launcher struct {
+	calls []string
+	// id is the session id a start reports, and err what every call fails with.
+	id  string
+	err error
+}
+
+func (l *launcher) Start(_ context.Context, dir, name, prompt string) (string, error) {
+	l.calls = append(l.calls, "start "+dir+"|"+name+"|"+prompt)
+	return l.id, l.err
+}
+
+func (l *launcher) Resume(_ context.Context, sessionID, dir, prompt string) error {
+	l.calls = append(l.calls, "resume "+sessionID+"|"+dir+"|"+prompt)
+	return l.err
+}
+
+func (l *launcher) Stop(_ context.Context, job string) error {
+	l.calls = append(l.calls, "stop "+job)
+	return l.err
 }
 
 type asked struct{ checks, rescans int }
@@ -57,10 +83,10 @@ func newFixture(t *testing.T) *fixture {
 		Scope: func(string) (string, bool) { return "", true },
 		Tools: []integrations.Tool{{Name: "fake_lookup", Description: "Look something up."}},
 	})
-	rec := &record{}
-	srv := httptest.NewServer(New(h, k, tools, feeds, map[string]History{"claude": rec.read}, page))
+	rec, launch := &record{}, &launcher{}
+	srv := httptest.NewServer(New(h, k, tools, feeds, map[string]History{"claude": rec.read}, map[string]Launcher{"claude": launch}, page))
 	t.Cleanup(srv.Close)
-	return &fixture{t, srv, h, k, feeds, probes, rec}
+	return &fixture{t, srv, h, k, feeds, probes, rec, launch}
 }
 
 type record struct {
@@ -833,5 +859,145 @@ func TestRolesOverHTTP(t *testing.T) {
 	}
 	if code, _ := f.do("DELETE", "/api/kb/roles/"+id, "", nil); code != 204 || len(f.state().Knowledge.Roles) != 0 {
 		t.Errorf("remove a role = %d, roles %+v", code, f.state().Knowledge.Roles)
+	}
+}
+
+func TestStartingASession(t *testing.T) {
+	f := newFixture(t)
+	dir := t.TempDir()
+	f.post("/api/efforts", `{"name":"Snapshot store"}`)
+	f.post("/api/kb/roles", `{"name":"Reviewer","text":"Reviews pull requests"}`)
+	role := f.state().Knowledge.Roles[0].ID
+	file := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	body := func(fields string) string {
+		return `{"dir":` + strconv.Quote(dir) + `,"prompt":"review it"` + fields + `}`
+	}
+
+	for name, bad := range map[string]string{
+		"no prompt":            `{"dir":` + strconv.Quote(dir) + `,"prompt":"  "}`,
+		"a prompt too long":    `{"dir":` + strconv.Quote(dir) + `,"prompt":"` + strings.Repeat("x", startLimit+1) + `"}`,
+		"no directory":         `{"prompt":"go"}`,
+		"a relative directory": `{"dir":".","prompt":"go"}`,
+		"a missing directory":  `{"dir":` + strconv.Quote(filepath.Join(dir, "gone")) + `,"prompt":"go"}`,
+		"a file":               `{"dir":` + strconv.Quote(file) + `,"prompt":"go"}`,
+		"an unknown effort":    body(`,"effort":"nope"`),
+		"an unknown role":      body(`,"role":"nope"`),
+		"an unknown agent":     body(`,"agent":"opencode"`),
+	} {
+		if code := f.post("/api/sessions", bad); code != 400 {
+			t.Errorf("starting with %s = %d, want 400", name, code)
+		}
+	}
+	if len(f.launcher.calls) != 0 {
+		t.Fatalf("refused starts still reached the launcher: %q", f.launcher.calls)
+	}
+
+	f.launcher.id = "new-1"
+	code, res := f.do("POST", "/api/sessions", body(`,"name":"  `+strings.Repeat("n", nameLimit+5)+`  ","effort":"snapshot-store","role":"`+role+`"`), nil)
+	if code != 202 || !strings.Contains(res, `"sessionId":"new-1"`) {
+		t.Fatalf("start = %d %s", code, res)
+	}
+	if want := "start " + dir + "|" + strings.Repeat("n", nameLimit) + "|review it"; f.launcher.calls[0] != want {
+		t.Errorf("launcher was asked %q, want %q", f.launcher.calls[0], want)
+	}
+	if effort, via, _ := f.kb.Resolve("new-1", dir); effort != "snapshot-store" || via != kb.ViaUser {
+		t.Errorf("started session filed under %q via %q, want the effort it was started for", effort, via)
+	}
+	if r, ok := f.kb.RoleOf("new-1"); !ok || r.ID != role {
+		t.Errorf("started session has role %+v, want the one it was started with", r)
+	}
+
+	// A start the agent had not listed yet has no id to file under.
+	f.launcher.id = ""
+	if code := f.post("/api/sessions", body(`,"effort":"snapshot-store"`)); code != 202 {
+		t.Errorf("start with no id yet = %d, want 202", code)
+	}
+	if _, _, ok := f.kb.Resolve("", dir); ok {
+		t.Error("a start with no id filed a session with no id")
+	}
+
+	f.launcher.err = errors.New("not logged in")
+	if code, res := f.do("POST", "/api/sessions", body(""), nil); code != 502 || !strings.Contains(res, "not logged in") {
+		t.Errorf("a start claude refused = %d %q, want 502 saying why", code, res)
+	}
+}
+
+func TestStartingInTheHomeDirectory(t *testing.T) {
+	f := newFixture(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.Mkdir(filepath.Join(home, "proj"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for dir, want := range map[string]string{"~/proj/": filepath.Join(home, "proj"), " ~ ": home} {
+		f.launcher.calls = nil
+		if code := f.post("/api/sessions", `{"dir":"`+dir+`","prompt":"go"}`); code != 202 {
+			t.Fatalf("start in %q = %d", dir, code)
+		}
+		if f.launcher.calls[0] != "start "+want+"||go" {
+			t.Errorf("start in %q asked the launcher %q, want it in %s", dir, f.launcher.calls[0], want)
+		}
+	}
+	if code := f.post("/api/sessions", `{"dir":"~proj","prompt":"go"}`); code != 400 {
+		t.Errorf("start in ~proj = %d, want 400: only a bare ~ is home", code)
+	}
+}
+
+func TestStoppingAndReopeningASession(t *testing.T) {
+	f := newFixture(t)
+	dir := t.TempDir()
+	f.hub.SetRoster("claude", []hub.Session{
+		{ID: "bg", Agent: "claude", Kind: "background", Job: "3e14f875", Cwd: dir, LastPrompt: "do it", PromptAt: time.Now()},
+		{ID: "term", Agent: "claude", Kind: "interactive", Cwd: dir, LastPrompt: "do it", PromptAt: time.Now()},
+	})
+
+	if code := f.post("/api/sessions/nope/stop", `{}`); code != 404 {
+		t.Errorf("stopping an unknown session = %d, want 404", code)
+	}
+	if code := f.post("/api/sessions/term/stop", `{}`); code != 400 {
+		t.Errorf("stopping a session in a terminal = %d, want 400", code)
+	}
+	if code := f.post("/api/archive/bg/resume", `{}`); code != 404 {
+		t.Errorf("reopening an open session = %d, want 404", code)
+	}
+	if code := f.post("/api/sessions/bg/stop", `{}`); code != 204 {
+		t.Fatalf("stop = %d", code)
+	}
+	if len(f.launcher.calls) != 1 || f.launcher.calls[0] != "stop 3e14f875" {
+		t.Fatalf("launcher was asked %q, want one stop by the session's job", f.launcher.calls)
+	}
+	f.launcher.err = errors.New("No session matching")
+	if code, res := f.do("POST", "/api/sessions/bg/stop", `{}`, nil); code != 502 || !strings.Contains(res, "No session matching") {
+		t.Errorf("a stop claude refused = %d %q, want 502 saying why", code, res)
+	}
+	f.launcher.err, f.launcher.calls = nil, nil
+
+	f.hub.SetRoster("claude", nil)
+	if code := f.post("/api/archive/bg/resume", `{"prompt":"`+strings.Repeat("x", startLimit+1)+`"}`); code != 400 {
+		t.Errorf("reopening with a prompt too long = %d, want 400", code)
+	}
+	if code := f.post("/api/archive/bg/resume", `{"prompt":"  carry on  "}`); code != 202 {
+		t.Fatalf("reopen = %d", code)
+	}
+	if code := f.post("/api/archive/term/resume", `{}`); code != 202 {
+		t.Fatalf("reopen with nothing to say = %d", code)
+	}
+	if want := []string{"resume bg|" + dir + "|carry on", "resume term|" + dir + "|"}; !slices.Equal(f.launcher.calls, want) {
+		t.Errorf("launcher was asked %q, want %q", f.launcher.calls, want)
+	}
+	f.launcher.err = errors.New("no such conversation")
+	if code, res := f.do("POST", "/api/archive/bg/resume", `{}`, nil); code != 502 || !strings.Contains(res, "no such conversation") {
+		t.Errorf("a reopen claude refused = %d %q, want 502 saying why", code, res)
+	}
+
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	f.launcher.err, f.launcher.calls = nil, nil
+	if code := f.post("/api/archive/bg/resume", `{}`); code != 400 || len(f.launcher.calls) != 0 {
+		t.Errorf("reopening where the directory is gone = %d after %q, want 400 and no launch", code, f.launcher.calls)
 	}
 }

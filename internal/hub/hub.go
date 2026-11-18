@@ -51,6 +51,9 @@ type Session struct {
 	ID    string `json:"id"`
 	Agent string `json:"agent"`
 	Kind  string `json:"kind"`
+	// Job is what the agent's own commands call the session when it runs in
+	// the background, empty otherwise.
+	Job string `json:"job,omitempty"`
 	// Name and Title are what the session's agent calls it, and Named what
 	// the user called it there, if they did.
 	Name  string `json:"name"`

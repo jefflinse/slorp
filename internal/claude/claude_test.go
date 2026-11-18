@@ -389,6 +389,13 @@ func TestStatus(t *testing.T) {
 		{agentRow{State: "failed"}, hub.Failed},
 		{agentRow{State: "stopped"}, hub.Idle},
 		{agentRow{}, hub.Idle},
+		// A background session with a live process says both.
+		{agentRow{Status: "busy", State: "working"}, hub.Working},
+		{agentRow{Status: "idle", State: "done"}, hub.Done},
+		{agentRow{Status: "idle", State: "failed"}, hub.Failed},
+		{agentRow{Status: "waiting", State: "working"}, hub.Waiting},
+		{agentRow{Status: "busy", State: "blocked"}, hub.Waiting},
+		{agentRow{Status: "busy", State: "done"}, hub.Working},
 	}
 	for _, tt := range tests {
 		if got := status(tt.row); got != tt.want {
@@ -401,8 +408,8 @@ func TestPollBuildsTheRoster(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "claude")
 	roster := `[
-	  {"cwd":"/w/a","kind":"interactive","startedAt":1700000000000,"pid":1,"status":"waiting","waitingFor":"permission prompt","sessionId":"aaa","name":"a-1"},
-	  {"cwd":"/w/b","kind":"background","startedAt":1700000000000,"state":"blocked","sessionId":"bbb","name":"bg"},
+	  {"id":"aaa00000","cwd":"/w/a","kind":"interactive","startedAt":1700000000000,"pid":1,"status":"waiting","waitingFor":"permission prompt","sessionId":"aaa","name":"a-1"},
+	  {"id":"bbb00000","cwd":"/w/b","kind":"background","startedAt":1700000000000,"state":"blocked","sessionId":"bbb","name":"bg"},
 	  {"cwd":"/w/c","kind":"interactive","status":"idle","name":"no session id yet"}
 	]`
 	script := "#!/bin/sh\n[ \"$1 $2\" = \"agents --json\" ] || exit 2\ncat <<'EOF'\n" + roster + "\nEOF\n"
@@ -444,6 +451,9 @@ func TestPollBuildsTheRoster(t *testing.T) {
 	}
 	if sb := got["bbb"]; sb.Status != hub.Waiting || sb.Kind != "background" || sb.Title != "" {
 		t.Errorf("background session with no transcript: %+v", sb)
+	}
+	if got["bbb"].Job != "bbb00000" || sa.Job != "" {
+		t.Errorf("jobs %q and %q, want only the background session to have one", got["bbb"].Job, sa.Job)
 	}
 
 	a.Bin = filepath.Join(dir, "missing")

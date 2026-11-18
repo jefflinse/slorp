@@ -3,10 +3,15 @@
 package server
 
 import (
+	"cmp"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -26,6 +31,9 @@ const (
 	nameLimit = 80
 	// maxLimits is how many usage windows one bridge may report.
 	maxLimits = 8
+	// startLimit is how long the first prompt of a session started here may
+	// be, in bytes. It travels as a command-line argument.
+	startLimit = 200_000
 )
 
 // agentOf returns the agent a bridge names, Claude Code's when it names
@@ -54,9 +62,44 @@ type Feeds interface {
 // oldest first and at most limit of it.
 type History func(sessionID string, limit int) ([]hub.Exchange, error)
 
-// New serves the page and its API. history is by agent; an agent with none
-// keeps no record Slorp can read.
-func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history map[string]History, uiPath string) http.Handler {
+// Launcher starts, reopens and stops one agent's sessions in the background.
+type Launcher interface {
+	// Start begins a session working in dir, named name unless that is
+	// empty, with prompt as the first thing said in it. It returns the id
+	// the session goes by, empty when the agent had not listed it yet.
+	Start(ctx context.Context, dir, name, prompt string) (sessionID string, err error)
+	// Resume reopens a closed session that worked in dir, and says prompt in
+	// it unless that is empty.
+	Resume(ctx context.Context, sessionID, dir, prompt string) error
+	// Stop ends a session by the id its agent's commands take, keeping its
+	// conversation.
+	Stop(ctx context.Context, job string) error
+}
+
+// directory returns path as the absolute directory it names, reading a
+// leading "~" as the user's home.
+func directory(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if rest, ok := strings.CutPrefix(path, "~"); ok && (rest == "" || rest[0] == '/') {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		path = filepath.Join(home, rest)
+	}
+	if !filepath.IsAbs(path) {
+		return "", errors.New("dir must be an absolute path, or start with ~")
+	}
+	if info, err := os.Stat(path); err != nil || !info.IsDir() {
+		return "", fmt.Errorf("%s is not a directory", path)
+	}
+	return filepath.Clean(path), nil
+}
+
+// New serves the page and its API. history and launchers are by agent; an
+// agent with no history keeps no record Slorp can read, and one with no
+// launcher has sessions Slorp can only watch.
+func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history map[string]History, launchers map[string]Launcher, uiPath string) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
@@ -110,6 +153,121 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			return
 		}
 		writeJSON(w, http.StatusAccepted, reply)
+	})
+
+	// The page starts a session in the background, optionally filed under an
+	// effort and given a role from its first moment.
+	mux.HandleFunc("POST /api/sessions", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Agent  string `json:"agent"`
+			Dir    string `json:"dir"`
+			Name   string `json:"name"`
+			Prompt string `json:"prompt"`
+			Effort string `json:"effort"`
+			Role   string `json:"role"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		launcher := launchers[cmp.Or(in.Agent, claude.Agent)]
+		prompt, name := strings.TrimSpace(in.Prompt), []rune(strings.TrimSpace(in.Name))
+		var problem string
+		switch {
+		case launcher == nil:
+			problem = "Slorp cannot start sessions of this agent"
+		case prompt == "":
+			problem = "prompt is required"
+		case len(prompt) > startLimit:
+			problem = "prompt is too long"
+		case in.Effort != "" && !k.Has(in.Effort):
+			problem = "no such effort"
+		case in.Role != "" && !k.HasRole(in.Role):
+			problem = "no such role"
+		}
+		if problem != "" {
+			http.Error(w, problem, http.StatusBadRequest)
+			return
+		}
+		dir, err := directory(in.Dir)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		id, err := launcher.Start(r.Context(), dir, string(name[:min(len(name), nameLimit)]), prompt)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		// Without an id there is nothing to file yet; the session still
+		// shows up, sorted the way any other would be.
+		if id != "" && in.Effort != "" {
+			err = k.Assign(id, in.Effort)
+		}
+		if id != "" && in.Role != "" && err == nil {
+			err = k.SetRole(id, in.Role)
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		h.Touch()
+		writeJSON(w, http.StatusAccepted, map[string]string{"sessionId": id})
+	})
+
+	mux.HandleFunc("POST /api/sessions/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		sessions := h.Sessions()
+		at := slices.IndexFunc(sessions, func(s hub.Session) bool { return s.ID == id })
+		if at < 0 {
+			http.Error(w, "no such session", http.StatusNotFound)
+			return
+		}
+		s := sessions[at]
+		launcher := launchers[s.Agent]
+		if launcher == nil || s.Job == "" {
+			http.Error(w, "only a session running in the background can be stopped from here", http.StatusBadRequest)
+			return
+		}
+		if err := launcher.Stop(r.Context(), s.Job); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// The page reopens a closed session in the background, optionally saying
+	// something in it.
+	mux.HandleFunc("POST /api/archive/{id}/resume", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Prompt string `json:"prompt"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		a, ok := h.Archive(r.PathValue("id"))
+		if !ok {
+			http.Error(w, "no such closed session", http.StatusNotFound)
+			return
+		}
+		launcher := launchers[a.Agent]
+		if launcher == nil {
+			http.Error(w, "Slorp cannot reopen sessions of this agent", http.StatusBadRequest)
+			return
+		}
+		if len(in.Prompt) > startLimit {
+			http.Error(w, "prompt is too long", http.StatusBadRequest)
+			return
+		}
+		dir, err := directory(a.Cwd)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := launcher.Resume(r.Context(), a.ID, dir, strings.TrimSpace(in.Prompt)); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
 	})
 
 	// edited reports a knowledge-base change, republishing state on success.

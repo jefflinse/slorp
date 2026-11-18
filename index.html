@@ -83,6 +83,7 @@ h1, h2, h3, p { margin: 0; }
 .closed { max-width: 760px; padding: 2px 0 16px; }
 .closed .cmd { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; padding: 8px 10px 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); }
 .closed .cmd .mono { font-size: 12px; overflow-wrap: anywhere; }
+.closed .cmd span:last-child { display: flex; gap: 8px; flex-shrink: 0; }
 .lim { color: var(--ink3); font-size: 12px; }
 .lim .meter { width: 44px; }
 .pr { display: inline-flex; align-items: center; white-space: nowrap; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--ink2); font-size: 11.5px; font-weight: 500; line-height: 1.5; text-decoration: none; }
@@ -337,6 +338,10 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
 .add { display: flex; flex-wrap: wrap; gap: 8px; padding: 16px 0; border-top: 1px solid var(--line); }
 .add input, .add select { padding: 7px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--raised); }
 .add input { flex: 1; min-width: 180px; }
+.add.start { padding: 4px 0 14px; border-top: 0; max-width: 760px; }
+.add.start textarea { flex-basis: 100%; min-height: 76px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); resize: vertical; line-height: 1.45; }
+.add.start .send { flex-basis: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--ink3); font-size: 12px; }
+.add.start .send span:last-child { display: flex; gap: 8px; }
 
 /* Toast */
 #toast, #news { position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 80px); background: var(--ink); color: var(--bg); padding: 9px 14px; border-radius: 9px; display: flex; gap: 14px; align-items: center; transition: transform 0.18s; z-index: 20; max-width: calc(100vw - 32px); }
@@ -1081,6 +1086,25 @@ function roleNote(s) {
     ? `<div class="none" style="margin-bottom:10px">As a ${esc(r.name)} session it ${r.attention === 'none' ? 'never shows under Attention' : 'shows under Attention only when it is stopped'}.</div>` : '';
 }
 
+/* The effort whose start form is open, and whether a start is on its way. */
+let starting = null, launching = false;
+function startForm(e) {
+  const real = e.id !== 'unsorted';
+  const dirs = [...new Set((real ? e.dirs : []).concat(live.filter(s => (s.effort || 'unsorted') === e.id).map(s => s.cwd)).filter(Boolean).map(tilde))];
+  return `<form class="add start" data-form="start" data-id="${e.id}">
+    <input name="dir" class="mono" data-keep="start-dir-${e.id}" list="start-dirs" value="${esc(dirs[0] || '')}" placeholder="Directory to work in, such as ~/dev/project" required spellcheck="false" autocomplete="off" aria-label="Directory to work in" style="flex-basis:100%">
+    <datalist id="start-dirs">${dirs.map(d => `<option value="${esc(d)}"></option>`).join('')}</datalist>
+    <input name="name" data-keep="start-name-${e.id}" maxlength="80" placeholder="Name (optional)" aria-label="Name for the session">
+    ${knowledge.roles.length ? `<select name="role" data-keep="start-role-${e.id}" aria-label="Role for the session"><option value="">No role</option>${knowledge.roles.map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select>` : ''}
+    <textarea name="prompt" data-keep="start-prompt-${e.id}" placeholder="What should it do?" required aria-label="First message"></textarea>
+    <div class="send"><span>Starts a Claude Code session in the background${real ? ', filed under this effort' : ''}.</span>
+      <span><button type="button" class="btn" data-act="startCancel">Cancel</button><button class="btn go" ${launching ? 'disabled' : ''}>${launching ? 'Starting…' : 'Start'}</button></span></div>
+  </form>`;
+}
+function stopButton(s) {
+  return s.job ? `<button class="btn quiet" data-act="stop" data-id="${s.id}" title="Stops this background session. Its conversation is kept, and it can be reopened from Closed sessions.">Stop</button>` : '';
+}
+
 function effortDetailLive(e) {
   const sess = live.filter(s => (s.effort || 'unsorted') === e.id);
   const needs = activeItems().filter(i => i.effort === e.id).sort(byUrgency);
@@ -1095,7 +1119,8 @@ function effortDetailLive(e) {
     <div class="sec"><div class="label"><span>${real && e.stands && sess.length ? spark : ''}Where this stands</span></div><p class="prose">${esc(stands)}</p></div>
     <div class="sec"><div class="label"><span>Needs you (${needs.length})</span></div>
       ${needs.length ? `<div style="margin:0 -18px">${needs.map(i => rowHtml(i, 'openItem')).join('')}</div>` : '<div class="none">Nothing. This is moving without you, or not moving at all.</div>'}</div>
-    <div class="sec"><div class="label"><span>Sessions (${sess.length})</span></div>
+    <div class="sec"><div class="label"><span>Sessions (${sess.length})</span>${starting === e.id ? '' : `<button data-act="startOpen" data-id="${e.id}">Start one ›</button>`}</div>
+      ${starting === e.id ? startForm(e) : ''}
       ${sess.length ? sess.map(x => `<div class="srow"><span class="dot ${(LIVE_STATUS[x.status] || LIVE_STATUS.idle)[0]}"></span>
         <div class="body"><div class="ttl">${esc(clip(x.label, 90))}</div>
           ${x.insight?.title ? `<div class="sub">${esc(clip(x.insight.title, 90))}</div>` : ''}
@@ -1245,6 +1270,14 @@ function api(method, path, body, done) {
   fetch(path, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body && JSON.stringify(body) })
     .then(res => { if (!res.ok) throw new Error(res.status); if (done) done(); refresh(true); })
     .catch(() => toast('Could not reach the Slorp service'));
+}
+
+/* Asks the service to do something outside itself, and says why when it could not. */
+function ask(path, body, done, always) {
+  fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    .then(async res => { if (!res.ok) throw new Error((await res.text()).trim() || res.status); if (done) done(); })
+    .catch(err => toast(err instanceof TypeError ? 'Could not reach the Slorp service' : `That did not work: ${err.message}`))
+    .finally(() => { if (always) always(); refresh(true); });
 }
 
 function sendReply(sessionId, text, done) {
@@ -1423,7 +1456,7 @@ function liveItemDetail(it) {
       : `<h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}${state.fluent ? `<button class="pen" data-act="rename" data-id="${s.id}" title="${s.labelVia === 'you' ? 'You named this session. Rename it' : 'Give this session a name of your own'}" aria-label="Rename this session">✎</button>` : ''}</h1>`}
     ${it.subtitle && state.fluent ? `<p class="subt">${spark}${esc(it.subtitle)}</p>` : ''}
     <div class="need"><div class="label">${it.summary ? spark : ''}What's needed from you</div><p class="ask">${esc(it.ask)}</p>${answer}</div>
-    ${barFor(it, `${s.pending ? '' : `<button class="btn" data-act="livePark" data-id="${it.id}">Park as open question</button>`}${moveSelect(s)}${roleSelect(s)}`)}
+    ${barFor(it, `${s.pending ? '' : `<button class="btn" data-act="livePark" data-id="${it.id}">Park as open question</button>`}${moveSelect(s)}${roleSelect(s)}${stopButton(s)}`)}
     <div class="sec going"><div class="label"><span>${it.summary ? spark : ''}What's going on</span></div>${goingOn(it)}</div>
     ${detailTabs(it, s)}
   </div>`;
@@ -1497,7 +1530,7 @@ function liveDetail(s) {
         ${sent ? `<div class="sent">${sent}</div>` : ''}</div>`
     : `<div class="none" style="margin:10px 0 16px">This session isn't running the Slorp mod, so it can be watched but not replied to.</div>`;
   return `${roleNote(s)}${pending}${lines.length ? rawBlock(lines) : '<div class="none">No transcript found for this session.</div>'}${box}
-    <div class="bar" style="margin:0 0 14px">${moveSelect(s)}${roleSelect(s)}</div>`;
+    <div class="bar" style="margin:0 0 14px">${moveSelect(s)}${roleSelect(s)}${stopButton(s)}</div>`;
 }
 
 function viewActivityLive() {
@@ -1540,7 +1573,7 @@ function closedSessions() {
     const open = state.expanded['closed:' + a.id], doc = archiveDocs[a.id], cmd = resumeCommand(a);
     const detail = !open ? '' : `<tr class="x"><td></td><td colspan="4"><div class="closed">
         ${a.summary ? `<p class="prose">${spark}${esc(a.summary)}</p>` : ''}
-        ${cmd ? `<div class="cmd"><span class="mono">${esc(cmd)}</span><button class="btn" data-act="copyText" data-text="${esc(cmd)}" title="Copy the command that reopens this session">Copy</button></div>` : ''}
+        ${cmd ? `<div class="cmd"><span class="mono">${esc(cmd)}</span><span><button class="btn" data-act="copyText" data-text="${esc(cmd)}" title="Copy the command that reopens this session in a terminal">Copy</button><button class="btn" data-act="reopen" data-id="${a.id}" title="Reopens this session in the background, where it waits for a message">Reopen in the background</button></span></div>` : ''}
         ${doc ? timeline(doc) || '<div class="none">Nothing was said in it while Slorp was watching.</div>' : '<div class="none">Fetching its timeline…</div>'}</div></td></tr>`;
     return `<tr class="s ${open ? 'open' : ''}" data-act="archived" data-id="${a.id}" id="closed-${a.id}">
         <td class="st"><span class="dot done"></span>closed<div class="dim">${ago(minsSince(a.endedAt))}</div></td>
@@ -1908,6 +1941,14 @@ const actions = {
     return false;
   },
   toggleHold: () => { api('POST', '/api/settings', { answerPermissions: !settings.answerPermissions }); return false; },
+  startOpen: d => { starting = d.id; },
+  startCancel: () => { starting = null; },
+  stop: d => {
+    const s = live.find(x => x.id === d.id);
+    toast(`Stop "${clip(s ? s.label : d.id, 50)}"? Its conversation is kept.`, () => { ask(`/api/sessions/${d.id}/stop`, {}, () => toast('Stopped. Reopen it from Closed sessions.')); }, 'Stop');
+    return false;
+  },
+  reopen: d => { ask(`/api/archive/${d.id}/resume`, {}, () => toast('Reopened in the background')); return false; },
   effortDelete: d => {
     toast(`Delete "${effortById(d.id).name}" and its filings?`, () => { api('DELETE', `/api/efforts/${d.id}`); }, 'Delete');
     return false;
@@ -2005,6 +2046,14 @@ document.addEventListener('submit', e => {
   const clear = () => form.querySelectorAll('input').forEach(el => { el.value = ''; });
   if (sec === 'name') { api('POST', `/api/sessions/${form.dataset.id}/name`, { name: f.name }); renaming = null; render(); return; }
   if (sec === 'effort') { api('POST', '/api/efforts', { name: f.name, about: f.about }); clear(); return; }
+  if (sec === 'start') {
+    if (launching) return;
+    const effort = form.dataset.id === 'unsorted' ? '' : form.dataset.id;
+    launching = true;
+    ask('/api/sessions', { dir: f.dir, name: f.name, prompt: f.prompt, role: f.role || '', effort }, () => { starting = null; toast('Started. It will show up here in a moment.'); }, () => { launching = false; render(); });
+    render();
+    return;
+  }
   if (live) { api('POST', `/api/kb/${sec}`, { ...f, origin: 'you wrote this down' }); clear(); return; }
   if (sec === 'watch') state.kb.watch.push({ id, type: f.type, name: f.name, why: f.why, efforts: [f.effort], cadence: 'daily', seen: '', seenAge: 0 });
   else if (sec === 'questions') state.kb.questions.unshift({ id, text: f.text, effort: f.effort, age: 0, origin: 'you wrote this down' });
