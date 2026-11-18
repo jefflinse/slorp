@@ -145,6 +145,39 @@ func TestATurnOpensAMomentInTheTimeline(t *testing.T) {
 	}
 }
 
+func TestBridgeReportsUsageWindows(t *testing.T) {
+	f := newFixture(t)
+	at := time.Now().Add(-time.Minute).Truncate(time.Millisecond)
+	resets := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	body, _ := json.Marshal(map[string]any{"sessionId": "s1", "measuredAt": at.UnixMilli(), "rateLimits": []map[string]any{
+		{"kind": "five_hour", "percentUsed": 23.5, "resetsAt": resets.Format(time.RFC3339)},
+		{"kind": strings.Repeat("k", 200), "percentUsed": -4, "resetsAt": "soon"},
+	}})
+	f.post("/api/bridge/poll", string(body))
+
+	got := f.state().Limits
+	if len(got) != 2 || got[0].Agent != "claude" || got[0].Kind != "five_hour" || got[0].PercentUsed != 23.5 || !got[0].ResetsAt.Equal(resets) || !got[0].At.Equal(at) {
+		t.Fatalf("limits = %+v; want the window as the bridge reported it", got)
+	}
+	if len(got[1].Kind) != 80 || got[1].PercentUsed != 0 || !got[1].ResetsAt.IsZero() {
+		t.Errorf("second window = %+v; want a long name cut, a negative share floored and an unreadable time dropped", got[1])
+	}
+
+	many := make([]map[string]any, 20)
+	for i := range many {
+		many[i] = map[string]any{"kind": "w", "percentUsed": 1}
+	}
+	body, _ = json.Marshal(map[string]any{"sessionId": "s1", "measuredAt": at.UnixMilli() + 1000, "rateLimits": many})
+	f.post("/api/bridge/poll", string(body))
+	if got := f.state().Limits; len(got) != 8 {
+		t.Errorf("%d windows from one bridge, want no more than 8", len(got))
+	}
+	f.post("/api/bridge/poll", `{"sessionId":"s1"}`)
+	if got := f.state().Limits; len(got) != 8 {
+		t.Errorf("a poll with no reading left %d windows, want the last reading kept", len(got))
+	}
+}
+
 func TestNamingASession(t *testing.T) {
 	f := newFixture(t)
 	f.connect("s1")

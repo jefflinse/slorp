@@ -73,10 +73,12 @@ func (p *Poller) Run(ctx context.Context) {
 	}
 }
 
-// Step searches the efforts' directories, collects the feeds that are due,
-// or every feed when now is true, and drops those that have been turned off.
+// Step searches the efforts' directories and the sessions', collects the
+// feeds that are due, or every feed when now is true, and drops those that
+// have been turned off.
 func (p *Poller) Step(ctx context.Context, now bool) {
 	p.Hub.SetClones(p.Source.Clones(p.Dirs()))
+	p.Hub.SetCheckouts(p.Source.Clones(p.Hub.Cwds()))
 	for _, f := range p.Source.Feeds(ctx) {
 		if !f.On {
 			p.Hub.DropFeed(f.ID)

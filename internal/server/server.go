@@ -20,8 +20,12 @@ import (
 // agents are the agents a bridge may report for.
 var agents = map[string]bool{claude.Agent: true, opencode.Agent: true}
 
-// nameLimit is how long a name the user gives a session may be, in runes.
-const nameLimit = 80
+const (
+	// nameLimit is how long a name may be, in runes.
+	nameLimit = 80
+	// maxLimits is how many usage windows one bridge may report.
+	maxLimits = 8
+)
 
 // agentOf returns the agent a bridge names, Claude Code's when it names
 // none, and refuses one Slorp does not know.
@@ -223,6 +227,15 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, uiPath s
 			ContextWindow int `json:"contextWindow"`
 			// CostUSD is the agent's own estimate of the session's cost so far.
 			CostUSD float64 `json:"costUsd"`
+			// RateLimits are the user's usage windows as the agent last read
+			// them, at MeasuredAt in Unix milliseconds, or zero when it
+			// cannot say how old the reading is.
+			RateLimits []struct {
+				Kind        string  `json:"kind"`
+				PercentUsed float64 `json:"percentUsed"`
+				ResetsAt    string  `json:"resetsAt"`
+			} `json:"rateLimits"`
+			MeasuredAt int64 `json:"measuredAt"`
 		}
 		if !readJSON(w, r, &in) || in.SessionID == "" {
 			return
@@ -248,6 +261,17 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, uiPath s
 				s.Branch = in.Branch
 			}
 		})
+		var windows []hub.Limit
+		for _, l := range in.RateLimits[:min(len(in.RateLimits), maxLimits)] {
+			resets, _ := time.Parse(time.RFC3339, l.ResetsAt)
+			kind := []rune(l.Kind)
+			windows = append(windows, hub.Limit{Kind: string(kind[:min(len(kind), nameLimit)]), PercentUsed: max(0, l.PercentUsed), ResetsAt: resets})
+		}
+		var measured time.Time
+		if in.MeasuredAt > 0 {
+			measured = time.UnixMilli(in.MeasuredAt)
+		}
+		h.SetLimits(agent, measured, windows)
 		replies := h.Claim(in.SessionID)
 		if replies == nil {
 			replies = []hub.Reply{}

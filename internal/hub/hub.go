@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log"
+	"maps"
 	"slices"
 	"sort"
 	"strconv"
@@ -68,6 +69,9 @@ type Session struct {
 	LastReply  string    `json:"lastReply"`
 	// PromptAt is when the user said LastPrompt, zero when its agent did not say.
 	PromptAt time.Time `json:"-"`
+	// Pull names the pull request made from the branch the session is on,
+	// as "owner/name#number"; empty when there is none.
+	Pull string `json:"pull,omitempty"`
 	// Timeline is what the user has said in the session since Slorp began
 	// watching it, oldest first.
 	Timeline []Moment `json:"timeline,omitempty"`
@@ -211,6 +215,12 @@ const (
 	KindReview     = "review"
 	KindNone       = "none"
 	KindFailed     = "failed"
+	// KindContext is a session whose context window is nearly full.
+	KindContext = "context"
+
+	// contextWarn is how full, in percent, a context window is before the
+	// user is told.
+	contextWarn = 90
 )
 
 // Item is one thing that needs the user: a session waiting on them, or
@@ -262,6 +272,19 @@ type PullRequest struct {
 	Source    string `json:"source"`
 	Effort    string `json:"effort"`
 	EffortVia string `json:"effortVia,omitempty"`
+}
+
+// Limit is how much of one of the user's usage windows with an agent's
+// provider is spent.
+type Limit struct {
+	Agent string `json:"agent"`
+	// Kind is the window as the agent names it, such as "five_hour".
+	Kind        string  `json:"kind"`
+	PercentUsed float64 `json:"percentUsed"`
+	// ResetsAt is when the window starts over, zero when the agent did not say.
+	ResetsAt time.Time `json:"resetsAt,omitzero"`
+	// At is when the agent measured it, zero for a reading of unknown age.
+	At time.Time `json:"at,omitzero"`
 }
 
 // Summarizer reports which model, if any, is writing insights.
@@ -420,6 +443,11 @@ type Hub struct {
 	lookups  []Lookup
 	feeds    map[string]*feed
 	clones   map[string][]string
+	// checkouts is, for each session's directory, the repositories checked
+	// out there.
+	checkouts map[string][]string
+	// limits is each agent's latest reading of the user's usage windows.
+	limits map[string][]Limit
 }
 
 type note struct {
@@ -785,6 +813,77 @@ func (h *Hub) SetClones(byDir map[string][]string) {
 	h.changed()
 }
 
+// SetLimits records an agent's reading of the user's usage windows, taken
+// at the given time, unless a later reading is already held. A reading of
+// unknown age, with a zero time, only fills in where none is held.
+func (h *Hub) SetLimits(agent string, at time.Time, windows []Limit) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if held := h.limits[agent]; len(windows) == 0 || len(held) > 0 && !at.After(held[0].At) {
+		return
+	}
+	for i := range windows {
+		windows[i].Agent, windows[i].At = agent, at
+	}
+	if h.limits == nil {
+		h.limits = map[string][]Limit{}
+	}
+	h.limits[agent] = windows
+	h.last = ""
+	h.changed()
+}
+
+// limited returns the usage windows that have not started over since they
+// were read, by agent.
+func (h *Hub) limited() []Limit {
+	out := []Limit{}
+	for _, agent := range slices.Sorted(maps.Keys(h.limits)) {
+		for _, l := range h.limits[agent] {
+			if l.ResetsAt.IsZero() || l.ResetsAt.After(time.Now()) {
+				out = append(out, l)
+			}
+		}
+	}
+	return out
+}
+
+// SetCheckouts records which repositories are checked out in which of the
+// sessions' directories, by directory. Sessions are matched to their pull
+// requests by it.
+func (h *Hub) SetCheckouts(byDir map[string][]string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.checkouts = byDir
+	h.changed()
+}
+
+// Cwds lists the directories the sessions are working in.
+func (h *Hub) Cwds() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []string
+	for _, s := range h.sessions {
+		if s.Cwd != "" && !slices.Contains(out, s.Cwd) {
+			out = append(out, s.Cwd)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// pullOn names the one of pulls made from the branch a session is on, in a
+// repository checked out where it works. A pull request whose branch has
+// its base's name can only come from a fork, and is no session's.
+func (h *Hub) pullOn(s *Session, pulls []PullRequest) string {
+	for _, p := range pulls {
+		held := func(repo string) bool { return strings.EqualFold(repo, p.Repo) }
+		if s.Branch != "" && p.Branch == s.Branch && p.Branch != p.Base && slices.ContainsFunc(h.checkouts[s.Cwd], held) {
+			return p.Repo + "#" + strconv.Itoa(p.Number)
+		}
+	}
+	return ""
+}
+
 // fed returns every feed's items, each filed under the effort its
 // repository belongs to.
 func (h *Hub) fed() []Item {
@@ -873,6 +972,8 @@ type State struct {
 	Feeds map[string]FeedStatus `json:"feeds"`
 	// PullRequests are the open ones the integrations listed.
 	PullRequests []PullRequest `json:"pullRequests"`
+	// Limits are the user's usage windows as the agents last read them.
+	Limits []Limit `json:"limits"`
 }
 
 func (h *Hub) State() State {
@@ -884,7 +985,7 @@ func (h *Hub) State() State {
 		feeds[id] = f.FeedStatus
 	}
 	return State{Sessions: sessions, Items: append(items(sessions), h.fed()...), Efforts: h.efforts(sessions), Summarizer: h.summ,
-		Settings: h.settings, Knowledge: h.kb.Knowledge(), Lookups: append([]Lookup{}, h.lookups...), Feeds: feeds, PullRequests: h.pulls()}
+		Settings: h.settings, Knowledge: h.kb.Knowledge(), Lookups: append([]Lookup{}, h.lookups...), Feeds: feeds, PullRequests: h.pulls(), Limits: h.limited()}
 }
 
 func (h *Hub) efforts(sessions []Session) []Effort {
@@ -1208,6 +1309,11 @@ func items(sessions []Session) []Item {
 			it.Kind, it.Urgency, it.Replies = KindQuestion, "awaiting", s.Insight.Replies
 		case fresh && s.Status != Working && s.Insight.Kind == KindReview:
 			it.Kind, it.Urgency, it.Replies = KindReview, "whenever", s.Insight.Replies
+		case s.Status != Working && s.ContextWindow > 0 && s.ContextTokens*100 >= s.ContextWindow*contextWarn:
+			// One item for as long as the session lasts, so that dismissing it
+			// is not undone by the session's next exchange.
+			it.ID, it.Kind, it.Urgency = s.ID[:min(8, len(s.ID))]+"-context", KindContext, "whenever"
+			it.Ask = "Its context is " + strconv.Itoa(s.ContextTokens*100/s.ContextWindow) + "% full. Compact it or wrap up before it runs out of room."
 		default:
 			continue
 		}
@@ -1222,10 +1328,12 @@ func items(sessions []Session) []Item {
 func (h *Hub) snapshot() []Session {
 	rank := map[Status]int{Waiting: 0, Failed: 1, Working: 2, Idle: 3, Done: 4}
 	out := make([]Session, 0, len(h.sessions))
+	pulls := h.pulls()
 	for _, s := range h.sessions {
 		c := *s
 		c.CanReply = time.Since(s.bridgeSeen) < bridgeTTL
 		c.Label, c.LabelVia = s.label()
+		c.Pull = h.pullOn(s, pulls)
 		if id, via, ok := h.kb.Resolve(s.ID, s.Cwd); ok {
 			c.Effort, c.EffortVia = id, via
 		} else if s.guess != "" && h.kb.Has(s.guess) {

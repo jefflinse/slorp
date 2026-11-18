@@ -105,6 +105,11 @@ func TestItems(t *testing.T) {
 			s.Pending, s.Insight = &Pending{Tool: "AskUserQuestion", Summary: "Which one?", Question: true}, insight(KindPermission)
 		}), KindQuestion, "awaiting", "model title"},
 		{"failed", with(func(s *Session) { s.Status = Failed }), KindFailed, "awaiting", ""},
+		{"quiet and nearly out of context", with(func(s *Session) { s.ContextTokens, s.ContextWindow = 900, 1000 }), KindContext, "whenever", ""},
+		{"quiet with room left", with(func(s *Session) { s.ContextTokens, s.ContextWindow = 899, 1000 }), "", "", ""},
+		{"quiet, with no word on how much its model can take", with(func(s *Session) { s.ContextTokens = 900 }), "", "", ""},
+		{"working and nearly out of context", with(func(s *Session) { s.ContextTokens, s.ContextWindow, s.Status = 950, 1000, Working }), "", "", ""},
+		{"nearly out of context, and asking something", with(func(s *Session) { s.ContextTokens, s.ContextWindow, s.Status = 950, 1000, Waiting }), KindQuestion, "awaiting", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -841,6 +846,94 @@ func TestASessionGoesByALastingName(t *testing.T) {
 	check(h2, "after the user took the name back", "Its agent's later title", "")
 	roster(h2, "dir-9c", "")
 	check(h2, "after a restart, with no title from its agent", "First thing it did", ViaGuess)
+}
+
+func TestASessionIsMatchedToThePullRequestFromItsBranch(t *testing.T) {
+	h, _, _ := newHub(t)
+	pr := func(repo string, number int, branch, base string) integrations.PullRequest {
+		return integrations.PullRequest{Repo: repo, Number: number, Branch: branch, Base: base}
+	}
+	h.SetFeed("github", nil, []integrations.PullRequest{
+		pr("Other/Thing", 1, "feat", "main"),
+		pr("Acme/Widgets", 2, "main", "main"),
+		pr("Acme/Widgets", 3, "feat", "main"),
+	}, nil)
+	h.SetCheckouts(map[string][]string{"/w/widgets": {"acme/widgets"}, "/w/none": nil})
+	on := func(id, cwd, branch string) Session {
+		return Session{ID: id, Agent: agent, Status: Idle, Cwd: cwd, Branch: branch}
+	}
+	h.SetRoster(agent, []Session{
+		on("match", "/w/widgets", "feat"),
+		on("default", "/w/widgets", "main"),
+		on("elsewhere", "/w/none", "feat"),
+		on("unknown", "/w/unsearched", "feat"),
+		on("branchless", "/w/widgets", ""),
+		on("other", "/w/widgets", "fix"),
+	})
+
+	want := map[string]string{"match": "Acme/Widgets#3"}
+	for _, s := range h.Sessions() {
+		if s.Pull != want[s.ID] {
+			t.Errorf("session %q: pull %q, want %q", s.ID, s.Pull, want[s.ID])
+		}
+	}
+	if got := h.Cwds(); !slices.Equal(got, []string{"/w/none", "/w/unsearched", "/w/widgets"}) {
+		t.Errorf("cwds = %v, want each directory once, in order", got)
+	}
+}
+
+func TestTheContextItemOutlastsAnExchange(t *testing.T) {
+	full := Session{ID: "0123456789", Label: "its name", Status: Idle, key: "content:1", ContextTokens: 934, ContextWindow: 1000}
+	first := items([]Session{full})
+	full.key = "content:2"
+	second := items([]Session{full})
+	if len(first) != 1 || len(second) != 1 || first[0].ID != second[0].ID {
+		t.Fatalf("items %+v then %+v; want the same item before and after an exchange, so a dismissal holds", first, second)
+	}
+	if !strings.Contains(first[0].Ask, "93% full") {
+		t.Errorf("ask = %q, want it to say how full", first[0].Ask)
+	}
+	asking := full
+	asking.Status = Waiting
+	if got := items([]Session{asking}); got[0].ID == first[0].ID {
+		t.Error("a question shares the context item's id, so dismissing one would hide the other")
+	}
+}
+
+func TestLimits(t *testing.T) {
+	h, _, _ := newHub(t)
+	now := time.Now()
+	later := now.Add(time.Hour)
+	read := func() []Limit { return h.State().Limits }
+	windows := func(pct float64) []Limit {
+		return []Limit{{Kind: "five_hour", PercentUsed: pct, ResetsAt: later}, {Kind: "seven_day", PercentUsed: pct + 1}}
+	}
+	if got := read(); got == nil || len(got) != 0 {
+		t.Fatalf("limits = %#v before any reading, want an empty list", got)
+	}
+
+	h.SetLimits("claude", time.Time{}, windows(10))
+	h.SetLimits("claude", time.Time{}, windows(11))
+	if got := read(); len(got) != 2 || got[0].PercentUsed != 10 || got[0].Agent != "claude" || got[1].Kind != "seven_day" {
+		t.Fatalf("limits = %+v; a reading of unknown age fills in once, and no more", got)
+	}
+	h.SetLimits("claude", now, windows(20))
+	h.SetLimits("claude", now.Add(-time.Minute), windows(30))
+	h.SetLimits("claude", now, windows(31))
+	h.SetLimits("claude", time.Time{}, windows(32))
+	h.SetLimits("claude", later, nil)
+	if got := read(); len(got) != 2 || got[0].PercentUsed != 20 || !got[0].At.Equal(now) {
+		t.Fatalf("limits = %+v; want the latest reading that had anything in it", got)
+	}
+	h.SetLimits("claude", now.Add(time.Second), windows(40))
+	if got := read(); got[0].PercentUsed != 40 {
+		t.Errorf("limits = %+v; a later reading was not taken", got)
+	}
+
+	h.SetLimits("aaa", now, []Limit{{Kind: "gone", PercentUsed: 99, ResetsAt: now.Add(-time.Second)}, {Kind: "spend_limit", PercentUsed: 5}})
+	if got := read(); len(got) != 3 || got[0].Agent != "aaa" || got[0].Kind != "spend_limit" {
+		t.Errorf("limits = %+v; want each agent's in turn, without the window that has started over", got)
+	}
 }
 
 func TestTimeline(t *testing.T) {

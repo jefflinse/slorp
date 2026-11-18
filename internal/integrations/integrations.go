@@ -74,6 +74,10 @@ type PullRequest struct {
 	Title  string `json:"title"`
 	URL    string `json:"url,omitempty"`
 	Author string `json:"author"`
+	// Branch is the branch it would merge, and Base the one it would merge
+	// into.
+	Branch string `json:"branch,omitempty"`
+	Base   string `json:"base,omitempty"`
 	// Mine is true when the user wrote it.
 	Mine  bool      `json:"mine"`
 	Draft bool      `json:"draft"`

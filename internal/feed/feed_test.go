@@ -234,8 +234,10 @@ func TestStepReportsAFailedCollection(t *testing.T) {
 func TestStepSearchesTheEffortsDirectories(t *testing.T) {
 	src := newSource("github")
 	src.found["github"] = []integrations.FeedItem{{Key: "a", Repo: "acme/widgets"}}
-	src.clones = map[string][]string{"/work/a": {"acme/widgets"}}
+	src.pulls = map[string][]integrations.PullRequest{"github": {{Repo: "Acme/Widgets", Number: 7, Branch: "feat", Base: "main"}}}
+	src.clones = map[string][]string{"/work/a": {"acme/widgets"}, "/work/c": {"acme/widgets"}}
 	p, h, k := newPoller(t, src, "/work/a", "/work/b")
+	h.SetRoster("claude", []hub.Session{{ID: "s", Agent: "claude", Cwd: "/work/c", Branch: "feat"}, {ID: "s2", Agent: "claude", Cwd: "/work/c"}})
 	e, err := k.Create("A", "")
 	if err != nil {
 		t.Fatal(err)
@@ -245,8 +247,11 @@ func TestStepSearchesTheEffortsDirectories(t *testing.T) {
 	}
 
 	p.Step(ctx, false)
-	if len(src.scanned) != 1 || !reflect.DeepEqual(src.scanned[0], []string{"/work/a", "/work/b"}) {
-		t.Errorf("searched %v, want the efforts' directories", src.scanned)
+	if !reflect.DeepEqual(src.scanned, [][]string{{"/work/a", "/work/b"}, {"/work/c"}}) {
+		t.Errorf("searched %v, want the efforts' directories, then the sessions' once each", src.scanned)
+	}
+	if got := h.Sessions(); got[0].Pull+got[1].Pull != "Acme/Widgets#7" {
+		t.Errorf("sessions = %+v, want the one on the branch matched to its pull request", got)
 	}
 	if got := feedItems(h); len(got) != 1 || got[0].Effort != e.ID || got[0].EffortVia != kb.ViaDir {
 		t.Errorf("items = %+v, want the item filed by the checkout that was found", got)

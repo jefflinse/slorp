@@ -34,7 +34,7 @@ const listQuery = `query {
   mine: search(query: "` + mineSearch + `", type: ISSUE, first: 50) { nodes { ...pr } }
   review: search(query: "` + reviewSearch + `", type: ISSUE, first: 50) { nodes { ...pr } }
 }
-fragment pr on PullRequest { number title url isDraft updatedAt reviewDecision headRefOid
+fragment pr on PullRequest { number title url isDraft updatedAt reviewDecision headRefOid headRefName baseRefName
   author { login __typename }
   repository { nameWithOwner viewerPermission } }`
 
@@ -77,6 +77,8 @@ type feedPR struct {
 	ReviewDecision string    `json:"reviewDecision"`
 	Mergeable      string    `json:"mergeable"`
 	Head           string    `json:"headRefOid"`
+	Branch         string    `json:"headRefName"`
+	Base           string    `json:"baseRefName"`
 	Author         struct {
 		Login string `json:"login"`
 		Type  string `json:"__typename"`
@@ -275,7 +277,7 @@ func survey(mine, review []feedPR) Found {
 // pull is the pull request as the user's list of them shows it, before
 // anything is said about whose move it is.
 func (p feedPR) pull(mine bool) PullRequest {
-	pr := PullRequest{Repo: p.Repository.Name, Number: p.Number, Title: p.Title, Author: p.Author.Login, Mine: mine, Draft: p.IsDraft,
+	pr := PullRequest{Repo: p.Repository.Name, Number: p.Number, Title: p.Title, Author: p.Author.Login, Branch: p.Branch, Base: p.Base, Mine: mine, Draft: p.IsDraft,
 		At: p.UpdatedAt, Awaiting: p.ReviewRequests.TotalCount, Checks: orWord(checkWords[p.checks()], "running"), Conflicts: p.Mergeable == "CONFLICTING"}
 	if !p.detailed {
 		pr.Checks = "unknown"

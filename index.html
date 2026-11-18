@@ -59,6 +59,14 @@ h1, h2, h3, p { margin: 0; }
 .model { color: var(--ink3); font-size: 12px; white-space: nowrap; }
 .used { display: inline-flex; align-items: center; padding: 2px 10px 2px 8px; border-radius: 99px; color: var(--ink2); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums;
   background: color-mix(in srgb, var(--k, var(--ink3)) 14%, transparent); border: 1px solid color-mix(in srgb, var(--k, var(--ink3)) 32%, transparent); }
+.lim { color: var(--ink3); font-size: 12px; }
+.lim .meter { width: 44px; }
+.pr { display: inline-flex; align-items: center; white-space: nowrap; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--ink2); font-size: 11.5px; font-weight: 500; line-height: 1.5; text-decoration: none; }
+a.pr:hover { border-color: var(--k-github); color: var(--ink); }
+.pr.bad { color: var(--err); border-color: color-mix(in srgb, var(--err) 45%, transparent); }
+.pr.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.pr.good { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.btn .kd { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 6px; background: var(--k); vertical-align: middle; }
 .used i { width: 6px; height: 6px; border-radius: 50%; margin-right: 6px; background: var(--k, var(--ink3)); }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ink3); margin-right: 6px; vertical-align: 1px; flex: none; }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; background: var(--raised); }
@@ -207,7 +215,8 @@ a.btn { display: inline-block; text-decoration: none; color: inherit; }
 select.btn { appearance: none; padding-right: 24px; background-image: linear-gradient(45deg, transparent 50%, var(--ink3) 50%), linear-gradient(135deg, var(--ink3) 50%, transparent 50%); background-position: calc(100% - 13px) 50%, calc(100% - 9px) 50%; background-size: 4px 4px; background-repeat: no-repeat; }
 .need { margin-top: 22px; padding: 16px 18px; background: var(--raised); border: 1px solid var(--line); border-radius: 11px; }
 .need .ask { font-size: 16px; font-weight: 500; line-height: 1.4; margin: 4px 0 14px; }
-.need .replies { display: flex; flex-wrap: wrap; gap: 8px; }
+.need .replies, .livebox .replies { display: flex; flex-wrap: wrap; gap: 8px; }
+.livebox .replies { margin-bottom: 10px; }
 .need textarea { display: block; width: 100%; min-height: 64px; margin-top: 12px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); resize: vertical; line-height: 1.45; }
 .need textarea.drafted { min-height: 104px; }
 .need .send { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; color: var(--ink3); font-size: 12px; }
@@ -311,6 +320,9 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
 #news { bottom: 70px; transform: translate(-50%, 140px); }
 #news span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+@media (max-width: 1320px) { .model { display: none; } }
+@media (max-width: 1140px) { .lim .meter { display: none; } }
+@media (max-width: 1020px) { .used, .tbl .hide { display: none; } }
 @media (max-width: 1180px) {
   .split.sided, .split.sided.shut { grid-template-columns: minmax(320px, 410px) 1fr; }
   .split.sided .going { display: block; }
@@ -318,7 +330,7 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
 }
 @media (max-width: 860px) {
   .top { gap: 10px; overflow-x: auto; }
-  .model, .used { display: none; }
+  .model, .used, .lim { display: none; }
   .split, .split.narrow, .split.sided, .split.sided.shut { grid-template-columns: 1fr; height: auto; }
   .pane.list { border-right: 0; border-bottom: 1px solid var(--line); max-height: 48vh; }
   .pane.detail, .page { padding: 20px 16px 48px; }
@@ -727,7 +739,7 @@ function briefing(items) {
 
 function rowHtml(it, act = 'select') {
   const grouped = act === 'select' ? state.groupBy : 'effort';
-  const meta = `${grouped === 'source' ? '' : kindBadge(it.kind)}${it.live && it.session ? roleChip(it.session) : ''}${grouped === 'effort' ? '' : `<span>${esc(effortById(effortOf(it)).name)}</span>`}`;
+  const meta = `${grouped === 'source' ? '' : kindBadge(it.kind)}${it.live && it.session ? roleChip(it.session) + pullChip(it.session) : ''}${grouped === 'effort' ? '' : `<span>${esc(effortById(effortOf(it)).name)}</span>`}`;
   return `<button class="row ${it.urgency} ${state.view === 'attention' && it.id === state.sel ? 'sel' : ''} ${it.id === freshId ? 'fresh' : ''}" data-act="${act}" data-id="${it.id}" style="${kindColor(it.kind)}">
     ${title(it, 't')}
     ${it.subtitle && state.fluent ? `<span class="st">${esc(it.subtitle)}</span>` : ''}
@@ -904,6 +916,44 @@ function contextUse(s, brief) {
   return `<span class="ctx ${pct >= 90 ? 'full' : pct >= 75 ? 'high' : ''}" title="${about}, of what the model can take: ${tokens(s.contextTokens)} of ${tokens(s.contextWindow)}"><span class="meter"><i style="width:${Math.min(100, pct)}%"></i></span>${brief ? `${pct}%` : `${tokens(s.contextTokens)} / ${tokens(s.contextWindow)} (${pct}%)`}</span>`;
 }
 
+/* A session and the pull request made from the branch it is on. */
+const pullKey = p => `${p.repo}#${p.number}`;
+const pullOf = s => s.pull ? pulls.find(p => pullKey(p) === s.pull) : null;
+const sessionsOn = p => (live || []).filter(s => s.pull === pullKey(p));
+const pullState = p => p.conflicts ? ['conflicts', 'bad'] : p.checks === 'failing' ? ['checks failing', 'bad'] : p.changesRequested ? ['changes requested', 'warn']
+  : p.draft ? ['draft', ''] : p.checks === 'running' ? ['checks running', ''] : p.approvals ? ['approved', 'good'] : ['open', ''];
+function pullChip(s, linked) {
+  const p = pullOf(s);
+  if (!p) return '';
+  const [word, tone] = pullState(p), text = `PR #${p.number} · ${word}`, about = esc(`${p.title} (${pullKey(p)}), as GitHub last reported it`);
+  return linked && /^https:\/\//.test(p.url || '')
+    ? `<a class="pr ${tone}" data-act="noop" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer" title="${about}">${text} ↗</a>`
+    : `<span class="pr ${tone}" title="${about}">${text}</span>`;
+}
+/* What could be said to a session about its pull request, each as a button
+   that fills the reply box named by box and sends nothing. */
+function pullAsks(p, box) {
+  if (!p) return '';
+  const where = /^https:\/\//.test(p.url || '') ? p.url : pullKey(p), whose = p.mine ? 'your' : 'the';
+  const asks = [
+    p.checks === 'failing' && ['Fix the failing checks', `The checks are failing on ${whose} pull request ${where}. Look at what failed and fix it.`],
+    p.conflicts && ['Resolve the conflicts', `${cap(whose)} pull request ${where} conflicts with ${p.base || 'its base branch'}. Bring the branch up to date and resolve the conflicts.`],
+    p.changesRequested && ['Address the review', `A reviewer asked for changes on ${whose} pull request ${where}. Read the review and address it.`],
+  ].filter(Boolean);
+  return asks.map(([label, text]) => `<button class="btn" data-act="fill" data-box="${box}" data-text="${esc(text)}" title="From GitHub: fills the box, sends nothing"><i class="kd" style="${kindColor('github')}"></i>${label}</button>`).join('');
+}
+
+/* The user's usage windows with each agent's provider, for the top bar. */
+const LIMITS = { five_hour: ['5h', '5-hour'], seven_day: ['7d', 'weekly'], spend_limit: ['spend', 'spend'] };
+const until = iso => { const m = Math.max(0, Math.round((new Date(iso) - Date.now()) / 60000)); return m < 60 ? `in ${m}m` : m < 1440 ? `in ${Math.floor(m / 60)}h ${m % 60}m` : `in ${Math.floor(m / 1440)}d ${Math.floor(m % 1440 / 60)}h`; };
+function limitMeters() {
+  return limits.map(l => {
+    const plain = l.kind.replace(/_/g, ' '), [short, long] = LIMITS[l.kind] || [plain, plain], pct = Math.round(l.percentUsed);
+    const about = `${KINDS[l.agent] || l.agent}: ${pct}% of your ${long} allowance is used.${l.resetsAt ? ` It starts over ${until(l.resetsAt)}.` : ''}${l.at ? ` Read ${ago(minsSince(l.at))}.` : ''}`;
+    return `<span class="ctx lim ${pct >= 90 ? 'full' : pct >= 75 ? 'high' : ''}" title="${esc(about)}">${esc(short)}<span class="meter"><i style="width:${Math.min(100, pct)}%"></i></span>${pct}%</span>`;
+  }).join('');
+}
+
 /* A session's role: the kind of session it is, as the user named the kinds. */
 const ATTENTION = { all: 'Asks whenever it needs you', stopped: 'Asks only when it is stopped', none: 'Never asks' };
 const roleById = id => knowledge.roles.find(r => r.id === id);
@@ -1034,7 +1084,7 @@ function viewActivity() {
    service's session list; everything outside Activity is still mock data. */
 
 let live = null, liveItems = [], liveEfforts = [], summarizer = {}, settings = {}, isOffline = false;
-let knowledge = { watch: [], questions: [], context: [], routing: [], roles: [] }, integrations = [], lookups = [], feeds = {}, pulls = [];
+let knowledge = { watch: [], questions: [], context: [], routing: [], roles: [] }, integrations = [], lookups = [], feeds = {}, pulls = [], limits = [];
 const LIVE_STATUS = { waiting: ['waiting', 'awaiting you'], failed: ['error', 'failed'], working: ['running', 'working'], idle: ['idle', 'idle'], done: ['done', 'finished'] };
 const minsSince = iso => Math.max(0, (Date.now() - new Date(iso).getTime()) / 60000);
 const tilde = p => p.replace(/^\/Users\/[^/]+/, '~');
@@ -1056,6 +1106,7 @@ async function refresh(force) {
     lookups = data.lookups || [];
     feeds = data.feeds || {};
     pulls = data.pullRequests || [];
+    limits = data.limits || [];
     isOffline = false;
     announce(liveItems);
   } catch (e) { isOffline = live !== null; }
@@ -1105,6 +1156,20 @@ const alsoIn = (effort, except) => `<div class="sec"><div class="label"><span>Al
 
 /* A feed item: nothing to reply to, only somewhere to go. Moving it files its
    whole repository, since that is what the next items from there go by. */
+/* The sessions working on the branch a pull request's item is about, each with a box to tell it so. */
+function onBranch(it) {
+  const p = pulls.find(x => x.url && x.url === it.url), on = p ? sessionsOn(p) : [];
+  if (!on.length) return '';
+  return `<div class="sec"><div class="label"><span>${on.length === 1 ? 'A session is' : `${cap(num(on.length))} sessions are`} on this branch</span></div>
+    ${on.map(s => `<div class="srow"><span class="dot ${(LIVE_STATUS[s.status] || LIVE_STATUS.idle)[0]}"></span>
+        <div class="body"><div class="ttl">${esc(clip(s.label, 90))}</div><div class="sub">${(LIVE_STATUS[s.status] || LIVE_STATUS.idle)[1]} · <span class="mono">${esc(s.branch)}</span></div></div>
+        <span class="side">${kindBadge(s.agent)}</span></div>
+      ${s.canReply
+        ? `<div class="livebox">${pullAsks(p, `live-${s.id}`) ? `<div class="replies">${pullAsks(p, `live-${s.id}`)}</div>` : ''}<textarea data-keep="live-${s.id}" placeholder="Tell this session…"></textarea>
+            <div class="send"><span>Suggestions fill the box; nothing is sent until you press Send.</span><button class="btn go" data-act="liveSend" data-id="${s.id}">Send</button></div></div>`
+        : `<div class="none" style="margin:4px 0 12px">It isn't running the Slorp mod, so tell it in its terminal: <span class="mono">${esc(shortPath(s.cwd))}</span></div>`}`).join('')}</div>`;
+}
+
 function feedItemDetail(it) {
   const real = it.effort !== 'unsorted';
   const move = `<select class="btn" data-change="repoMove" data-id="${it.id}" aria-label="File this repository under an effort">
@@ -1118,6 +1183,7 @@ function feedItemDetail(it) {
       ${/^https:\/\//.test(it.url || '') ? `<div class="replies"><a class="btn go" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">Open on ${esc(it.src)} ↗</a>
         <span class="none" style="align-self:center">Slorp only reads ${esc(it.src)}. Anything you do there, you do there.</span></div>` : ''}</div>
     ${barFor(it, `<button class="btn" data-act="livePark" data-id="${it.id}">Park as open question</button>${move}`)}
+    ${onBranch(it)}
     <div class="sec"><div class="label"><span>What's going on</span></div><p class="prose">${esc(it.summary)}</p>
       <div class="none" style="margin-top:8px">As ${esc(it.src)} reported it ${ago(minsSince((feeds[it.source] || {}).at || it.at))}. No model wrote any of this.</div></div>
     ${alsoIn(it.effort, '')}
@@ -1223,15 +1289,16 @@ function liveItemDetail(it) {
     answer = `<div class="none">Slorp was not shown this permission prompt, so answer it in the session's terminal: <span class="mono">${esc(shortPath(s.cwd))}</span></div>`;
   } else if (s.canReply) {
     const quick = it.replies.map(r => `<button class="btn" data-act="liveSuggest" data-id="${it.id}" data-text="${esc(r)}">${esc(r)}</button>`).join('');
-    answer = `${quick ? `<div class="replies">${quick}</div>` : ''}
+    const asks = pullAsks(pullOf(s), `item-${it.id}`);
+    answer = `${quick || asks ? `<div class="replies">${quick}${asks}</div>` : ''}
       <textarea data-keep="item-${it.id}" placeholder="Reply to this session…"></textarea>
-      <div class="send"><span>${quick ? `${spark}Suggestions fill the box; nothing is sent until you press Send.` : 'Arrives as your next message once the session is idle.'}</span>
+      <div class="send"><span>${quick || asks ? `${quick ? spark : ''}Suggestions fill the box; nothing is sent until you press Send.` : 'Arrives as your next message once the session is idle.'}</span>
       <button class="btn go" data-act="liveItemSend" data-id="${it.id}">Send</button></div>`;
   } else {
     answer = `<div class="none">This session isn't running the Slorp mod, so answer it in its terminal: <span class="mono">${esc(shortPath(s.cwd))}</span></div>`;
   }
   return `<div class="inner">
-    <div class="crumb">${s.effort ? `<button class="eff" data-act="effort" data-id="${s.effort}">${esc(effortById(s.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${s.effortVia === 'guess' ? `<span>${spark}filed by the model</span>` : ''}${kindBadge(it.kind, it.src)}${roleChip(s)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span>${s.branch ? `<span class="mono">${esc(s.branch)}</span>` : ''}${s.model ? `<span>${runsOn(s)}</span>` : ''}${contextUse(s)}</div>
+    <div class="crumb">${s.effort ? `<button class="eff" data-act="effort" data-id="${s.effort}">${esc(effortById(s.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${s.effortVia === 'guess' ? `<span>${spark}filed by the model</span>` : ''}${kindBadge(it.kind, it.src)}${roleChip(s)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span>${s.branch ? `<span class="mono">${esc(s.branch)}</span>` : ''}${pullChip(s, true)}${s.model ? `<span>${runsOn(s)}</span>` : ''}${contextUse(s)}</div>
     ${renaming === s.id
       ? `<form class="rename" data-form="name" data-id="${s.id}"><input name="name" data-keep="name-${s.id}" value="${esc(s.label)}" maxlength="80" placeholder="Leave empty to go back to its own title" aria-label="Name for this session">
           <button class="btn go">Save</button><button type="button" class="btn" data-act="renameCancel">Cancel</button></form>`
@@ -1306,7 +1373,7 @@ function liveDetail(s) {
   if (s.lastReply) lines.push([s.agent, s.lastReply]);
   const sent = (s.replies || []).map(r => `<div><b>${esc(r.state)}</b> · ${esc(r.text)}</div>`).join('');
   const box = s.canReply
-    ? `<div class="livebox"><textarea data-keep="live-${s.id}" placeholder="Reply to this session…"></textarea>
+    ? `<div class="livebox">${pullAsks(pullOf(s), `live-${s.id}`) ? `<div class="replies">${pullAsks(pullOf(s), `live-${s.id}`)}</div>` : ''}<textarea data-keep="live-${s.id}" placeholder="Reply to this session…"></textarea>
         <div class="send"><span>Arrives as your next message once the session is idle.</span>
         <button class="btn go" data-act="liveSend" data-id="${s.id}">Send</button></div>
         ${sent ? `<div class="sent">${sent}</div>` : ''}</div>`
@@ -1328,7 +1395,7 @@ function viewActivityLive() {
     return `<tr class="s ${open ? 'open' : ''}" data-act="expand" data-id="${s.id}">
         <td class="st"><span class="dot ${dot}"></span>${label}${s.waitingFor ? `<div class="dim">${esc(s.waitingFor)}</div>` : ''}</td>
         <td><div>${what}</div>${state.fluent && sub ? `<div class="doing">${esc(clip(sub, 220))}</div>` : ''}</td>
-        <td class="dim">${kindBadge(s.agent)}${s.kind === 'background' ? ' · background' : ''}${s.canReply ? ' · connected' : ''}${s.model ? `<div style="margin-top:5px">${runsOn(s)}</div>` : ''}${s.role ? `<div style="margin-top:5px">${roleChip(s)}</div>` : ''}</td>
+        <td class="dim">${kindBadge(s.agent)}${s.kind === 'background' ? ' · background' : ''}${s.canReply ? ' · connected' : ''}${s.model ? `<div style="margin-top:5px">${runsOn(s)}</div>` : ''}${s.role ? `<div style="margin-top:5px">${roleChip(s)}</div>` : ''}${s.pull ? `<div style="margin-top:5px">${pullChip(s, true)}</div>` : ''}</td>
         <td class="dim hide">${contextUse(s)}</td>
         <td class="dim hide">${s.effort ? esc(effortById(s.effort).name) : ''}</td>
         <td class="dim hide mono" title="${esc(s.cwd)}">${esc(shortPath(s.cwd))}</td>
@@ -1396,7 +1463,7 @@ function viewPulls() {
     return `<tr>
         <td class="st">${standing}</td>
         <td><div>${name}</div><div class="doing">${esc(p.needs)}</div>
-          <div class="dim mono" style="margin-top:3px">${esc(p.repo)}#${p.number} · ${p.mine ? 'yours' : `by ${esc(p.author || 'someone')}`}</div></td>
+          <div class="dim mono" style="margin-top:3px">${esc(p.repo)}#${p.number} · ${p.mine ? 'yours' : `by ${esc(p.author || 'someone')}`}${live && sessionsOn(p).length ? ` · session: ${esc(sessionsOn(p).map(s => clip(s.label, 40)).join(', '))}` : ''}</div></td>
         <td class="dim">${pullReviews(p)}</td>
         <td class="dim ${p.checks === 'failing' ? 'bad' : ''}">${esc(p.checks)}</td>
         <td class="dim ${p.conflicts ? 'bad' : ''}">${p.conflicts ? 'conflicts' : '—'}</td>
@@ -1518,7 +1585,7 @@ function render() {
   const n = activeItems().length;
   $('#nav').innerHTML = VIEWS.map(v => `<button class="${state.view === v ? 'on' : ''}" data-act="view" data-view="${v}">${VIEW_NAMES[v] || cap(v)}${v === 'attention' && n ? `<span class="count">${n}</span>` : ''}</button>`).join('');
   $('#tools').innerHTML = `
-    <span class="model"><span class="dot ${live && isOffline ? 'error' : 'running'}"></span>${live ? (isOffline ? 'service offline' : `live · ${summarizer.model ? summarizer.model.split('/').pop() : summarizer.error || 'no local model'}`) : 'qwen3:14b · local · caught up'}</span>${live ? usageTotal() : ''}
+    <span class="model"><span class="dot ${live && isOffline ? 'error' : 'running'}"></span>${live ? (isOffline ? 'service offline' : `live · ${summarizer.model ? summarizer.model.split('/').pop() : summarizer.error || 'no local model'}`) : 'qwen3:14b · local · caught up'}</span>${live ? usageTotal() + limitMeters() : ''}
     <span class="seg" role="group" aria-label="Voice" title="Fluent shows what the model wrote. Raw shows what the sources said. (r)">
       <button class="${state.fluent ? 'on' : ''}" data-act="fluent" data-on="1">Fluent</button><button class="${state.fluent ? '' : 'on'}" data-act="fluent" data-on="0">Raw</button></span>
     <button class="icon" data-act="theme" title="Light or dark" aria-label="Toggle theme">◐</button>
@@ -1551,6 +1618,12 @@ const actions = {
   group: d => { state.groupBy = d.by; },
   srcFilter: d => { state.srcFilter = d.src; },
   collapse: d => { state.collapsed[d.key] = !state.collapsed[d.key]; },
+  noop: () => false,
+  fill: d => {
+    const ta = document.querySelector(`textarea[data-keep="${d.box}"]`);
+    ta.value = d.text; ta.focus();
+    return false;
+  },
   rename: d => { renaming = d.id; renameFocus = true; },
   renameCancel: () => { renaming = null; },
   side: () => { state.sideShut = !state.sideShut; },

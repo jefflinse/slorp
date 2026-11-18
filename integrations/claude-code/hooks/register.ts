@@ -18,6 +18,9 @@ let cwd = ''
 let contextWindow = 0
 /** The engine's estimate of the session's cost so far, in US dollars. */
 let costUsd = 0
+/** The account's usage windows as last read, and when; zero for a reading of unknown age. */
+let rateLimits: object[] = []
+let measuredAt = 0
 let isPolling = false
 
 async function post($: EngineInterface, path: string, body: object) {
@@ -36,9 +39,10 @@ function report($: EngineInterface, type: string, fields: object = {}) {
     .catch(() => {})
 }
 
-function measured(window: number, usd: number | undefined) {
-  contextWindow = window
-  costUsd = usd ?? costUsd
+function measured(usage: { context: { window: number }; cost?: { usd: number }; rateLimits: object[] }, at: number) {
+  contextWindow = usage.context.window
+  costUsd = usage.cost?.usd ?? costUsd
+  if (usage.rateLimits.length) [rateLimits, measuredAt] = [usage.rateLimits, at]
 }
 
 async function deliver($: EngineInterface, reply: Reply) {
@@ -52,7 +56,7 @@ async function poll($: EngineInterface) {
   isPolling = true
   try {
     const sessionId = await $.session.id()
-    const claimed = await post($, '/api/bridge/poll', { agent: AGENT, sessionId, cwd, contextWindow, costUsd })
+    const claimed = await post($, '/api/bridge/poll', { agent: AGENT, sessionId, cwd, contextWindow, costUsd, rateLimits, measuredAt })
     for (const reply of (claimed?.replies ?? []) as Reply[]) {
       void deliver($, reply).catch(() => {})
     }
@@ -105,7 +109,8 @@ async function askSlorp($: EngineInterface, tool: string, input: unknown, abando
  * to Slorp as well as the terminal's own dialog, and whichever the user
  * answers first decides it; a question is answered there with the options
  * the user picked. Each poll also carries the size of the model's context
- * window and the engine's estimate of the session's cost.
+ * window, the engine's estimate of the session's cost, and the account's
+ * usage windows as this session last read them.
  */
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
@@ -113,14 +118,14 @@ export const register: Register = (on, options) => {
     cwd = e.cwd
     void $.session
       .usage()
-      .then(usage => measured(usage.context.window, usage.cost?.usd))
+      .then(usage => measured(usage, 0))
       .catch(() => {})
     $.clock.every(POLL_MS, () => void poll($))
     return next(e)
   })
 
   on('session.measure', ($, e, next) => {
-    measured(e.context.window, e.cost?.usd)
+    measured(e, Date.now())
     return next(e)
   })
 

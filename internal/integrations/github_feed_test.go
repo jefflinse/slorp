@@ -318,12 +318,14 @@ func TestFeedListsYourPullRequestsAndWhoseMoveItIs(t *testing.T) {
 func TestFeedSaysHowAPullRequestStands(t *testing.T) {
 	got := surveyed(t,
 		[]node{own(both(reviews("APPROVED", "CHANGES_REQUESTED", "APPROVED", "DISMISSED"), set("reviewRequests", node{"totalCount": 3}),
-			set("author", node{"login": "you", "__typename": "User"}), set("mergeable", "CONFLICTING"), checks("PENDING")))},
+			set("author", node{"login": "you", "__typename": "User"}), set("mergeable", "CONFLICTING"), checks("PENDING"),
+			set("headRefName", "feat/thing"), set("baseRefName", "main")))},
 		[]node{asked(nil), asked(both(set("number", 11), set("isDraft", true), set("url", "javascript:alert(1)"), checks("ERROR"))), asked(func(p node) { clear(p) })}).PullRequests
 	if len(got) != 3 {
 		t.Fatalf("listed %d pull requests, want yours and the two you are asked to review: %+v", len(got), got)
 	}
 	want := PullRequest{Repo: "Acme/Widgets", Number: 7, Title: "Add a thing", URL: "https://github.com/Acme/Widgets/pull/7", Author: "you", Mine: true,
+		Branch: "feat/thing", Base: "main",
 		At: time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC), Approvals: 2, ChangesRequested: 1, Awaiting: 3, Checks: "running", Conflicts: true,
 		OnYou: true, Urgency: "awaiting", Needs: "It conflicts with its base branch."}
 	if got[0] != want {
@@ -367,6 +369,11 @@ func TestFeedMakesOnlyFixedReadOnlyRequests(t *testing.T) {
 	list := []string{"gh", "api", "graphql", "-f", "query=" + listQuery}
 	if !reflect.DeepEqual(r.argv, list) || r.dir != "" {
 		t.Errorf("with nothing listed, last ran %q in %q; want only the listing", r.argv, r.dir)
+	}
+	for _, field := range []string{"headRefName", "baseRefName"} {
+		if !strings.Contains(listQuery, " "+field) {
+			t.Errorf("the listing does not ask for %s, so no session could be matched to its pull request", field)
+		}
 	}
 
 	g := &github{mine: []node{own(nil)}, review: requested(23)}
