@@ -73,6 +73,8 @@ type Launcher interface {
 	// Stop ends a session by the id its agent's commands take, keeping its
 	// conversation.
 	Stop(ctx context.Context, job string) error
+	// Install gives the agent the Slorp plugin, or turns it back on.
+	Install(ctx context.Context) error
 }
 
 // directory returns path as the absolute directory it names, reading a
@@ -291,6 +293,19 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		feeds.Rescan()
 		w.WriteHeader(http.StatusNoContent)
 	}
+
+	mux.HandleFunc("POST /api/plugins/{agent}", func(w http.ResponseWriter, r *http.Request) {
+		launcher := launchers[r.PathValue("agent")]
+		if launcher == nil {
+			http.Error(w, "Slorp cannot install a plugin for this agent", http.StatusNotFound)
+			return
+		}
+		if err := launcher.Install(r.Context()); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 
 	mux.HandleFunc("POST /api/efforts", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {

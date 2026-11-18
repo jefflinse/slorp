@@ -47,10 +47,14 @@ type Adapter struct {
 	// Plugin is a directory holding the Slorp plugin, loaded into every
 	// session started here. Empty when Claude Code has it installed.
 	Plugin string
+	// URL is where the plugin reaches Slorp, set when Slorp installs it.
+	URL string
 
 	tails map[string]*tail
-	once  sync.Once
-	wake  chan struct{}
+	// pluginAt is when Claude Code was last asked whether it has the plugin.
+	pluginAt time.Time
+	once     sync.Once
+	wake     chan struct{}
 }
 
 // woken is signalled when the roster is worth reading before the next tick.
@@ -68,6 +72,7 @@ func (a *Adapter) Run(ctx context.Context) {
 	t := time.NewTicker(a.Interval)
 	defer t.Stop()
 	for {
+		a.checkPlugin(ctx)
 		if err := a.poll(ctx); err != nil && ctx.Err() == nil {
 			log.Printf("claude: %v", err)
 		}

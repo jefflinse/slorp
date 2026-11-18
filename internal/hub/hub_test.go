@@ -1390,6 +1390,37 @@ func TestBridgeCannotOpenASessionItsRosterDoesNotList(t *testing.T) {
 	}
 }
 
+func TestSetPlugin(t *testing.T) {
+	h, _, _ := newHub(t)
+	if got := h.State().Plugins; got == nil || len(got) != 0 {
+		t.Fatalf("plugins = %#v before any agent has said, want an empty map", got)
+	}
+	ticks, stop := h.Subscribe()
+	defer stop()
+	told := func() bool {
+		select {
+		case <-ticks:
+			return true
+		default:
+			return false
+		}
+	}
+
+	h.SetPlugin(agent, Plugin{})
+	if got, ok := h.State().Plugins[agent]; !ok || got != (Plugin{}) || !told() {
+		t.Errorf("plugins = %+v, want the agent listed as lacking it and subscribers told", h.State().Plugins)
+	}
+	h.SetPlugin(agent, Plugin{})
+	if told() {
+		t.Error("subscribers were told of a plugin that had not changed")
+	}
+	want := Plugin{Installed: true, Enabled: true, Version: "0.1.4"}
+	h.SetPlugin(agent, want)
+	if got := h.State().Plugins[agent]; got != want || !told() {
+		t.Errorf("plugin = %+v, want %+v and subscribers told", got, want)
+	}
+}
+
 func TestRetireDropsSessionsWhoseBridgeWentSilent(t *testing.T) {
 	h, _, _ := newHub(t)
 	for _, id := range []string{"silent", "polling"} {

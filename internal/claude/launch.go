@@ -61,7 +61,7 @@ func (a *Adapter) withPlugin(args []string) []string {
 // Stop ends a background session by the id Claude Code's commands take. Its
 // conversation is kept.
 func (a *Adapter) Stop(ctx context.Context, job string) error {
-	_, err := a.run(ctx, "", "stop", job)
+	_, err := a.run(ctx, launchTimeout, "", "stop", job)
 	a.poke()
 	return err
 }
@@ -70,7 +70,7 @@ func (a *Adapter) launch(ctx context.Context, dir string, args []string, prompt 
 	if prompt != "" {
 		args = append(args, "--", prompt)
 	}
-	out, err := a.run(ctx, dir, args...)
+	out, err := a.run(ctx, launchTimeout, dir, args...)
 	if err != nil {
 		return "", err
 	}
@@ -99,8 +99,8 @@ func (a *Adapter) launch(ctx context.Context, dir string, args []string, prompt 
 
 // run runs Claude Code from dir and returns what it printed, or as an error
 // what it said went wrong.
-func (a *Adapter) run(ctx context.Context, dir string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, launchTimeout)
+func (a *Adapter) run(ctx context.Context, within time.Duration, dir string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, within)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, a.Bin, args...)
 	cmd.Dir = dir

@@ -15,6 +15,7 @@
   --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --top: 52px;
+  --notice: 0px;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -106,7 +107,10 @@ a.pr:hover { border-color: var(--k-github); color: var(--ink); }
 .menu .pop p { padding: 6px 9px 4px; color: var(--ink3); font-size: 12px; }
 
 /* Panes */
-.split { display: grid; grid-template-columns: minmax(320px, 410px) 1fr; height: calc(100vh - var(--top)); }
+.split { display: grid; grid-template-columns: minmax(320px, 410px) 1fr; height: calc(100vh - var(--top) - var(--notice)); }
+#notice { height: var(--notice); display: flex; align-items: center; gap: 12px; padding: 0 16px; overflow: hidden; border-bottom: 1px solid var(--line); background: var(--sel); font-size: 13px; }
+#notice:empty { display: none; }
+#notice span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .split.narrow { grid-template-columns: 250px 1fr; }
 .pane { overflow-y: auto; min-width: 0; }
 .pane.list { border-right: 1px solid var(--line); background: var(--panel); }
@@ -376,6 +380,7 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
   <nav class="nav" id="nav"></nav>
   <div class="tools" id="tools"></div>
 </header>
+<div id="notice" role="status"></div>
 <main id="main"></main>
 <div id="modal"></div>
 <div id="toast" role="status"></div>
@@ -1215,7 +1220,7 @@ function viewActivity() {
    service's session list; everything outside Activity is still mock data. */
 
 let live = null, liveItems = [], liveEfforts = [], summarizer = {}, settings = {}, isOffline = false;
-let knowledge = { watch: [], questions: [], context: [], routing: [], roles: [] }, integrations = [], lookups = [], feeds = {}, pulls = [], limits = [], wrapups = {}, archive = [], archiveDocs = {};
+let knowledge = { watch: [], questions: [], context: [], routing: [], roles: [] }, integrations = [], lookups = [], feeds = {}, pulls = [], limits = [], wrapups = {}, archive = [], plugins = {}, archiveDocs = {};
 /* Fetches a closed session's timeline, once per time it closes. */
 function fetchArchived(id) {
   const listed = archive.find(a => a.id === id);
@@ -1246,6 +1251,7 @@ async function refresh(force) {
     limits = data.limits || [];
     wrapups = data.wrapups || {};
     archive = data.archive || [];
+    plugins = data.plugins || {};
     isOffline = false;
     announce(liveItems);
   } catch (e) { isOffline = live !== null; }
@@ -1273,6 +1279,16 @@ function api(method, path, body, done) {
 }
 
 /* Asks the service to do something outside itself, and says why when it could not. */
+/* Says when Claude Code lacks the Slorp mod, and offers to put that right. */
+let installing = false;
+function modNotice() {
+  const p = plugins.claude;
+  if (!live || !p || (p.installed && p.enabled)) return '';
+  const off = p.installed;
+  return `<span>${off ? 'The Slorp mod is turned off in Claude Code' : "Claude Code doesn't have the Slorp mod"}, so its sessions can be watched here but not answered.</span>
+    <button class="btn go" data-act="installMod" ${installing ? 'disabled' : ''}>${installing ? (off ? 'Turning it on…' : 'Installing…') : off ? 'Turn it on' : 'Install it'}</button>`;
+}
+
 function ask(path, body, done, always) {
   fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     .then(async res => { if (!res.ok) throw new Error((await res.text()).trim() || res.status); if (done) done(); })
@@ -1774,6 +1790,9 @@ function render() {
         ${live ? '' : '<button data-act="simulate">Simulate an incoming item</button>'}
         <button data-act="reset">Reset the demo</button>
         <p>Keys: j/k move · e dismiss · s snooze · r fluent/raw · 1–5 views</p></div></details>`;
+  const notice = modNotice();
+  document.documentElement.style.setProperty('--notice', notice ? '44px' : '0px');
+  $('#notice').innerHTML = notice;
   $('#main').innerHTML = main;
   $('#modal').innerHTML = modal === 'wrapup' ? wrapupModal() : modal === 'search' ? searchModal() : '';
   if (modalFocus) { modalFocus = false; $('#q')?.focus(); }
@@ -1859,6 +1878,11 @@ const actions = {
   effort: d => { state.effortSel = d.id; go('efforts'); },
   effortSel: d => { state.effortSel = d.id; },
   openItem: d => { state.sel = d.id; go('attention'); },
+  installMod: () => {
+    if (installing) return false;
+    installing = true;
+    ask('/api/plugins/claude', {}, () => toast('Done. Sessions already open pick it up after /reload-plugins or a restart.'), () => { installing = false; });
+  },
   expand: d => { state.expanded[d.id] = !state.expanded[d.id]; },
   archived: d => {
     const key = 'closed:' + d.id;

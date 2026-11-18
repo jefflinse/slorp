@@ -123,6 +123,15 @@ type Session struct {
 	attention string
 }
 
+// Plugin says whether an agent has the Slorp plugin, without which its
+// sessions can be watched but not answered.
+type Plugin struct {
+	Installed bool `json:"installed"`
+	// Enabled is false for one that is installed and turned off.
+	Enabled bool   `json:"enabled"`
+	Version string `json:"version,omitempty"`
+}
+
 // Tokens counts what a session's responses took, by how each is charged.
 type Tokens struct {
 	// In was sent fresh, CacheWrite sent and kept, CacheRead reused.
@@ -481,6 +490,8 @@ type Hub struct {
 	backfill map[string][]Exchange
 	// rostered holds the agents whose open sessions a roster lists.
 	rostered map[string]bool
+	// plugins is what each agent last said of its Slorp plugin.
+	plugins map[string]Plugin
 	// origins holds, for each session something is known of, the session
 	// it continues, empty for one that continues none.
 	origins map[string]string
@@ -495,7 +506,7 @@ type note struct {
 func New(k *kb.Store, c Cache) *Hub {
 	h := &Hub{sessions: map[string]*Session{}, subs: map[chan struct{}]struct{}{}, kb: k, notes: map[string]note{},
 		cache: c, settings: Settings{AnswerPermissions: true}, waiters: map[string]chan Decision{}, feeds: map[string]*feed{}, wrapups: map[string]Wrapup{},
-		archive: map[string]sessionDoc{}, unsettled: map[string]sessionDoc{}, started: time.Now(), origins: map[string]string{}}
+		archive: map[string]sessionDoc{}, unsettled: map[string]sessionDoc{}, started: time.Now(), origins: map[string]string{}, plugins: map[string]Plugin{}}
 	h.warn(c.Each("session", func(id string, body []byte) {
 		var d sessionDoc
 		switch {
@@ -631,6 +642,18 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 	}
 	h.sweep(agent)
 	h.fold(agent)
+	h.changed()
+}
+
+// SetPlugin records whether agent has the Slorp plugin.
+func (h *Hub) SetPlugin(agent string, p Plugin) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if was, ok := h.plugins[agent]; ok && was == p {
+		return
+	}
+	h.plugins[agent] = p
+	h.last = ""
 	h.changed()
 }
 
@@ -1090,6 +1113,9 @@ type State struct {
 	Wrapups map[string]Wrapup `json:"wrapups"`
 	// Archive lists the sessions that have closed, the latest first.
 	Archive []Archived `json:"archive"`
+	// Plugins says, for each agent that can be asked, whether it has the
+	// Slorp plugin.
+	Plugins map[string]Plugin `json:"plugins"`
 }
 
 func (h *Hub) State() State {
@@ -1101,7 +1127,7 @@ func (h *Hub) State() State {
 		feeds[id] = f.FeedStatus
 	}
 	return State{Sessions: sessions, Items: append(items(sessions), h.fed()...), Efforts: h.efforts(sessions), Summarizer: h.summ,
-		Settings: h.settings, Knowledge: h.kb.Knowledge(), Lookups: append([]Lookup{}, h.lookups...), Feeds: feeds, PullRequests: h.pulls(), Limits: h.limited(), Wrapups: maps.Clone(h.wrapups), Archive: h.archives()}
+		Settings: h.settings, Knowledge: h.kb.Knowledge(), Lookups: append([]Lookup{}, h.lookups...), Feeds: feeds, PullRequests: h.pulls(), Limits: h.limited(), Wrapups: maps.Clone(h.wrapups), Archive: h.archives(), Plugins: maps.Clone(h.plugins)}
 }
 
 func (h *Hub) efforts(sessions []Session) []Effort {

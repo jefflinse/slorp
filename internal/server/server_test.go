@@ -36,7 +36,7 @@ type fixture struct {
 	launcher *launcher
 }
 
-// launcher records what it was asked to start, reopen and stop.
+// launcher records what it was asked to start, reopen, stop and install.
 type launcher struct {
 	calls []string
 	// id is the session id a start reports, and err what every call fails with.
@@ -56,6 +56,11 @@ func (l *launcher) Resume(_ context.Context, sessionID, dir, prompt string) erro
 
 func (l *launcher) Stop(_ context.Context, job string) error {
 	l.calls = append(l.calls, "stop "+job)
+	return l.err
+}
+
+func (l *launcher) Install(context.Context) error {
+	l.calls = append(l.calls, "install")
 	return l.err
 }
 
@@ -364,7 +369,7 @@ func TestRefusesRequestsAWebPageElsewhereCouldCause(t *testing.T) {
 func TestStateIsShapedForTheUI(t *testing.T) {
 	f := newFixture(t)
 	_, body := f.do("GET", "/api/sessions", "", nil)
-	for _, field := range []string{`"sessions":[]`, `"items":[]`, `"efforts":[]`, `"watch":[]`, `"questions":[]`, `"context":[]`, `"routing":[]`, `"answerPermissions":true`, `"lookups":[]`, `"integrations":[{`, `"feeds":{}`, `"watches":[]`} {
+	for _, field := range []string{`"sessions":[]`, `"items":[]`, `"efforts":[]`, `"watch":[]`, `"questions":[]`, `"context":[]`, `"routing":[]`, `"answerPermissions":true`, `"lookups":[]`, `"integrations":[{`, `"feeds":{}`, `"watches":[]`, `"plugins":{}`} {
 		if !strings.Contains(body, field) {
 			t.Errorf("empty state lacks %s, which the page reads without checking: %s", field, body)
 		}
@@ -529,6 +534,20 @@ func TestABridgeIsNotHeardAboutASessionTheRosterDoesNotList(t *testing.T) {
 	}
 	if got := f.state().Sessions; len(got) != 1 || got[0].ID != "listed" {
 		t.Errorf("sessions = %+v, want only the one the roster lists", got)
+	}
+}
+
+func TestInstallingAnAgentsPlugin(t *testing.T) {
+	f := newFixture(t)
+	if code := f.post("/api/plugins/claude", `{}`); code != 204 || len(f.launcher.calls) != 1 || f.launcher.calls[0] != "install" {
+		t.Errorf("install = %d after %v, want it done by the agent's launcher", code, f.launcher.calls)
+	}
+	if code := f.post("/api/plugins/opencode", `{}`); code != 404 || len(f.launcher.calls) != 1 {
+		t.Errorf("install for an agent with no launcher = %d after %v, want 404 and nothing run", code, f.launcher.calls)
+	}
+	f.launcher.err = errors.New("blocked by policy")
+	if code, body := f.do("POST", "/api/plugins/claude", `{}`, nil); code != 502 || !strings.Contains(body, "blocked by policy") {
+		t.Errorf("a failed install = %d %q, want 502 with what went wrong", code, body)
 	}
 }
 
