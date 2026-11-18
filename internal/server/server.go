@@ -20,6 +20,9 @@ import (
 // agents are the agents a bridge may report for.
 var agents = map[string]bool{claude.Agent: true, opencode.Agent: true}
 
+// nameLimit is how long a name the user gives a session may be, in runes.
+const nameLimit = 80
+
 // agentOf returns the agent a bridge names, Claude Code's when it names
 // none, and refuses one Slorp does not know.
 func agentOf(w http.ResponseWriter, name string) (string, bool) {
@@ -155,6 +158,21 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, uiPath s
 			return
 		}
 		edited(w, k.Assign(r.PathValue("id"), in.Effort))
+	})
+
+	mux.HandleFunc("POST /api/sessions/{id}/name", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Name string `json:"name"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		name := []rune(strings.TrimSpace(in.Name))
+		if !h.Rename(r.PathValue("id"), string(name[:min(len(name), nameLimit)])) {
+			http.Error(w, "no such session", http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	mux.HandleFunc("POST /api/sessions/{id}/role", func(w http.ResponseWriter, r *http.Request) {

@@ -69,7 +69,7 @@ func TestItems(t *testing.T) {
 	insight := func(kind string) *Insight {
 		return &Insight{Title: "model title", Summary: "model summary", Kind: kind, Ask: "model ask", Replies: []string{"yes", "no"}}
 	}
-	base := Session{ID: "0123456789", Name: "raw-name", Status: Idle, key: "content:1", insightKey: "content:1"}
+	base := Session{ID: "0123456789", Label: "its name", Status: Idle, key: "content:1", insightKey: "content:1"}
 	with := func(edit func(*Session)) Session {
 		s := base
 		edit(&s)
@@ -80,7 +80,7 @@ func TestItems(t *testing.T) {
 		name          string
 		s             Session
 		kind, urgency string
-		title         string
+		subtitle      string
 	}{
 		{"idle with nothing said about it", with(func(s *Session) {}), "", "", ""},
 		{"model says nothing is needed", with(func(s *Session) { s.Insight = insight(KindNone) }), "", "", ""},
@@ -91,18 +91,18 @@ func TestItems(t *testing.T) {
 		{"still working, whatever the model said earlier", with(func(s *Session) { s.Insight, s.Status = insight(KindQuestion), Working }), "", "", ""},
 		{"insight is about earlier content", with(func(s *Session) { s.Insight, s.insightKey = insight(KindQuestion), "older:1" }), "", "", ""},
 		{"insight predates a context edit only", with(func(s *Session) { s.Insight, s.insightKey = insight(KindQuestion), "content:0" }), KindQuestion, "awaiting", "model title"},
-		{"permission prompt with no insight", with(func(s *Session) { s.Pending, s.Status = &Pending{Tool: "Bash", Summary: "rm x"}, Waiting }), KindPermission, "awaiting", "raw-name"},
+		{"permission prompt with no insight", with(func(s *Session) { s.Pending, s.Status = &Pending{Tool: "Bash", Summary: "rm x"}, Waiting }), KindPermission, "awaiting", ""},
 		{"permission prompt outranks a review", with(func(s *Session) {
 			s.Pending, s.Insight = &Pending{Tool: "Bash", Summary: "rm x"}, insight(KindReview)
 		}), KindPermission, "awaiting", "model title"},
-		{"blocked with no insight", with(func(s *Session) { s.Status = Waiting }), KindQuestion, "awaiting", "raw-name"},
+		{"blocked with no insight", with(func(s *Session) { s.Status = Waiting }), KindQuestion, "awaiting", ""},
 		{"blocked on a question it asked", with(func(s *Session) {
 			s.Pending, s.Status = &Pending{Tool: "AskUserQuestion", Summary: "Which one?", Question: true}, Waiting
-		}), KindQuestion, "awaiting", "raw-name"},
+		}), KindQuestion, "awaiting", ""},
 		{"blocked on a question, whatever the model made of it", with(func(s *Session) {
 			s.Pending, s.Insight = &Pending{Tool: "AskUserQuestion", Summary: "Which one?", Question: true}, insight(KindPermission)
 		}), KindQuestion, "awaiting", "model title"},
-		{"failed", with(func(s *Session) { s.Status = Failed }), KindFailed, "awaiting", "raw-name"},
+		{"failed", with(func(s *Session) { s.Status = Failed }), KindFailed, "awaiting", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -117,8 +117,11 @@ func TestItems(t *testing.T) {
 				t.Fatalf("got %d items, want 1", len(got))
 			}
 			it := got[0]
-			if it.Kind != tt.kind || it.Urgency != tt.urgency || it.Title != tt.title {
-				t.Errorf("item = kind %q urgency %q title %q; want %q %q %q", it.Kind, it.Urgency, it.Title, tt.kind, tt.urgency, tt.title)
+			if it.Kind != tt.kind || it.Urgency != tt.urgency || it.Subtitle != tt.subtitle {
+				t.Errorf("item = kind %q urgency %q subtitle %q; want %q %q %q", it.Kind, it.Urgency, it.Subtitle, tt.kind, tt.urgency, tt.subtitle)
+			}
+			if it.Title != "its name" {
+				t.Errorf("title = %q, want the name the session goes by", it.Title)
 			}
 			if it.Ask == "" || it.Replies == nil {
 				t.Errorf("item needs an ask and a non-nil reply list for the UI: %+v", it)
@@ -792,6 +795,50 @@ func TestRequestSettledOutsideSlorp(t *testing.T) {
 			t.Error("an old but still open request can no longer be decided")
 		}
 	})
+}
+
+func TestASessionGoesByALastingName(t *testing.T) {
+	h, k, st := newHub(t)
+	const id = "abcdef0123456"
+	roster := func(h *Hub, name, title string) {
+		h.SetRoster(agent, []Session{{ID: id, Agent: agent, Status: Waiting, Name: name, Title: title}})
+	}
+	check := func(h *Hub, when, want, via string) {
+		t.Helper()
+		s := session(t, h, id)
+		if s.Label != want || s.LabelVia != via {
+			t.Errorf("%s: label %q via %q, want %q via %q", when, s.Label, s.LabelVia, want, via)
+		}
+		if items := h.State().Items; len(items) != 1 || items[0].Title != want {
+			t.Errorf("%s: items %+v, want one titled %q", when, items, want)
+		}
+	}
+
+	roster(h, "", "")
+	check(h, "with nothing known", "abcdef01", "")
+	roster(h, "dir-9c", "")
+	check(h, "with only its agent's name", "dir-9c", "")
+
+	h.SetInsight(id, "k1", Insight{Title: "First thing it did"})
+	h.SetInsight(id, "k2", Insight{Title: "Second thing it did"})
+	check(h, "once the model has written about it twice", "First thing it did", ViaGuess)
+
+	roster(h, "dir-9c", "Its agent's title")
+	check(h, "once its agent titled it", "Its agent's title", "")
+
+	if !h.Rename(id, "Loop reviewer") || h.Rename("nobody", "x") {
+		t.Fatal("Rename must report whether the session is known")
+	}
+	roster(h, "dir-9c", "Its agent's later title")
+	check(h, "after the user named it", "Loop reviewer", kb.ViaUser)
+
+	h2 := New(k, st)
+	roster(h2, "dir-9c", "Its agent's later title")
+	check(h2, "after a restart", "Loop reviewer", kb.ViaUser)
+	h2.Rename(id, "")
+	check(h2, "after the user took the name back", "Its agent's later title", "")
+	roster(h2, "dir-9c", "")
+	check(h2, "after a restart, with no title from its agent", "First thing it did", ViaGuess)
 }
 
 func TestSetRoster(t *testing.T) {

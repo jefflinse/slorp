@@ -129,6 +129,30 @@ func TestBridgeSaysHowMuchItsModelCanTake(t *testing.T) {
 	}
 }
 
+func TestNamingASession(t *testing.T) {
+	f := newFixture(t)
+	f.connect("s1")
+	label := func() string { return f.state().Sessions[0].Label }
+
+	if code := f.post("/api/sessions/s1/name", `{"name":"  Loop reviewer \n"}`); code != http.StatusNoContent {
+		t.Fatalf("naming = %d", code)
+	}
+	if got := label(); got != "Loop reviewer" {
+		t.Errorf("label = %q, want the name without the space around it", got)
+	}
+	f.post("/api/sessions/s1/name", `{"name":"`+strings.Repeat("é", 200)+`"}`)
+	if got := label(); got != strings.Repeat("é", 80) {
+		t.Errorf("label is %d runes, want a long name cut to 80", len([]rune(got)))
+	}
+	f.post("/api/sessions/s1/name", `{"name":"   "}`)
+	if got := label(); got != "s1" {
+		t.Errorf("label = %q; a blank name should hand naming back", got)
+	}
+	if code := f.post("/api/sessions/nobody/name", `{"name":"x"}`); code != http.StatusNotFound {
+		t.Errorf("naming a session nobody knows = %d, want 404", code)
+	}
+}
+
 func TestBridgeSaysWhatItsSessionHasCost(t *testing.T) {
 	f := newFixture(t)
 	cost := func() float64 { return f.state().Sessions[0].CostUSD }

@@ -113,6 +113,12 @@ h1, h2, h3, p { margin: 0; }
 .row.sel { background: var(--sel); }
 .row .t { display: block; font-size: 14px; font-weight: 500; line-height: 1.35; }
 .row .t.mono { font-size: 12px; font-weight: 400; line-height: 1.45; word-break: break-word; }
+.row .st { display: block; margin-top: 1px; color: var(--ink2); font-size: 13px; line-height: 1.4; }
+.subt { margin-top: 7px; color: var(--ink2); font-size: 15.5px; line-height: 1.45; max-width: 70ch; }
+h1 .pen { margin-left: 10px; padding: 2px 6px; border-radius: 6px; color: var(--ink3); font-size: 15px; font-weight: 400; letter-spacing: 0; vertical-align: middle; }
+h1 .pen:hover { color: var(--accent); background: var(--sel); }
+.rename { display: flex; align-items: center; gap: 8px; }
+.rename input { flex: 1; min-width: 0; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); font-size: 20px; font-weight: 600; }
 .row .m { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin-top: 4px; color: var(--ink3); font-size: 12px; }
 .row.fresh { animation: arrive 1.6s ease-out; }
 @keyframes arrive { 0% { background: var(--fill); } 100% { background: transparent; } }
@@ -583,6 +589,8 @@ let state = fresh();
 try { Object.assign(state, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch (e) { /* storage unavailable: run in memory */ }
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* ignore */ } };
 let freshId = null;
+/* The session whose name is being edited, and whether its box still wants the cursor. */
+let renaming = null, renameFocus = false;
 
 /* ───────────────────────── Helpers ───────────────────────── */
 
@@ -715,6 +723,7 @@ function rowHtml(it, act = 'select') {
   const meta = `${grouped === 'source' ? '' : kindBadge(it.kind)}${it.live && it.session ? roleChip(it.session) : ''}${grouped === 'effort' ? '' : `<span>${esc(effortById(effortOf(it)).name)}</span>`}`;
   return `<button class="row ${it.urgency} ${state.view === 'attention' && it.id === state.sel ? 'sel' : ''} ${it.id === freshId ? 'fresh' : ''}" data-act="${act}" data-id="${it.id}" style="${kindColor(it.kind)}">
     ${title(it, 't')}
+    ${it.subtitle && state.fluent ? `<span class="st">${esc(it.subtitle)}</span>` : ''}
     <span class="m">${meta}<span>${ago(ageOf(it))}</span>${it.urgency === 'whenever' ? '' : `<span class="tag ${it.urgency}">${it.urgency}</span>`}</span>
     ${it.live && it.session?.model ? `<span class="m"><span>${runsOn(it.session)}</span>${contextUse(it.session, true)}</span>` : ''}
   </button>`;
@@ -925,7 +934,8 @@ function effortDetailLive(e) {
       ${needs.length ? `<div style="margin:0 -18px">${needs.map(i => rowHtml(i, 'openItem')).join('')}</div>` : '<div class="none">Nothing. This is moving without you, or not moving at all.</div>'}</div>
     <div class="sec"><div class="label"><span>Sessions (${sess.length})</span></div>
       ${sess.length ? sess.map(x => `<div class="srow"><span class="dot ${(LIVE_STATUS[x.status] || LIVE_STATUS.idle)[0]}"></span>
-        <div class="body"><div class="ttl">${esc(clip(x.insight?.title || x.title || x.name, 90))}</div>
+        <div class="body"><div class="ttl">${esc(clip(x.label, 90))}</div>
+          ${x.insight?.title ? `<div class="sub">${esc(clip(x.insight.title, 90))}</div>` : ''}
           <div class="sub">${(LIVE_STATUS[x.status] || LIVE_STATUS.idle)[1]} · <span class="mono">${esc(shortPath(x.cwd))}</span>${x.effortVia ? ` · ${VIA[x.effortVia]}` : ''}</div></div>
         ${roleChip(x)}${moveSelect(x)}</div>`).join('') : '<div class="none">None.</div>'}</div>
     ${real ? `<div class="sec"><div class="label"><span>Open questions (${knowledge.questions.filter(q => q.effort === e.id).length})</span><button data-act="kbGo" data-s="questions">Manage ›</button></div>
@@ -1080,7 +1090,7 @@ const barFor = (it, extra) => `<div class="bar">
 const alsoRows = (effort, except) => {
   const others = live.filter(x => x.id !== except && (x.effort || 'unsorted') === effort);
   return { count: others.length, html: others.length ? others.map(x => `<div class="srow"><span class="dot ${(LIVE_STATUS[x.status] || LIVE_STATUS.idle)[0]}"></span>
-        <div class="body"><div class="ttl">${esc(clip(x.insight?.title || x.title || x.name, 90))}</div></div>
+        <div class="body"><div class="ttl">${esc(clip(x.label, 90))}</div></div>
         <span class="side">${kindBadge(x.agent)} · ${(LIVE_STATUS[x.status] || LIVE_STATUS.idle)[1]}</span></div>`).join('') : '<div class="none">No other sessions here.</div>' };
 };
 const alsoIn = (effort, except) => `<div class="sec"><div class="label"><span>Also going on in ${esc(effortById(effort).name)}</span></div>
@@ -1207,7 +1217,11 @@ function liveItemDetail(it) {
   }
   return `<div class="inner">
     <div class="crumb">${s.effort ? `<button class="eff" data-act="effort" data-id="${s.effort}">${esc(effortById(s.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${s.effortVia === 'guess' ? `<span>${spark}filed by the model</span>` : ''}${kindBadge(it.kind, it.src)}${roleChip(s)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span>${s.branch ? `<span class="mono">${esc(s.branch)}</span>` : ''}${s.model ? `<span>${runsOn(s)}</span>` : ''}${contextUse(s)}</div>
-    <h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>
+    ${renaming === s.id
+      ? `<form class="rename" data-form="name" data-id="${s.id}"><input name="name" data-keep="name-${s.id}" value="${esc(s.label)}" maxlength="80" placeholder="Leave empty to go back to its own title" aria-label="Name for this session">
+          <button class="btn go">Save</button><button type="button" class="btn" data-act="renameCancel">Cancel</button></form>`
+      : `<h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}${state.fluent ? `<button class="pen" data-act="rename" data-id="${s.id}" title="${s.labelVia === 'you' ? 'You named this session. Rename it' : 'Give this session a name of your own'}" aria-label="Rename this session">✎</button>` : ''}</h1>`}
+    ${it.subtitle && state.fluent ? `<p class="subt">${spark}${esc(it.subtitle)}</p>` : ''}
     <div class="need"><div class="label">${it.summary ? spark : ''}What's needed from you</div><p class="ask">${esc(it.ask)}</p>${answer}</div>
     ${barFor(it, `${s.pending ? '' : `<button class="btn" data-act="livePark" data-id="${it.id}">Park as open question</button>`}${moveSelect(s)}${roleSelect(s)}`)}
     <div class="sec going"><div class="label"><span>${it.summary ? spark : ''}What's going on</span></div>${goingOn(it)}</div>
@@ -1293,7 +1307,7 @@ function viewActivityLive() {
     : 'No agent sessions are open on this machine.';
   const rows = live.map(s => {
     const open = state.expanded[s.id], [dot, label] = LIVE_STATUS[s.status] || LIVE_STATUS.idle;
-    const name = clip(s.insight?.title || s.title || s.name || s.id.slice(0, 8), 90);
+    const name = clip(s.label, 90);
     const what = state.fluent ? `<span class="ttl">${esc(name)}</span>` : `<span class="mono ttl">${esc(`${s.agent} · ${tilde(s.cwd)} · ${s.id.slice(0, 8)}`)}</span>`;
     const sub = s.pending ? (s.pending.question ? `Asks: ${s.pending.summary}` : `Wants to run ${s.pending.tool}: ${s.pending.summary}`) : s.insight && s.status !== 'working' ? s.insight.summary : s.lastPrompt ? `You last said: ${s.lastPrompt}` : '';
     return `<tr class="s ${open ? 'open' : ''}" data-act="expand" data-id="${s.id}">
@@ -1512,6 +1526,7 @@ function render() {
     if (el.dataset.keep in drafts) el.value = drafts[el.dataset.keep];
     if (el.dataset.keep === focused) { el.focus(); if (el.setSelectionRange && caret[0] != null) el.setSelectionRange(caret[0], caret[1]); }
   });
+  if (renameFocus) { renameFocus = false; $('.rename input')?.focus(); $('.rename input')?.select(); }
   freshId = null;
 }
 
@@ -1521,6 +1536,8 @@ const actions = {
   group: d => { state.groupBy = d.by; },
   srcFilter: d => { state.srcFilter = d.src; },
   collapse: d => { state.collapsed[d.key] = !state.collapsed[d.key]; },
+  rename: d => { renaming = d.id; renameFocus = true; },
+  renameCancel: () => { renaming = null; },
   side: () => { state.sideShut = !state.sideShut; },
   fluent: d => { state.fluent = d.on === '1'; },
   theme: () => {
@@ -1717,6 +1734,7 @@ document.addEventListener('submit', e => {
   e.preventDefault();
   const f = Object.fromEntries(new FormData(form)), sec = form.dataset.form, id = sec[0] + (++state.seq);
   const clear = () => form.querySelectorAll('input').forEach(el => { el.value = ''; });
+  if (sec === 'name') { api('POST', `/api/sessions/${form.dataset.id}/name`, { name: f.name }); renaming = null; render(); return; }
   if (sec === 'effort') { api('POST', '/api/efforts', { name: f.name, about: f.about }); clear(); return; }
   if (live) { api('POST', `/api/kb/${sec}`, { ...f, origin: 'you wrote this down' }); clear(); return; }
   if (sec === 'watch') state.kb.watch.push({ id, type: f.type, name: f.name, why: f.why, efforts: [f.effort], cadence: 'daily', seen: '', seenAge: 0 });
@@ -1725,6 +1743,7 @@ document.addEventListener('submit', e => {
   save(); render();
 });
 document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && e.target.closest('.rename')) { renaming = null; render(); return; }
   if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
   const att = state.view === 'attention';
   if (/^[1-5]$/.test(e.key)) go(VIEWS[e.key - 1]);

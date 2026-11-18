@@ -47,11 +47,17 @@ const (
 
 // Session is one agent conversation, normalized across agents.
 type Session struct {
-	ID         string    `json:"id"`
-	Agent      string    `json:"agent"`
-	Kind       string    `json:"kind"`
-	Name       string    `json:"name"`
-	Title      string    `json:"title"`
+	ID    string `json:"id"`
+	Agent string `json:"agent"`
+	Kind  string `json:"kind"`
+	// Name and Title are what the session's agent calls it.
+	Name  string `json:"name"`
+	Title string `json:"title"`
+	// Label is the name the session goes by here, which outlasts what it
+	// is doing: the one the user gave it, else its agent's title, else the
+	// first title the model wrote for it. LabelVia says which of those.
+	Label      string    `json:"label"`
+	LabelVia   string    `json:"labelVia,omitempty"`
 	Cwd        string    `json:"cwd"`
 	Branch     string    `json:"branch"`
 	Status     Status    `json:"status"`
@@ -94,6 +100,8 @@ type Session struct {
 	insightAt  time.Time
 	roleGuess  string
 	roleKey    string
+	given      string
+	pinned     string
 	// attention is what the session's role lets through, when the user chose it.
 	attention string
 }
@@ -191,12 +199,14 @@ type Item struct {
 	// Urgency is "blocking" while the user is holding up another person,
 	// "awaiting" while something of the user's own is stopped until they
 	// act, and "whenever" when nothing is stopped.
-	Urgency string    `json:"urgency"`
-	Title   string    `json:"title"`
-	Ask     string    `json:"ask"`
-	Summary string    `json:"summary"`
-	Replies []string  `json:"replies"`
-	At      time.Time `json:"at"`
+	Urgency string `json:"urgency"`
+	Title   string `json:"title"`
+	// Subtitle is the model's line on what a session is doing right now.
+	Subtitle string    `json:"subtitle,omitempty"`
+	Ask      string    `json:"ask"`
+	Summary  string    `json:"summary"`
+	Replies  []string  `json:"replies"`
+	At       time.Time `json:"at"`
 	// Source is the integration whose feed found the item.
 	Source string `json:"source,omitempty"`
 	URL    string `json:"url,omitempty"`
@@ -348,6 +358,8 @@ type sessionDoc struct {
 	InsightAt  time.Time `json:"insightAt"`
 	RoleGuess  string    `json:"roleGuess"`
 	RoleKey    string    `json:"roleKey"`
+	Given      string    `json:"given"`
+	Pinned     string    `json:"pinned"`
 }
 
 type ReplyState string
@@ -429,11 +441,12 @@ func (h *Hub) restore(s *Session) {
 	}
 	s.Insight, s.insightKey, s.guess, s.guessKey, s.insightAt = d.Insight, d.InsightKey, d.Guess, d.GuessKey, d.InsightAt
 	s.roleGuess, s.roleKey = d.RoleGuess, d.RoleKey
+	s.given, s.pinned = d.Given, d.Pinned
 }
 
 func (h *Hub) remember(s *Session) {
 	h.warn(h.cache.Put("session", s.ID, sessionDoc{Insight: s.Insight, InsightKey: s.insightKey, Guess: s.guess, GuessKey: s.guessKey, InsightAt: s.insightAt,
-		RoleGuess: s.roleGuess, RoleKey: s.roleKey}))
+		RoleGuess: s.roleGuess, RoleKey: s.roleKey, Given: s.given, Pinned: s.pinned}))
 }
 
 // SetRoster replaces the known sessions of one agent with the live set an
@@ -450,6 +463,7 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 			s.key, s.keySince, s.insightKey, s.Insight = old.key, old.keySince, old.insightKey, old.Insight
 			s.guess, s.guessKey, s.insightAt = old.guess, old.guessKey, old.insightAt
 			s.roleGuess, s.roleKey = old.roleGuess, old.roleKey
+			s.given, s.pinned = old.given, old.pinned
 			s.ContextWindow, s.CostUSD = old.ContextWindow, old.CostUSD
 			// The roster stops saying "waiting" once the terminal's dialog is
 			// answered. A request it has not caught up with yet is kept.
@@ -1005,9 +1019,41 @@ func (h *Hub) SetInsight(sessionID, key string, in Insight) {
 	defer h.mu.Unlock()
 	if s, ok := h.sessions[sessionID]; ok {
 		s.Insight, s.insightKey, s.insightAt = &in, key, time.Now()
+		if s.pinned == "" {
+			s.pinned = in.Title
+		}
 		h.remember(s)
 		h.changed()
 	}
+}
+
+// Rename gives a session the name it goes by, or with an empty name leaves
+// that to its agent and the model again. It reports whether the session is
+// known.
+func (h *Hub) Rename(sessionID, name string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	s, ok := h.sessions[sessionID]
+	if ok {
+		s.given = name
+		h.remember(s)
+		h.changed()
+	}
+	return ok
+}
+
+func (s *Session) label() (name, via string) {
+	switch {
+	case s.given != "":
+		return s.given, kb.ViaUser
+	case s.Title != "":
+		return s.Title, ""
+	case s.pinned != "":
+		return s.pinned, ViaGuess
+	case s.Name != "":
+		return s.Name, ""
+	}
+	return s.ID[:min(8, len(s.ID))], ""
 }
 
 func (h *Hub) SetSummarizer(s Summarizer) {
@@ -1071,13 +1117,10 @@ func items(sessions []Session) []Item {
 		if s.attention == kb.AttentionNone {
 			continue
 		}
-		it.Title = s.Title
-		if it.Title == "" {
-			it.Title = s.Name
-		}
+		it.Title = s.Label
 		fresh := s.described()
 		if fresh {
-			it.Title, it.Summary, it.Ask = s.Insight.Title, s.Insight.Summary, s.Insight.Ask
+			it.Subtitle, it.Summary, it.Ask = s.Insight.Title, s.Insight.Summary, s.Insight.Ask
 		}
 		switch {
 		case s.Pending != nil && s.Pending.Question:
@@ -1126,6 +1169,7 @@ func (h *Hub) snapshot() []Session {
 	for _, s := range h.sessions {
 		c := *s
 		c.CanReply = time.Since(s.bridgeSeen) < bridgeTTL
+		c.Label, c.LabelVia = s.label()
 		if id, via, ok := h.kb.Resolve(s.ID, s.Cwd); ok {
 			c.Effort, c.EffortVia = id, via
 		} else if s.guess != "" && h.kb.Has(s.guess) {
