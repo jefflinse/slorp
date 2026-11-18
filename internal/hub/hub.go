@@ -75,6 +75,9 @@ type Session struct {
 	LastReply  string    `json:"lastReply"`
 	// PromptAt is when the user said LastPrompt, zero when its agent did not say.
 	PromptAt time.Time `json:"-"`
+	// Compacted is the latest compaction its agent is known to have made,
+	// nil when none is.
+	Compacted *Compaction `json:"-"`
 	// Pull names the pull request made from the branch the session is on,
 	// as "owner/name#number"; empty when there is none.
 	Pull string `json:"pull,omitempty"`
@@ -156,6 +159,22 @@ type Moment struct {
 	// is Summary, its fuller account of where things stood.
 	Line    string `json:"line,omitempty"`
 	Summary string `json:"summary,omitempty"`
+	// Compacted is set when the moment is no word of the user's but the
+	// session's agent compacting the conversation.
+	Compacted *Compaction `json:"compacted,omitempty"`
+}
+
+// Compaction is one time a session's agent replaced the conversation so far
+// with a summary of it, to make room in its context.
+type Compaction struct {
+	At time.Time `json:"at"`
+	// Auto is true when the agent did it for want of room, and false when
+	// the user asked.
+	Auto bool `json:"auto,omitempty"`
+	// Before and After are the tokens in its context either side of the
+	// compaction, zero when its agent did not say.
+	Before int `json:"before,omitempty"`
+	After  int `json:"after,omitempty"`
 }
 
 const (
@@ -1427,9 +1446,9 @@ func (h *Hub) SetInsight(sessionID, key string, in Insight) {
 		}
 		// A description of what the session has since moved on from says
 		// nothing about its latest moment.
-		if n := len(s.Timeline); n > 0 && key == s.key {
+		if i := lastSaid(s.Timeline); i >= 0 && key == s.key {
 			s.Timeline = slices.Clone(s.Timeline)
-			s.Timeline[n-1].Line, s.Timeline[n-1].Summary = in.Title, in.Summary
+			s.Timeline[i].Line, s.Timeline[i].Summary = in.Title, in.Summary
 		}
 		h.remember(s)
 		h.changed()
@@ -1503,27 +1522,47 @@ func texts(facts []kb.Fact) []string {
 
 // contentKey identifies what a session is currently showing the user.
 // track opens a moment in a session's timeline when the user has said
-// something new. What was said before the latest moment is not new, however
-// late its agent reports it; nor is an untimed repeat of a recent moment.
+// something new, and when its agent has compacted it. What happened before
+// the latest moment is not new, however late its agent reports it; nor is
+// an untimed repeat of a recent moment.
 func (h *Hub) track(s *Session, now time.Time) {
-	prompt := momentPrompt(s.LastPrompt)
-	same := func(m Moment) bool { return samePrompt(m.Prompt, prompt) }
-	n := len(s.Timeline)
-	at := s.PromptAt
-	if at.IsZero() {
-		if slices.ContainsFunc(s.Timeline[max(0, n-untimedLookback):], same) {
-			return
-		}
-		at = now
+	var fresh []Moment
+	if c := s.Compacted; c != nil {
+		fresh = append(fresh, Moment{At: c.At, Compacted: c})
 	}
-	if prompt == "" || n > 0 && (same(s.Timeline[n-1]) || !at.After(s.Timeline[n-1].At)) {
+	n := len(s.Timeline)
+	if prompt := momentPrompt(s.LastPrompt); prompt != "" {
+		same := func(m Moment) bool { return m.Compacted == nil && samePrompt(m.Prompt, prompt) }
+		at := s.PromptAt
+		if at.IsZero() && !slices.ContainsFunc(s.Timeline[max(0, n-untimedLookback):], same) {
+			at = now
+		}
+		if !at.IsZero() && !(n > 0 && same(s.Timeline[n-1])) {
+			fresh = append(fresh, Moment{At: at, Prompt: prompt})
+		}
+	}
+	slices.SortStableFunc(fresh, func(a, b Moment) int { return a.At.Compare(b.At) })
+	for _, m := range fresh {
+		if last := len(s.Timeline) - 1; last < 0 || m.At.After(s.Timeline[last].At) {
+			s.Timeline = append(s.Timeline, m)
+		}
+	}
+	if len(s.Timeline) == n {
 		return
 	}
-	s.Timeline = append(s.Timeline, Moment{At: at, Prompt: prompt})
-	if n := len(s.Timeline); n > timelineLimit {
-		s.Timeline = s.Timeline[n-timelineLimit:]
-	}
+	s.Timeline = s.Timeline[max(0, len(s.Timeline)-timelineLimit):]
 	h.remember(s)
+}
+
+// lastSaid is the place in a timeline of the latest thing the user said, -1
+// when they have said nothing.
+func lastSaid(timeline []Moment) int {
+	for i := len(timeline) - 1; i >= 0; i-- {
+		if timeline[i].Compacted == nil {
+			return i
+		}
+	}
+	return -1
 }
 
 // samePrompt reports whether a and b are one prompt, either of them
@@ -1536,12 +1575,16 @@ func samePrompt(a, b string) bool {
 }
 
 // tidy folds each moment into the one before it when both are one prompt,
-// keeping the fuller wording and the later line.
+// keeping the fuller wording and the later line, and drops a compaction
+// told twice over.
 func tidy(timeline []Moment) []Moment {
 	var out []Moment
 	for _, m := range timeline {
 		n := len(out)
-		if n == 0 || !samePrompt(out[n-1].Prompt, m.Prompt) {
+		if n > 0 && m.Compacted != nil && out[n-1].Compacted != nil && m.At.Equal(out[n-1].At) {
+			continue
+		}
+		if n == 0 || m.Compacted != nil || out[n-1].Compacted != nil || !samePrompt(out[n-1].Prompt, m.Prompt) {
 			out = append(out, m)
 			continue
 		}

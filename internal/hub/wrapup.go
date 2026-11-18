@@ -142,7 +142,7 @@ func (h *Hub) dayLog(start time.Time) DayLog {
 	add := func(effort, label string, timeline []Moment) {
 		var day []Moment
 		for _, m := range timeline {
-			if !m.At.Before(start) && m.At.Before(end) {
+			if m.Compacted == nil && !m.At.Before(start) && m.At.Before(end) {
 				day = append(day, m)
 			}
 		}

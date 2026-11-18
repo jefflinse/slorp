@@ -34,6 +34,17 @@ func TestBackfill(t *testing.T) {
 		{At: at(4), Prompt: "fourth thing, still going"},
 		{At: at(4), Prompt: "   "},
 	}
+	if queued, _ := h.Backfill("s", append([]Exchange{{At: at(0), Compacted: &Compaction{At: at(0), Before: 7}}}, record...)); queued != 2 {
+		t.Fatalf("with a compaction in the record, Backfill queued %d; want only the two exchanges", queued)
+	}
+	if got := timeline(h); len(got) != 7 || got[0].Compacted == nil || got[0].Compacted.Before != 7 || !got[0].At.Equal(at(0)) {
+		t.Fatalf("timeline = %+v; want the record's compaction first of seven", got)
+	}
+	h.Backfill("s", []Exchange{{At: at(0), Compacted: &Compaction{At: at(0), Before: 7}}})
+	if got := timeline(h); len(got) != 7 || got[1].Compacted != nil {
+		t.Fatalf("timeline = %+v; want a compaction it already had kept once", got)
+	}
+	h.sessions["s"].Timeline = h.sessions["s"].Timeline[1:]
 	queued, ok := h.Backfill("s", record)
 	if !ok || queued != 2 {
 		t.Fatalf("Backfill = %d, %v; want the two exchanges that were answered and never described", queued, ok)

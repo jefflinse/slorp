@@ -36,7 +36,8 @@ func TestWrapup(t *testing.T) {
 	said("open", "/work/widgets", "Still open", "add a test", today.Add(8*time.Hour))
 	h.SetInsight("open", h.sessions["open"].key, Insight{Title: "Test added"})
 	said("open", "/work/widgets", "Still open", "ship it", today.Add(10*time.Hour))
-	loose := Session{ID: "loose", Agent: agent, Status: Idle, Cwd: "/elsewhere", Title: "Loose end", LastPrompt: "tidy up", PromptAt: today.Add(11 * time.Hour)}
+	loose := Session{ID: "loose", Agent: agent, Status: Idle, Cwd: "/elsewhere", Title: "Loose end", LastPrompt: "tidy up", PromptAt: today.Add(11 * time.Hour),
+		Compacted: &Compaction{At: today.Add(11*time.Hour + time.Minute)}}
 	said("open", "/work/widgets", "Still open", "ship it", today.Add(10*time.Hour), loose)
 	busy := Session{ID: "busy", Agent: agent, Status: Idle, Cwd: "/elsewhere", Title: "Busy"}
 	for i := range wrapSessionMoments + 3 {

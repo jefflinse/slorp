@@ -7,6 +7,7 @@ package claude
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -136,7 +137,7 @@ func (a *Adapter) poll(ctx context.Context) error {
 		}
 		if t := a.tail(r.SessionID); t != nil {
 			t.read()
-			s.Title, s.Branch, s.LastPrompt, s.LastReply, s.PromptAt = t.title, t.branch, t.lastPrompt, t.lastReply, t.promptAt
+			s.Title, s.Branch, s.LastPrompt, s.LastReply, s.PromptAt, s.Compacted = t.title, t.branch, t.lastPrompt, t.lastReply, t.promptAt, t.compacted
 			s.Model, s.Reasoning, s.ContextTokens, s.Used, s.Named = t.model, t.reasoning, t.contextTokens, t.used, t.named
 			if !t.modTime.IsZero() {
 				s.ActiveAt = t.modTime
@@ -253,6 +254,8 @@ type tail struct {
 	model, reasoning string
 	// contextTokens is zero from a compaction until the next response.
 	contextTokens int
+	// compacted is the latest compaction read, nil when none was.
+	compacted *hub.Compaction
 	// used totals every response in the file. counted holds each
 	// response's share, as one is written once per block.
 	used    hub.Tokens
@@ -271,6 +274,12 @@ type entry struct {
 	// Code writes in the user's place when it compacts one.
 	IsSummary bool   `json:"isCompactSummary"`
 	Subtype   string `json:"subtype"`
+	// Compact is what a "compact_boundary" entry says of its compaction.
+	Compact struct {
+		Trigger string `json:"trigger"`
+		Before  int    `json:"preTokens"`
+		After   int    `json:"postTokens"`
+	} `json:"compactMetadata"`
 	Timestamp string `json:"timestamp"`
 	Effort    string `json:"effort"`
 	// WrittenBy is the session that wrote the entry, which an entry keeps
@@ -388,6 +397,7 @@ func (t *tail) apply(line []byte) {
 	case "system":
 		if e.Subtype == "compact_boundary" {
 			t.contextTokens = 0
+			t.compacted = cmp.Or(e.compaction(), t.compacted)
 		}
 	}
 }
@@ -406,6 +416,16 @@ func (t *tail) count(id string, now hub.Tokens) {
 	t.used.Out += now.Out - was.Out
 }
 
+// compaction returns the compaction the entry marks, when it marks one and
+// says when.
+func (e entry) compaction() *hub.Compaction {
+	at, err := time.Parse(time.RFC3339, e.Timestamp)
+	if e.Type != "system" || e.Subtype != "compact_boundary" || e.IsSidechain || err != nil {
+		return nil
+	}
+	return &hub.Compaction{At: at, Auto: e.Compact.Trigger == "auto", Before: e.Compact.Before, After: e.Compact.After}
+}
+
 // said returns what the user typed, when the entry is the user typing.
 func (e entry) said() string {
 	if e.Type != "user" || e.IsMeta || e.IsSummary || e.IsSidechain {
@@ -416,8 +436,8 @@ func (e entry) said() string {
 
 // Exchanges reads the whole of a session's transcript and returns the
 // latest things the user said in it, oldest first, each with the end of
-// what the agent last answered before the user spoke again. At most limit
-// are returned.
+// what the agent last answered before the user spoke again, and among them
+// the compactions it records. At most limit are returned.
 func (a *Adapter) Exchanges(sessionID string, limit int) ([]hub.Exchange, error) {
 	path := a.transcript(sessionID)
 	if path == "" {
@@ -430,24 +450,28 @@ func (a *Adapter) Exchanges(sessionID string, limit int) ([]hub.Exchange, error)
 	defer f.Close()
 
 	var out []hub.Exchange
+	asked := -1
 	for r := bufio.NewReaderSize(f, 1<<20); ; {
 		line, err := r.ReadBytes('\n')
 		if err != nil {
 			break
 		}
-		if !bytes.Contains(line, []byte(`"type":"assistant"`)) && !bytes.Contains(line, []byte(`"type":"user"`)) {
+		if !bytes.Contains(line, []byte(`"type":"assistant"`)) && !bytes.Contains(line, []byte(`"type":"user"`)) && !bytes.Contains(line, []byte(`"subtype":"compact_boundary"`)) {
 			continue
 		}
 		var e entry
 		if json.Unmarshal(line, &e) != nil {
 			continue
 		}
-		if text := e.said(); text != "" {
+		if c := e.compaction(); c != nil {
+			out = append(out, hub.Exchange{At: c.At, Compacted: c})
+		} else if text := e.said(); text != "" {
 			at, _ := time.Parse(time.RFC3339, e.Timestamp)
 			out = append(out, hub.Exchange{At: at, Prompt: head(text, promptLimit)})
-		} else if e.Type == "assistant" && !e.IsSidechain && len(out) > 0 {
+			asked = len(out) - 1
+		} else if e.Type == "assistant" && !e.IsSidechain && asked >= 0 {
 			if text := assistantText(e.Message.Content); text != "" {
-				out[len(out)-1].Reply = Tail(text, exchangeReply)
+				out[asked].Reply = Tail(text, exchangeReply)
 			}
 		}
 	}

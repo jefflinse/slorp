@@ -1063,6 +1063,74 @@ func TestTimeline(t *testing.T) {
 	}
 }
 
+func TestTheTimelineMarksCompactions(t *testing.T) {
+	h, k, st := newHub(t)
+	t0 := time.Now().Add(-time.Hour).Truncate(time.Second)
+	at := func(mins int) time.Time { return t0.Add(time.Duration(mins) * time.Minute) }
+	report := func(h *Hub, prompt string, when time.Time, c *Compaction) {
+		h.SetRoster(agent, []Session{{ID: "s", Agent: agent, Status: Idle, LastPrompt: prompt, PromptAt: when, Compacted: c}})
+	}
+	want := func(h *Hub, when string, moments ...Moment) {
+		t.Helper()
+		got := session(t, h, "s").Timeline
+		if len(got) != len(moments) {
+			t.Fatalf("%s:\n got %+v\nwant %+v", when, got, moments)
+		}
+		for i, m := range moments {
+			if g := got[i]; !g.At.Equal(m.At) || g.Prompt != m.Prompt || g.Line != m.Line || (g.Compacted == nil) != (m.Compacted == nil) || g.Compacted != nil && *g.Compacted != *m.Compacted {
+				t.Fatalf("%s: moment %d = %+v (%+v), want %+v (%+v)", when, i, g, g.Compacted, m, m.Compacted)
+			}
+		}
+	}
+	squeezed := func(c *Compaction) Moment { return Moment{At: c.At, Compacted: c} }
+
+	c1 := &Compaction{At: at(5), Auto: true, Before: 400000, After: 16000}
+	first := Moment{At: at(0), Prompt: "do the first thing"}
+	report(h, "do the first thing", at(0), c1)
+	want(h, "a prompt and a later compaction heard of together", first, squeezed(c1))
+
+	h.SetInsight("s", h.sessions["s"].key, Insight{Title: "Did the first thing"})
+	first.Line = "Did the first thing"
+	want(h, "described after the compaction", first, squeezed(c1))
+
+	report(h, "do the first thing", at(0), c1)
+	report(h, "do the first thing", time.Time{}, c1)
+	want(h, "the same reported again, timed and untimed", first, squeezed(c1))
+
+	c2 := &Compaction{At: at(20)}
+	second := Moment{At: at(25), Prompt: "do the first thing"}
+	report(h, "do the first thing", at(25), c2)
+	want(h, "a compaction and the same words said again after it, heard of together", first, squeezed(c1), squeezed(c2), second)
+
+	report(h, "do the first thing", at(25), c1)
+	want(h, "an agent still reporting an earlier compaction", first, squeezed(c1), squeezed(c2), second)
+
+	h2 := New(k, st)
+	report(h2, "do the first thing", at(25), c2)
+	want(h2, "after a restart", first, squeezed(c1), squeezed(c2), second)
+}
+
+func TestAStoredTimelineKeepsItsCompactionsApart(t *testing.T) {
+	h, _, _ := newHub(t)
+	at := time.Now().Add(-time.Hour).Truncate(time.Second)
+	c := &Compaction{At: at.Add(time.Minute), Before: 9}
+	stored := []Moment{
+		{At: at, Prompt: "continue"},
+		{At: c.At, Compacted: c},
+		{At: c.At, Compacted: &Compaction{At: c.At, Before: 9}},
+		{At: at.Add(2 * time.Minute), Compacted: &Compaction{At: at.Add(2 * time.Minute)}},
+		{At: at.Add(3 * time.Minute), Prompt: "continue"},
+	}
+	if err := h.cache.Put("session", "s", sessionDoc{Timeline: stored}); err != nil {
+		t.Fatal(err)
+	}
+	h.SetRoster(agent, []Session{{ID: "s", Agent: agent, Status: Idle}})
+	got := session(t, h, "s").Timeline
+	if len(got) != 4 || got[0].Prompt != "continue" || got[1].Compacted == nil || got[2].Compacted == nil || !got[2].At.Equal(at.Add(2*time.Minute)) || got[3].Prompt != "continue" {
+		t.Errorf("timeline = %+v; want the compaction told twice kept once, the other kept, and the prompts either side of them left apart", got)
+	}
+}
+
 func TestSetRoster(t *testing.T) {
 	h, _, _ := newHub(t)
 	h.SetRoster(agent, []Session{idle("a", "/w", "from the transcript")})

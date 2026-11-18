@@ -148,6 +148,7 @@ a.pr:hover { border-color: var(--k-github); color: var(--ink); }
 .tl .line { color: var(--ink); }
 .tl .you { color: var(--ink3); overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .tl .line + .you { margin-top: 2px; }
+.tl .mark { padding: 7px 0; border-block: 1px dashed var(--line); font-size: 12px; }
 .rail { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; height: 100%; padding: 26px 0; color: var(--ink3); }
 .rail .label { writing-mode: vertical-rl; color: inherit; white-space: nowrap; }
 .page { padding: 28px 36px 60px; max-width: 1240px; margin: 0 auto; }
@@ -1597,6 +1598,7 @@ function subsBody(sessionId, list, closed, used) {
 function aboutSession(s) {
   const fresh = (s.used?.in || 0) + (s.used?.cacheWrite || 0), out = s.used?.out || 0, read = s.used?.cacheRead || 0;
   const subs = s.subagents || [], theirs = subs.reduce((n, a) => n + newTokens(a.used), 0);
+  const squeezed = (s.timeline || []).filter(m => m.compacted);
   const facts = [
     ['Directory', `<span class="mono">${esc(tilde(s.cwd))}</span>`],
     s.branch && ['Branch', `<span class="mono">${esc(s.branch)}</span>`],
@@ -1605,6 +1607,7 @@ function aboutSession(s) {
     ['Last active', `<span title="${esc(new Date(s.activeAt).toLocaleString())}">${ago(minsSince(s.activeAt))}</span>`],
     s.model && ['Model', runsOn(s)],
     s.contextTokens && ['Context', contextUse(s)],
+    squeezed.length && ['Compacted', `${squeezed.length === 1 ? '' : `${num(squeezed.length)} times, last `}<span title="${esc(new Date(squeezed.at(-1).at).toLocaleString())}">${ago(minsSince(squeezed.at(-1).at))}</span>`],
     fresh + out > 0 && ['Used', `<span title="Tokens sent for the first time, tokens the model wrote, and tokens read back from the cache.">${tokens(fresh)} new, ${tokens(out)} written${read ? `, ${tokens(read)} cached` : ''}</span>`],
     s.costUsd && ['Cost', `<span title="What its agent puts its use at, at list prices.">about ${money(s.costUsd)}</span>`],
     theirs && ['Subagents', `${num(subs.length)}, using ${tokens(theirs)} of the new tokens`],
@@ -1644,7 +1647,10 @@ function goingOn(s, summary, stale) {
     ${looked.length ? `<div class="none" style="margin-top:8px">${spark}Checked ${esc(listOf(looked))} to write this.</div>` : ''}`;
 }
 
-/* What the user said in a session, newest first, each with the model's line on how it came out. */
+/* What a timeline says of a compaction: who set it off, and the tokens in context either side of it where the agent said. */
+const compactedLine = c => `Context compacted${c.auto ? ' automatically' : ''}${c.before && c.after ? `, ${tokens(c.before)} → ${tokens(c.after)} tokens` : ''}`;
+
+/* What the user said in a session, newest first, each with the model's line on how it came out, and among them its compactions. */
 function timeline(s, open) {
   const moments = (s.timeline || []).slice().reverse();
   /* Only an open session whose agent keeps a transcript can have its earlier history read, and only when asked. */
@@ -1653,8 +1659,9 @@ function timeline(s, open) {
     : modelless() ? `<button class="link off" data-act="noop" title="${NO_MODEL} to say how earlier exchanges came out.">Fill in earlier history</button>`
     : `<button class="link" data-act="backfill" data-id="${s.id}" title="Reads this session's transcript and has the local model say how up to forty earlier exchanges came out. It happens only when you ask.">Fill in earlier history</button>`;
   if (!moments.length && !fill) return '';
-  return `<div class="label tlhead"><span>Timeline</span>${fill}</div>${moments.length ? (modelless() && moments.some(m => !m.line) ? `<div class="none">${NO_MODEL}, so new entries are only what you said.</div>` : '') : '<div class="none">Nothing has been said in it since Slorp began watching.</div>'}<ol class="tl">${moments.map(m => `<li><span class="when" title="${esc(new Date(m.at).toLocaleString())}">${minsSince(m.at) < 1 ? 'now' : span(minsSince(m.at))}</span>
-    <div>${m.line ? `<div class="line" title="${esc(m.summary || '')}">${spark}${esc(m.line)}</div>` : ''}<div class="you" title="${esc(m.prompt)}">${esc(m.prompt)}</div></div></li>`).join('')}</ol>`;
+  return `<div class="label tlhead"><span>Timeline</span>${fill}</div>${moments.length ? (modelless() && moments.some(m => !m.line) ? `<div class="none">${NO_MODEL}, so new entries are only what you said.</div>` : '') : '<div class="none">Nothing has been said in it since Slorp began watching.</div>'}<ol class="tl">${moments.map(m => `<li class="${m.compacted ? 'mark' : ''}"><span class="when" title="${esc(new Date(m.at).toLocaleString())}">${minsSince(m.at) < 1 ? 'now' : span(minsSince(m.at))}</span>
+    <div>${m.compacted ? `<div class="you" title="Its agent replaced the conversation up to here with a summary of it, to make room in its context.">${compactedLine(m.compacted)}</div>`
+      : `${m.line ? `<div class="line" title="${esc(m.summary || '')}">${spark}${esc(m.line)}</div>` : ''}<div class="you" title="${esc(m.prompt)}">${esc(m.prompt)}</div>`}</div></li>`).join('')}</ol>`;
 }
 
 /* What a session's page offers for answering it: its item's reply box, else its prompt, else a box to say something. */

@@ -16,11 +16,13 @@ const (
 
 // Exchange is one thing the user said in a session and the agent's answer
 // to it, as the session's own record has them. Reply is empty while the
-// agent has not answered.
+// agent has not answered. With Compacted set it is instead a compaction the
+// record holds, and nothing was said.
 type Exchange struct {
-	At     time.Time
-	Prompt string
-	Reply  string
+	At        time.Time
+	Prompt    string
+	Reply     string
+	Compacted *Compaction
 }
 
 // Unfilled is some of a session's earlier exchanges, waiting for the model
@@ -39,10 +41,10 @@ type Filled struct {
 	Summary string
 }
 
-// Backfill rebuilds a session's timeline from its exchanges, oldest first,
-// keeping what the model has already written about any of them, and queues
-// those that were answered but never described. It returns how many are
-// queued, and false when the session is not open.
+// Backfill rebuilds a session's timeline from its exchanges and compactions,
+// oldest first, keeping what the model has already written about any of
+// them, and queues the exchanges that were answered but never described. It
+// returns how many are queued, and false when the session is not open.
 func (h *Hub) Backfill(sessionID string, exchanges []Exchange) (queued int, ok bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -55,11 +57,16 @@ func (h *Hub) Backfill(sessionID string, exchanges []Exchange) (queued int, ok b
 	var timeline []Moment
 	var queue []Exchange
 	for _, x := range exchanges {
+		if c := x.Compacted; c != nil {
+			had = slices.DeleteFunc(had, func(old Moment) bool { return old.Compacted != nil && old.At.Equal(c.At) })
+			timeline = append(timeline, Moment{At: c.At, Compacted: c})
+			continue
+		}
 		m := Moment{At: x.At, Prompt: momentPrompt(x.Prompt)}
 		if m.Prompt == "" {
 			continue
 		}
-		if i := slices.IndexFunc(had, func(old Moment) bool { return samePrompt(old.Prompt, m.Prompt) }); i >= 0 {
+		if i := slices.IndexFunc(had, func(old Moment) bool { return old.Compacted == nil && samePrompt(old.Prompt, m.Prompt) }); i >= 0 {
 			m.Line, m.Summary = had[i].Line, had[i].Summary
 			had = slices.Delete(had, i, i+1)
 		}

@@ -119,8 +119,8 @@ func TestTailReadsWhatTheModelWasGiven(t *testing.T) {
 
 	appendTo(t, path, line(t, map[string]any{"type": "system", "subtype": "compact_boundary", "compactMetadata": map[string]any{"postTokens": 20000}}))
 	tl.read()
-	if tl.contextTokens != 0 || tl.model != "claude-fable-5-2" {
-		t.Errorf("after a compaction: %d tokens, model %q; want the count unknown and the model kept", tl.contextTokens, tl.model)
+	if tl.contextTokens != 0 || tl.model != "claude-fable-5-2" || tl.compacted != nil {
+		t.Errorf("after a compaction: %d tokens, model %q, compacted %+v; want the count unknown, the model kept, and nothing made of a compaction with no time", tl.contextTokens, tl.model, tl.compacted)
 	}
 
 	appendTo(t, path, line(t, answered("claude-fable-5-2", "high", 0, 0, 25000, text("third")))+
@@ -285,6 +285,72 @@ func TestExchanges(t *testing.T) {
 	}
 }
 
+func compacted(clock, trigger string, before, after int) map[string]any {
+	return at(clock, map[string]any{"type": "system", "subtype": "compact_boundary", "compactMetadata": map[string]any{"trigger": trigger, "preTokens": before, "postTokens": after}})
+}
+
+func TestTailReadsTheLatestCompaction(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	side := compacted("10:30:00", "auto", 1, 1)
+	side["isSidechain"] = true
+	appendTo(t, path, line(t, compacted("09:00:00", "manual", 300000, 12000))+line(t, compacted("10:00:00", "auto", 437000, 16000))+line(t, side)+
+		line(t, at("11:00:00", map[string]any{"type": "system", "subtype": "turn_duration"}))+
+		line(t, map[string]any{"type": "system", "subtype": "compact_boundary"}))
+	tl := &tail{path: path}
+	tl.read()
+	want := hub.Compaction{At: time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC), Auto: true, Before: 437000, After: 16000}
+	if tl.compacted == nil || *tl.compacted != want {
+		t.Errorf("compacted = %+v, want the main thread's latest, %+v", tl.compacted, want)
+	}
+
+	appendTo(t, path, line(t, compacted("12:00:00", "manual", 5, 4)))
+	tl.read()
+	if c := tl.compacted; c == nil || c.Auto || c.Before != 5 || c.At.Hour() != 12 {
+		t.Errorf("compacted = %+v, want the one the user asked for at noon", c)
+	}
+	appendTo(t, path, line(t, compacted("13:00:00", "", 0, 0)))
+	tl.read()
+	if c := tl.compacted; c == nil || c.Auto || c.At.Hour() != 13 {
+		t.Errorf("compacted = %+v, want one that does not say what set it off taken for no doing of the agent's", c)
+	}
+}
+
+func TestExchangesHoldCompactions(t *testing.T) {
+	home := t.TempDir()
+	project := filepath.Join(home, ".claude", "projects", "-w")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	a := &Adapter{Home: home}
+	with := func(e map[string]any, key string) map[string]any {
+		e[key] = true
+		return e
+	}
+	appendTo(t, filepath.Join(project, "abc-123.jsonl"), strings.Join([]string{
+		line(t, assistant(text("an answer to nothing the user said"))),
+		line(t, compacted("09:00:00", "manual", 9, 3)),
+		line(t, assistant(text("still an answer to nothing the user said"))),
+		line(t, at("10:00:00", user("fix the rounding"))),
+		line(t, assistant(text("Looking."))),
+		line(t, compacted("10:30:00", "auto", 437000, 16000)),
+		line(t, with(compacted("10:45:00", "auto", 1, 1), "isSidechain")),
+		line(t, assistant(text("Fixed it."))),
+	}, ""))
+	got, err := a.Exchanges("abc-123", 10)
+	if err != nil || len(got) != 3 {
+		t.Fatalf("Exchanges = %+v, %v; want a compaction, the prompt, and a compaction", got, err)
+	}
+	if c := got[0].Compacted; c == nil || c.Auto || c.Before != 9 || !got[0].At.Equal(c.At) || got[0].Reply != "" {
+		t.Errorf("first = %+v (%+v), want the compaction the user asked for, with no answer taken for its own", got[0], c)
+	}
+	if x := got[1]; x.Compacted != nil || x.Prompt != "fix the rounding" || x.Reply != "Fixed it." {
+		t.Errorf("second = %+v, want the prompt with the answer that came after the compaction", x)
+	}
+	if c := got[2].Compacted; c == nil || !c.Auto || c.Before != 437000 || c.After != 16000 || got[2].Reply != "" {
+		t.Errorf("third = %+v (%+v), want the automatic compaction", got[2], c)
+	}
+}
+
 func TestTailDoesNotTakeACompactionSummaryForAPrompt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	summary := user("This session is being continued from a previous conversation.")
@@ -421,7 +487,7 @@ func TestPollBuildsTheRoster(t *testing.T) {
 	if err := os.MkdirAll(project, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	appendTo(t, filepath.Join(project, "aaa.jsonl"), line(t, map[string]any{"type": "ai-title", "aiTitle": "Session A"})+line(t, map[string]any{"type": "custom-title", "customTitle": "Renamed A"})+line(t, user("go"))+line(t, block("msg_1", 10, 20, 30, 900)))
+	appendTo(t, filepath.Join(project, "aaa.jsonl"), line(t, map[string]any{"type": "ai-title", "aiTitle": "Session A"})+line(t, map[string]any{"type": "custom-title", "customTitle": "Renamed A"})+line(t, compacted("10:00:00", "auto", 9, 3))+line(t, user("go"))+line(t, block("msg_1", 10, 20, 30, 900)))
 
 	st := testdb.Open(t)
 	h := hub.New(testdb.KB(t, st), st)
@@ -446,6 +512,9 @@ func TestPollBuildsTheRoster(t *testing.T) {
 	}
 	if sa.Model != "claude-fable-5-2" || sa.Reasoning != "high" || sa.ContextTokens != 60 || sa.Used != (hub.Tokens{In: 10, CacheWrite: 20, CacheRead: 30, Out: 900}) {
 		t.Errorf("model %q, reasoning %q, %d tokens, used %+v; want them from the transcript", sa.Model, sa.Reasoning, sa.ContextTokens, sa.Used)
+	}
+	if tl := sa.Timeline; len(tl) != 2 || tl[0].Compacted == nil || tl[0].Compacted.Before != 9 || tl[1].Prompt != "go" {
+		t.Errorf("timeline = %+v; want the transcript's compaction, then what was said after it", tl)
 	}
 	if sa.StartedAt.UnixMilli() != 1700000000000 || !sa.ActiveAt.After(sa.StartedAt) {
 		t.Errorf("times: started %v, active %v; want the roster's start and the transcript's last write", sa.StartedAt, sa.ActiveAt)
