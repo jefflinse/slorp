@@ -80,11 +80,14 @@ h1, h2, h3, p { margin: 0; }
 .hit .hl .dim { margin-left: auto; color: var(--ink3); font-size: 12px; white-space: nowrap; }
 .hit .tx { display: block; margin-top: 3px; color: var(--ink2); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
 .hit mark { padding: 0 1px; border-radius: 3px; background: color-mix(in srgb, var(--fill) 45%, transparent); color: var(--ink); }
-.sub2 { margin-top: 44px; font-size: 17px; font-weight: 650; letter-spacing: -0.01em; }
-.closed { max-width: 760px; padding: 2px 0 16px; }
-.closed .cmd { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; padding: 8px 10px 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); }
-.closed .cmd .mono { font-size: 12px; overflow-wrap: anywhere; }
-.closed .cmd span:last-child { display: flex; gap: 8px; flex-shrink: 0; }
+.need .cmd { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 0 12px; padding: 8px 10px 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.need .cmd .mono { font-size: 12px; overflow-wrap: anywhere; }
+.need.bare { padding: 0; border: 0; background: none; }
+.stat { display: inline-flex; align-items: center; white-space: nowrap; }
+.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 7px 18px; margin: 0; font-size: 13.5px; line-height: 1.5; }
+.facts dt { color: var(--ink3); }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+.facts .mono { font-size: 12px; }
 .lim { color: var(--ink3); font-size: 12px; }
 .lim .meter { width: 44px; }
 .pr { display: inline-flex; align-items: center; white-space: nowrap; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--ink2); font-size: 11.5px; font-weight: 500; line-height: 1.5; text-decoration: none; }
@@ -174,7 +177,7 @@ a.pr:hover { border-color: var(--k-github); color: var(--ink); }
 .row .h .w { flex: none; display: inline-flex; align-items: center; gap: 8px; color: var(--ink3); font-size: 12px; white-space: nowrap; }
 .row .t { display: block; font-size: 14px; font-weight: 500; line-height: 1.35; }
 .row .t.mono { font-size: 12px; font-weight: 400; line-height: 1.45; word-break: break-word; }
-.row .st { display: block; margin-top: 1px; color: var(--ink2); font-size: 13px; line-height: 1.4; }
+.row .st { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; white-space: normal; overflow-wrap: anywhere; margin-top: 1px; color: var(--ink2); font-size: 13px; line-height: 1.4; }
 .subt { margin-top: 7px; color: var(--ink2); font-size: 15.5px; line-height: 1.45; max-width: 70ch; }
 h1 .pen { margin-left: 10px; padding: 2px 6px; border-radius: 6px; color: var(--ink3); font-size: 15px; font-weight: 400; letter-spacing: 0; vertical-align: middle; }
 h1 .pen:hover { color: var(--accent); background: var(--sel); }
@@ -187,8 +190,8 @@ h1 .pen:hover { color: var(--accent); background: var(--sel); }
   color: color-mix(in srgb, var(--k) 50%, var(--ink)); background: color-mix(in srgb, var(--k) 15%, transparent); }
 .kind i, .chip i { width: 6px; height: 6px; border-radius: 50%; margin-right: 5px; background: var(--k); }
 .chip i { display: inline-block; vertical-align: 1px; }
-.tabs { display: flex; align-items: center; gap: 22px; margin-top: 30px; border-bottom: 1px solid var(--line); }
-.tabs > button { padding: 0 0 9px; margin-bottom: -1px; border-bottom: 2px solid transparent; }
+.tabs { display: flex; flex-wrap: wrap-reverse; align-items: center; gap: 8px 20px; margin-top: 30px; border-bottom: 1px solid var(--line); }
+.tabs > button { padding: 0 0 9px; margin-bottom: -1px; border-bottom: 2px solid transparent; white-space: nowrap; }
 .tabs > button:hover { color: var(--ink); }
 .tabs > button.on { color: var(--ink); border-bottom-color: var(--ink); }
 .tabs > button .n { margin-left: 6px; font-weight: 500; letter-spacing: 0; }
@@ -308,7 +311,7 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
 .time .a { color: var(--ink3); font-size: 12px; padding-top: 3px; }
 .time .what { font-size: 14px; }
 
-/* Activity table */
+/* Chips and tables */
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 18px 0 14px; }
 .chip { padding: 3px 11px; border-radius: 99px; border: 1px solid var(--line); background: var(--raised); font-size: 12.5px; color: var(--ink2); }
 .chip.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
@@ -317,14 +320,10 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
 .tbl { width: 100%; border-collapse: collapse; }
 .tbl th { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .tbl td { padding: 11px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
-.tbl tr.s { cursor: pointer; }
-.tbl tr.s:hover td { background: var(--panel); }
 .tbl .ttl { font-size: 14px; font-weight: 500; }
 .tbl .ttl.mono { font-size: 12px; font-weight: 400; }
 .tbl .doing { color: var(--ink2); font-size: 13px; margin-top: 1px; }
 .tbl .dim { color: var(--ink3); font-size: 12.5px; white-space: nowrap; }
-.tbl tr.x td { padding-top: 0; border-bottom: 1px solid var(--line); }
-.tbl tr.s.open td { border-bottom-color: transparent; }
 .st { white-space: nowrap; font-size: 12.5px; color: var(--ink2); }
 .tbl a.ttl { color: inherit; text-decoration: none; }
 .tbl a.ttl:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
@@ -335,7 +334,6 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
 .livebox .send { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; color: var(--ink3); font-size: 12px; }
 .livebox .sent { margin-top: 10px; font-size: 12.5px; color: var(--ink2); }
 .livebox .sent b { font-weight: 600; color: var(--accent); }
-.pend { margin: 4px 0 10px; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 8px; max-width: 760px; }
 
 /* Knowledge base */
 .kbnav button { display: flex; justify-content: space-between; width: 100%; padding: 9px 18px; color: var(--ink2); border-left: 3px solid transparent; }
@@ -655,7 +653,7 @@ const VIEWS = ['attention', 'efforts', 'activity', 'pulls', 'knowledge'];
 const VIEW_NAMES = { pulls: 'PRs' };
 const fresh = () => ({ view: 'attention', sel: null, effortSel: 'snap', kbSel: 'watch', groupBy: 'effort', srcFilter: 'all', pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto',
   handled: {}, moved: {}, sessMoved: {}, extra: [], arrived: {}, collapsed: {}, showHandled: false, variant: {}, rawOpen: {},
-  actFilter: 'all', expanded: {}, kb: structuredClone(KB_SEED), seq: 100 });
+  actSel: null, expanded: {}, kb: structuredClone(KB_SEED), seq: 100 });
 let state = fresh();
 try { Object.assign(state, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch (e) { /* storage unavailable: run in memory */ }
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* ignore */ } };
@@ -763,7 +761,7 @@ function resolve(id, how, note, opts = {}) {
 }
 
 /* What is selected in each view, kept with a history entry so Back restores it. */
-const place = () => ({ sel: state.sel, effortSel: state.effortSel, kbSel: state.kbSel });
+const place = () => ({ sel: state.sel, effortSel: state.effortSel, kbSel: state.kbSel, actSel: state.actSel });
 
 function go(view) {
   if (view === state.view) return;
@@ -881,9 +879,7 @@ function viewAttention() {
   const rows = ['long', 'short'].map(as => `<button class="${(state.rows || 'long') === as ? 'on' : ''}" data-act="rows" data-as="${as}">${cap(as)}</button>`).join('');
   const sel = state.sel && itemById(state.sel);
   const sided = sel && sel.live && !sel.feed;
-  const side = !sided ? '' : state.sideShut
-    ? `<aside class="pane side"><button class="rail" data-act="side" title="Show what's going on" aria-expanded="false"><span>‹</span><span class="label">${sel.summary ? spark : ''}What's going on</span></button></aside>`
-    : `<aside class="pane side" data-scroll="att-side"><div class="head"><span class="label">${sel.summary ? spark : ''}What's going on</span><button data-act="side" title="Hide this panel" aria-expanded="true">›</button></div>${goingOn(sel)}${timeline(sel.session, true)}</aside>`;
+  const side = sided ? sessionSide(sel.session, sel.summary, false, 'att-side') : '';
   return `<div class="split ${sided ? 'sided' : ''} ${sided && state.sideShut ? 'shut' : ''}">
     <section class="pane list" data-scroll="att-list">
       ${briefing(all)}
@@ -988,12 +984,12 @@ function openHit(x) {
   const item = !x.closed && liveItems.find(i => i.session && i.session.id === x.sessionId && isActive(i));
   if (item) { state.sel = item.id; go('attention'); }
   else {
+    state.actSel = x.sessionId;
+    delete state.collapsed[x.closed ? 'act:closed' : 'act:active'];
     go('activity');
-    if (x.closed) { state.archiveAll = true; state.expanded['closed:' + x.sessionId] = true; fetchArchived(x.sessionId); }
-    else state.expanded[x.sessionId] = true;
   }
   save(); render();
-  (x.closed ? document.getElementById('closed-' + x.sessionId) : $('.row.sel, .tbl tr.s.open'))?.scrollIntoView({ block: 'center' });
+  $('.row.sel')?.scrollIntoView({ block: 'center' });
 }
 const HIT_WHERE = { name: 'its name', summary: 'the summary of where it stands', prompt: 'the last thing you said', reply: 'its last response' };
 function searchModal() {
@@ -1090,13 +1086,6 @@ function roleChip(s) {
   const r = s.role && roleById(s.role);
   return r ? `<span class="role" title="${s.roleVia === 'guess' ? 'The local model guessed this role' : 'You gave it this role'}">${s.roleVia === 'guess' ? spark : ''}${esc(r.name)}</span>` : '';
 }
-function roleSelect(s) {
-  return `<select class="btn" data-change="liveRole" data-id="${s.id}" aria-label="Give this session a role">
-    <option value="">${s.role && s.roleVia === 'you' ? 'Change role…' : 'Role…'}</option>
-    ${knowledge.roles.filter(r => !(r.id === s.role && s.roleVia === 'you')).map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join('')}
-    ${s.role || s.roleVia !== 'you' ? '<option value="__none">No role</option>' : ''}
-    <option value="__new">New role…</option></select>`;
-}
 /* What a session's role keeps from Attention, when the user chose the role. */
 function roleNote(s) {
   const r = s.roleVia === 'you' && roleById(s.role);
@@ -1119,10 +1108,6 @@ function startForm(e) {
       <span><button type="button" class="btn" data-act="startCancel">Cancel</button><button class="btn go" ${launching ? 'disabled' : ''}>${launching ? 'Starting…' : 'Start'}</button></span></div>
   </form>`;
 }
-function stopButton(s) {
-  return s.job ? `<button class="btn quiet" data-act="stop" data-id="${s.id}" title="Stops this background session. Its conversation is kept, and it can be reopened from Closed sessions.">Stop</button>` : '';
-}
-
 function effortDetailLive(e) {
   const sess = live.filter(s => (s.effort || 'unsorted') === e.id);
   const needs = activeItems().filter(i => i.effort === e.id).sort(byUrgency);
@@ -1196,36 +1181,55 @@ function viewEfforts() {
 
 /* ───────────────────────── Activity ───────────────────────── */
 
+/* The Activity list: the sessions in two parts that fold, each a run of rows, beside the page of the one selected. */
+function activityView(parts, detail, side = '') {
+  const rows = ['long', 'short'].map(as => `<button class="${(state.rows || 'long') === as ? 'on' : ''}" data-act="rows" data-as="${as}">${cap(as)}</button>`).join('');
+  const list = parts.map(([key, name, n, line, html]) => {
+    const shut = state.collapsed['act:' + key];
+    return `<div class="ghead"><button class="name" data-act="collapse" data-key="act:${key}"><span class="chev ${shut ? 'shut' : ''}">▼</span> ${name}</button><span class="n">${n}</span></div>
+      ${shut ? '' : `${line ? `<div class="gline">${line}</div>` : ''}${html}`}`;
+  }).join('');
+  return `<div class="split ${side ? 'sided' : ''} ${side && state.sideShut ? 'shut' : ''}">
+    <section class="pane list" data-scroll="act-list">
+      <div class="listbar"><span class="label">Sessions</span><span class="segs"><span class="seg" role="group" aria-label="How much each row shows" title="Short rows show only the name, how it stands, and what it is doing.">${rows}</span></span></div>
+      ${list}
+    </section>
+    <section class="pane detail" data-scroll="act-${state.actSel}">${detail || '<div class="empty">No session is selected.</div>'}</section>
+    ${side}
+  </div>`;
+}
+/* The ids of the sessions the Activity list shows, top to bottom, given those of its two parts. */
+const actShown = (active, closed) => (state.collapsed['act:active'] ? [] : active).concat(state.collapsed['act:closed'] ? [] : closed);
+const stat = (dot, word) => `<span class="stat"><span class="dot ${dot}"></span>${word}</span>`;
+
 function viewActivity() {
   if (live) return viewActivityLive();
-  const order = Object.keys(STATUS);
-  const count = k => SESSIONS.filter(s => s.status === k).length;
-  const lede = `${cap(num(SESSIONS.length))} things are running or recently finished. ${cap(num(count('waiting')))} are awaiting you, ${num(count('error'))} failed overnight, and the rest are getting on with it.`;
-  const filters = [['all', 'Everything']].concat(Object.entries(KINDS).filter(([k]) => SESSIONS.some(s => s.kind === k)))
-    .map(([k, n]) => `<button class="chip ${state.actFilter === k ? 'on' : ''}" data-act="actFilter" data-f="${k}">${esc(n)}</button>`).join('');
-  const rows = SESSIONS.filter(s => state.actFilter === 'all' || s.kind === state.actFilter)
-    .sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status) || a.last - b.last)
-    .map(s => {
-      const open = state.expanded[s.id];
-      const it = activeMockItems().find(i => i.session === s.id);
-      return `<tr class="s ${open ? 'open' : ''}" data-act="expand" data-id="${s.id}">
-        <td class="st"><span class="dot ${s.status}"></span>${STATUS[s.status]}</td>
-        <td><div>${title(s, 'ttl')}</div>${state.fluent ? `<div class="doing">${esc(s.doing)}</div>` : ''}</td>
-        <td class="dim">${kindBadge(s.kind)}</td>
-        <td class="dim hide">${esc(effortById(sessEffort(s)).name)}</td>
-        <td class="dim hide mono">${esc(s.where)}</td>
-        <td class="dim hide">${span(s.started)}</td>
-        <td class="dim">${ago(s.last)}</td>
-      </tr>${open ? `<tr class="x"><td></td><td colspan="6">${rawBlock(s.tail.map(t => ['last output', t]))}
-        <div class="bar" style="margin:10px 0 14px">${it ? `<button class="btn go" data-act="openItem" data-id="${it.id}">See what it needs ›</button>` : ''}<button class="btn" data-act="effort" data-id="${sessEffort(s)}">Open effort ›</button></div></td></tr>` : ''}`;
-    }).join('');
-  return `<div class="page">
-    <h1>Everything that's running</h1>
-    <p class="prose" style="margin-top:10px">${spark}${esc(lede)}</p>
-    <div class="chips">${filters}</div>
-    <table class="tbl"><thead><tr><th class="label">Status</th><th class="label">What</th><th class="label">Kind</th><th class="label hide">Effort</th><th class="label hide">Where</th><th class="label hide">Age</th><th class="label">Last activity</th></tr></thead>
-    <tbody>${rows}</tbody></table>
+  const [active, closed] = mockActivity();
+  const all = active.concat(closed);
+  if (!all.some(s => s.id === state.actSel)) state.actSel = actShown(active, closed).map(s => s.id)[0] || null;
+  const row = s => `<button class="row ${s.id === state.actSel ? 'sel' : ''}" data-act="actSel" data-id="${s.id}" style="${kindColor(s.kind)}">
+      <span class="h">${title(s, 't')}<span class="w"><span>${ago(s.last)}</span>${stat(s.status, STATUS[s.status])}</span></span>
+      ${state.fluent ? `<span class="st">${esc(s.doing)}</span>` : ''}
+      ${state.rows === 'short' ? '' : `<span class="m">${kindBadge(s.kind)}<span>${esc(effortById(sessEffort(s)).name)}</span></span>`}
+    </button>`;
+  const count = k => active.filter(s => s.status === k).length;
+  const s = all.find(x => x.id === state.actSel), it = s && activeMockItems().find(i => i.session === s.id);
+  const detail = s && `<div class="inner">
+    <div class="crumb"><button class="eff" data-act="effort" data-id="${sessEffort(s)}">${esc(effortById(sessEffort(s)).name)} ›</button>${kindBadge(s.kind)}${stat(s.status, STATUS[s.status])}<span>active ${ago(s.last)}</span><span>started ${ago(s.started)}</span><span class="mono">${esc(s.where)}</span></div>
+    <h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? s.title : s.raw)}</h1>
+    ${state.fluent ? `<p class="subt">${spark}${esc(s.doing)}</p>` : ''}
+    ${it ? `<div class="need"><div class="label">${spark}What's needed from you</div><p class="ask">${esc(it.ask)}</p><div class="replies"><button class="btn go" data-act="openItem" data-id="${it.id}">Answer it under Attention ›</button></div></div>` : ''}
+    <div class="sec"><div class="label"><span>Its last output, verbatim</span></div>${rawBlock(s.tail.map(t => ['last output', t]))}</div>
   </div>`;
+  return activityView([
+    ['active', 'Active', active.length, `${spark}${cap(num(count('waiting')))} awaiting you, ${num(count('error'))} failed overnight, and the rest are getting on with it.`, active.map(row).join('')],
+    ['closed', 'Closed', closed.length, '', closed.map(row).join('')],
+  ], detail);
+}
+/* The demo's sessions as Activity lists them: those still going, the latest to do anything first, and those finished. */
+function mockActivity() {
+  const recent = (a, b) => a.last - b.last;
+  return [SESSIONS.filter(s => s.status !== 'done').sort(recent), SESSIONS.filter(s => s.status === 'done').sort(recent)];
 }
 
 /* ───────────────────────── Live sessions ─────────────────────────
@@ -1235,16 +1239,24 @@ function viewActivity() {
 let live = null, liveItems = [], liveEfforts = [], summarizer = {}, settings = {}, isOffline = false;
 let knowledge = { watch: [], questions: [], context: [], routing: [], roles: [] }, integrations = [], lookups = [], feeds = {}, pulls = [], limits = [], wrapups = {}, archive = [], plugins = {}, archiveDocs = {};
 /* Fetches a closed session's timeline, once per time it closes. */
+const archiveAsked = {};
 function fetchArchived(id) {
   const listed = archive.find(a => a.id === id);
-  if (!listed || (archiveDocs[id] && archiveDocs[id].endedAt === listed.endedAt)) return;
-  fetch(`/api/archive/${encodeURIComponent(id)}`).then(r => r.ok ? r.json() : null).then(doc => { if (doc) { archiveDocs[id] = doc; render(); } }).catch(() => {});
+  if (!listed || archiveAsked[id] || (archiveDocs[id] && archiveDocs[id].endedAt === listed.endedAt)) return;
+  archiveAsked[id] = true;
+  fetch(`/api/archive/${encodeURIComponent(id)}`).then(r => r.ok ? r.json() : null).then(doc => { delete archiveAsked[id]; if (doc) { archiveDocs[id] = doc; render(); } })
+    .catch(() => { delete archiveAsked[id]; });
 }
 const LIVE_STATUS = { waiting: ['waiting', 'awaiting you'], failed: ['error', 'failed'], working: ['running', 'working'], idle: ['idle', 'idle'], done: ['done', 'finished'] };
 const minsSince = iso => Math.max(0, (Date.now() - new Date(iso).getTime()) / 60000);
 const tilde = p => p.replace(/^\/Users\/[^/]+/, '~');
 const shortPath = p => { const t = tilde(p); return t.length > 44 ? '…/' + t.split('/').slice(-2).join('/') : t; };
 const clip = (t, n) => t.length > n ? t.slice(0, n) + '…' : t;
+const srcOf = s => `${KINDS[s.agent] || s.agent} ${s.kind === 'background' ? 'background session' : 'session'}`;
+const rawOf = s => `${s.agent} · ${shortPath(s.cwd)} · ${s.id.slice(0, 8)}`;
+const statusOf = s => LIVE_STATUS[s.status] || LIVE_STATUS.idle;
+/* The item a session has under Attention, while the user has yet to deal with it. */
+const itemOf = s => liveItems.find(i => i.session && i.session.id === s.id && isActive(i));
 
 async function refresh(force) {
   try {
@@ -1280,9 +1292,7 @@ function toItems(data) {
     if (i.source) return { ...i, live: true, feed: true, effort: i.effort || 'unsorted', kind: i.source, itemKind: i.kind,
       src: KINDS[i.source] || i.source, raw: `${i.source} · ${i.repo} · ${i.kind}` };
     const s = byId[i.sessionId];
-    return { ...i, live: true, session: s, effort: s.effort || 'unsorted', kind: s.agent, itemKind: i.kind,
-      src: `${KINDS[s.agent] || s.agent} ${s.kind === 'background' ? 'background session' : 'session'}`,
-      raw: `${s.agent} · ${shortPath(s.cwd)} · ${s.id.slice(0, 8)}` };
+    return { ...i, live: true, session: s, effort: s.effort || 'unsorted', kind: s.agent, itemKind: i.kind, src: srcOf(s), raw: rawOf(s) };
   });
 }
 
@@ -1339,21 +1349,23 @@ function sendReply(sessionId, text, done) {
 let actsFor = null, actsSub = null;
 const menuPart = (key, name, rows) => `<details data-sub="${key}" ${actsSub === key ? 'open' : ''}><summary>${name}<span>›</span></summary><div>${rows}</div></details>`;
 const menuTo = (act, id, list) => list.map(([to, name]) => `<button data-act="${act}" data-id="${id}" data-to="${to}">${esc(name)}</button>`).join('');
+const actsMenu = (id, about, rows) => `<details class="menu acts" id="acts" data-id="${id}" ${actsFor === id ? 'open' : ''}><summary class="icon" title="${about}" aria-label="More to do with this">⋯</summary>
+    <div class="pop">${rows}</div></details>`;
 function itemMenu(it, more) {
-  return `<details class="menu acts" id="acts" data-id="${it.id}" ${actsFor === it.id ? 'open' : ''}><summary class="icon" title="Snooze, dismiss, move and more" aria-label="More to do with this item">⋯</summary>
-    <div class="pop">${menuPart('snooze', 'Snooze', `<button data-act="snooze" data-id="${it.id}" data-for="hour">For an hour</button><button data-act="snooze" data-id="${it.id}" data-for="tomorrow">Until tomorrow</button>`)}
-      <button data-act="dismiss" data-id="${it.id}">Dismiss</button>${more}</div></details>`;
+  return actsMenu(it.id, 'Snooze, dismiss, move and more', `${menuPart('snooze', 'Snooze', `<button data-act="snooze" data-id="${it.id}" data-for="hour">For an hour</button><button data-act="snooze" data-id="${it.id}" data-for="tomorrow">Until tomorrow</button>`)}
+      <button data-act="dismiss" data-id="${it.id}">Dismiss</button>${more}`);
 }
 /* The efforts a live session or repository could be filed under other than cur. */
 const effortsBut = cur => liveEfforts.concat(LIVE_UNSORTED).filter(e => e.id !== cur).map(e => [e.id, e.name]).concat([['__new', 'New effort…']]);
-function sessionMenu(it) {
-  const s = it.session;
+/* The menu beside a session's title: what can be done with the session, after what can be done with its item, if it has one. */
+function sessionMenu(s, it) {
   const roles = knowledge.roles.filter(r => !(r.id === s.role && s.roleVia === 'you')).map(r => [r.id, r.name])
     .concat(s.role || s.roleVia !== 'you' ? [['__none', 'No role']] : [], [['__new', 'New role…']]);
-  return itemMenu(it, `${s.pending ? '' : `<button data-act="livePark" data-id="${it.id}">Park as open question</button>`}
-    ${menuPart('move', 'Move to', menuTo('liveMoveTo', s.id, effortsBut(s.effort || 'unsorted')))}
+  const rows = `${menuPart('move', 'Move to', menuTo('liveMoveTo', s.id, effortsBut(s.effort || 'unsorted')))}
     ${menuPart('role', s.role && s.roleVia === 'you' ? 'Change role' : 'Role', menuTo('liveRoleTo', s.id, roles))}
-    ${s.job ? `<button data-act="stop" data-id="${s.id}" title="Stops this background session. Its conversation is kept, and it can be reopened from Closed sessions.">Stop session</button>` : ''}`);
+    ${s.job ? `<button data-act="stop" data-id="${s.id}" title="Stops this background session. Its conversation is kept, and it can be reopened from the closed sessions under Activity.">Stop session</button>` : ''}`;
+  return it ? itemMenu(it, `${s.pending ? '' : `<button data-act="livePark" data-id="${it.id}">Park as open question</button>`}${rows}`)
+    : actsMenu(s.id, 'Move, give a role and more', rows);
 }
 /* The other sessions filed under an effort, as rows, and how many there are. */
 const alsoRows = (effort, except) => {
@@ -1455,27 +1467,50 @@ function md(src) {
   return `<div class="md">${out.join('')}</div>`;
 }
 
-/* The tabs under a session item: what the agent last said, rendered or as
-   it was written, and what else is going on in the same effort. */
-function detailTabs(it, s) {
-  const others = alsoRows(it.effort, s.id), also = state.detailTab === 'also';
-  const tab = (key, name, on) => `<button class="label ${on ? 'on' : ''}" data-act="detailTab" data-t="${key}">${name}</button>`;
-  const shown = state.sourceRaw ? `<div class="rawblock"><div class="tx">${esc(s.lastReply)}</div></div>` : md(s.lastReply);
-  const open = state.expanded['said:' + s.id];
-  const source = `${s.lastPrompt ? `<div class="said ${open ? 'open' : ''}"><div class="label">You said</div><div class="tx">${esc(s.lastPrompt)}</div>
-      <button class="link" data-act="expand" data-id="said:${s.id}" hidden>${open ? 'Show less' : 'Show all of it'}</button></div>` : ''}
-    ${s.lastReply ? shown : '<div class="none">No response found for this session.</div>'}
-    <div class="none mono" style="margin-top:12px">${esc(it.raw)}</div>`;
-  return `<div class="tabs" role="tablist">${tab('source', 'Most Recent Agent Response', !also)}${tab('also', `Also In ${esc(effortById(it.effort).name)}<span class="n">${others.count}</span>`, also)}
-      ${also ? '' : `<span class="tools">${s.lastReply ? `<button class="btn" data-act="copyReply" data-id="${s.id}" title="Copy the response as it was written">Copy</button>` : ''}
-        <span class="seg" role="group" aria-label="How the response is shown"><button class="${state.sourceRaw ? '' : 'on'}" data-act="sourceRaw" data-on="0">Rendered</button><button class="${state.sourceRaw ? 'on' : ''}" data-act="sourceRaw" data-on="1">Raw</button></span></span>`}</div>
-    <div class="tabbody">${also ? others.html : source}</div>`;
+/* What Slorp knows of a session that its page does not otherwise say. */
+function aboutSession(s) {
+  const fresh = (s.used?.in || 0) + (s.used?.cacheWrite || 0), out = s.used?.out || 0, read = s.used?.cacheRead || 0;
+  const facts = [
+    ['Directory', `<span class="mono">${esc(tilde(s.cwd))}</span>`],
+    s.branch && ['Branch', `<span class="mono">${esc(s.branch)}</span>`],
+    ['Agent', `${esc(srcOf(s))}, ${s.canReply ? 'running the Slorp mod' : 'not running the Slorp mod'}`],
+    ['Started', `<span title="${esc(new Date(s.startedAt).toLocaleString())}">${ago(minsSince(s.startedAt))}</span>`],
+    ['Last active', `<span title="${esc(new Date(s.activeAt).toLocaleString())}">${ago(minsSince(s.activeAt))}</span>`],
+    s.model && ['Model', runsOn(s)],
+    s.contextTokens && ['Context', contextUse(s)],
+    fresh + out > 0 && ['Used', `${tokens(fresh)} tokens sent for the first time and ${tokens(out)} written by the model${read ? `, with another ${tokens(read)} read back from the cache` : ''}${s.costUsd ? `. Its agent puts that at about ${money(s.costUsd)} at list prices` : ''}.`],
+    ['Filed under', `${esc(effortById(s.effort || 'unsorted').name)}${s.effort && VIA[s.effortVia] ? `, ${VIA[s.effortVia]}` : ''}`],
+    s.role && roleById(s.role) && ['Role', `${esc(roleById(s.role).name)}, ${s.roleVia === 'guess' ? 'guessed by the model' : 'given by you'}`],
+    ['Session', `<span class="mono">${esc(s.id)}</span> <button class="link" data-act="copyText" data-text="${esc(s.id)}">copy</button>`],
+  ].filter(Boolean);
+  const sent = (s.replies || []).map(r => `<div><b>${esc(r.state)}</b> · ${esc(r.text)}</div>`).join('');
+  return `<dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
+    ${sent ? `<div class="label" style="margin-top:22px">Sent from here</div><div class="livebox"><div class="sent">${sent}</div></div>` : ''}`;
 }
 
-/* The local model's account of a session item: beside it where there is room, within it where there is not. */
-function goingOn(it) {
-  const looked = it.session.insight?.lookups || [];
-  return `<p class="prose">${it.summary ? esc(it.summary) : `<span class="none">${modelless() ? `${NO_MODEL}, so this is not summarized. What the session last said is in full on the left.` : 'Not summarized yet.'}</span>`}</p>
+/* The tabs under a session: what the agent last said, rendered or as it was
+   written, what else is going on in the same effort, and its particulars. */
+function detailTabs(s) {
+  const effort = s.effort || 'unsorted', others = alsoRows(effort, s.id), on = ['also', 'about'].includes(state.detailTab) ? state.detailTab : 'source';
+  const tab = (key, name) => `<button class="label ${on === key ? 'on' : ''}" data-act="detailTab" data-t="${key}">${name}</button>`;
+  const shown = state.sourceRaw ? `<div class="rawblock"><div class="tx">${esc(s.lastReply)}</div></div>` : md(s.lastReply);
+  const open = state.expanded['said:' + s.id];
+  const source = () => `${s.lastPrompt ? `<div class="said ${open ? 'open' : ''}"><div class="label">You said</div><div class="tx">${esc(s.lastPrompt)}</div>
+      <button class="link" data-act="expand" data-id="said:${s.id}" hidden>${open ? 'Show less' : 'Show all of it'}</button></div>` : ''}
+    ${s.lastReply ? shown : '<div class="none">No response found for this session.</div>'}
+    <div class="none mono" style="margin-top:12px">${esc(rawOf(s))}</div>`;
+  return `<div class="tabs" role="tablist">${tab('source', 'Most Recent Agent Response')}${tab('also', `Also In ${esc(effortById(effort).name)}<span class="n">${others.count}</span>`)}${tab('about', 'Details')}
+      ${on !== 'source' ? '' : `<span class="tools">${s.lastReply ? `<button class="btn" data-act="copyReply" data-id="${s.id}" title="Copy the response as it was written">Copy</button>` : ''}
+        <span class="seg" role="group" aria-label="How the response is shown"><button class="${state.sourceRaw ? '' : 'on'}" data-act="sourceRaw" data-on="0">Rendered</button><button class="${state.sourceRaw ? 'on' : ''}" data-act="sourceRaw" data-on="1">Raw</button></span></span>`}</div>
+    <div class="tabbody">${on === 'also' ? others.html : on === 'about' ? aboutSession(s) : source()}</div>`;
+}
+
+/* The local model's account of a session: beside its page where there is room, within it where there is not.
+   Stale says the session has been working since the account was written. */
+function goingOn(s, summary, stale) {
+  const looked = s.insight?.lookups || [];
+  return `<p class="prose">${summary ? esc(summary) : `<span class="none">${modelless() ? `${NO_MODEL}, so this is not summarized. What the session last said is in full on the left.` : 'Not summarized yet.'}</span>`}</p>
+    ${summary && stale ? '<div class="none" style="margin-top:8px">Written when it last stopped. It has been working since.</div>' : ''}
     ${looked.length ? `<div class="none" style="margin-top:8px">${spark}Checked ${esc(listOf(looked))} to write this.</div>` : ''}`;
 }
 
@@ -1492,35 +1527,52 @@ function timeline(s, open) {
     <div>${m.line ? `<div class="line" title="${esc(m.summary || '')}">${spark}${esc(m.line)}</div>` : ''}<div class="you" title="${esc(m.prompt)}">${esc(m.prompt)}</div></div></li>`).join('')}</ol>`;
 }
 
-function liveItemDetail(it) {
-  if (it.feed) return feedItemDetail(it);
-  const s = it.session;
-  let answer;
-  if (s.pending) {
-    answer = pendingBox(s);
-  } else if (s.waitingFor === 'permission prompt') {
-    answer = `<div class="none">Slorp was not shown this permission prompt, so answer it in the session's terminal: <span class="mono">${esc(shortPath(s.cwd))}</span></div>`;
-  } else if (s.canReply) {
-    const quick = it.replies.map(r => `<button class="btn" data-act="liveSuggest" data-id="${it.id}" data-text="${esc(r)}">${esc(r)}</button>`).join('');
-    const asks = pullAsks(pullOf(s), `item-${it.id}`);
-    answer = `${quick || asks ? `<div class="replies">${quick}${asks}</div>` : ''}
-      <textarea data-keep="item-${it.id}" placeholder="Reply to this session…"></textarea>
-      <div class="send"><span>${quick || asks ? `${quick ? spark : ''}Suggestions fill the box; nothing is sent until you press Send.` : 'Arrives as your next message once the session is idle.'}</span>
-      <button class="btn go" data-act="liveItemSend" data-id="${it.id}">Send</button></div>`;
-  } else {
-    answer = `<div class="none">This session isn't running the Slorp mod, so answer it in its terminal: <span class="mono">${esc(shortPath(s.cwd))}</span></div>`;
-  }
+/* What a session's page offers for answering it: its item's reply box, else its prompt, else a box to say something. */
+function answerBox(s, it) {
+  const terminal = `<span class="mono">${esc(shortPath(s.cwd))}</span>`;
+  if (s.pending) return pendingBox(s);
+  if (s.waitingFor === 'permission prompt') return `<div class="none">Slorp was not shown this permission prompt, so answer it in the session's terminal: ${terminal}</div>`;
+  if (!s.canReply) return `<div class="none">This session isn't running the Slorp mod, so ${it ? `answer it in its terminal: ${terminal}` : 'it can be watched but not replied to.'}</div>`;
+  const box = it ? `item-${it.id}` : `live-${s.id}`;
+  const quick = (it ? it.replies : []).map(r => `<button class="btn" data-act="liveSuggest" data-id="${it.id}" data-text="${esc(r)}">${esc(r)}</button>`).join('');
+  const asks = pullAsks(pullOf(s), box);
+  return `${quick || asks ? `<div class="replies">${quick}${asks}</div>` : ''}
+    <textarea data-keep="${box}" placeholder="${it ? 'Reply to this session…' : 'Say something to this session…'}"></textarea>
+    <div class="send"><span>${quick || asks ? `${quick ? spark : ''}Suggestions fill the box; nothing is sent until you press Send.` : 'Arrives as your next message once the session is idle.'}</span>
+    <button class="btn go" data-act="${it ? 'liveItemSend' : 'liveSend'}" data-id="${it ? it.id : s.id}">Send</button></div>`;
+}
+
+/* A session's page. With the item it has under Attention it leads with what is needed; stands is how it stands, for its first line. */
+function sessionPage(s, it, stands) {
+  const subtitle = it ? it.subtitle : s.status !== 'working' && s.insight?.title;
+  const summary = it ? it.summary : s.insight?.summary;
+  const needs = it ? `<div class="label">${it.summary ? spark : ''}What's needed from you</div><p class="ask">${esc(it.ask)}</p>`
+    : s.pending ? `<div class="label" style="margin-bottom:10px">${s.pending.question || askedQuestions(s.pending) ? 'Waiting for your answer' : 'Waiting for your permission'}</div>`
+    : s.canReply ? '<div class="label">Say something to it</div>' : '';
   return `<div class="inner">
-    <div class="crumb">${s.effort ? `<button class="eff" data-act="effort" data-id="${s.effort}">${esc(effortById(s.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${s.effortVia === 'guess' ? `<span>${spark}filed by the model</span>` : ''}${kindBadge(it.kind, it.src)}${roleChip(s)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span>${s.branch ? `<span class="mono">${esc(s.branch)}</span>` : ''}${pullChip(s, true)}${s.model ? `<span>${runsOn(s)}</span>` : ''}${contextUse(s)}</div>
+    <div class="crumb">${s.effort ? `<button class="eff" data-act="effort" data-id="${s.effort}">${esc(effortById(s.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${s.effortVia === 'guess' ? `<span>${spark}filed by the model</span>` : ''}${kindBadge(s.agent, srcOf(s))}${roleChip(s)}${stands}${s.branch ? `<span class="mono">${esc(s.branch)}</span>` : ''}${pullChip(s, true)}${s.model ? `<span>${runsOn(s)}</span>` : ''}${contextUse(s)}</div>
     <div class="titled">${renaming === s.id
       ? `<form class="rename" data-form="name" data-id="${s.id}"><input name="name" data-keep="name-${s.id}" value="${esc(s.label)}" maxlength="80" placeholder="Leave empty to go back to its own title" aria-label="Name for this session">
           <button class="btn go">Save</button><button type="button" class="btn" data-act="renameCancel">Cancel</button></form>`
-      : `<h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}${state.fluent ? `<button class="pen" data-act="rename" data-id="${s.id}" title="${s.labelVia === 'you' ? 'You named this session. Rename it' : 'Give this session a name of your own'}" aria-label="Rename this session">✎</button>` : ''}</h1>`}${sessionMenu(it)}</div>
-    ${it.subtitle && state.fluent ? `<p class="subt">${spark}${esc(it.subtitle)}</p>` : ''}
-    <div class="need"><div class="label">${it.summary ? spark : ''}What's needed from you</div><p class="ask">${esc(it.ask)}</p>${answer}</div>
-    <div class="sec going"><div class="label"><span>${it.summary ? spark : ''}What's going on</span></div>${goingOn(it)}</div>
-    ${detailTabs(it, s)}
+      : `<h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? s.label : rawOf(s))}${state.fluent ? `<button class="pen" data-act="rename" data-id="${s.id}" title="${s.labelVia === 'you' ? 'You named this session. Rename it' : 'Give this session a name of your own'}" aria-label="Rename this session">✎</button>` : ''}</h1>`}${sessionMenu(s, it)}</div>
+    ${subtitle && state.fluent ? `<p class="subt">${spark}${esc(subtitle)}</p>` : ''}
+    ${it ? '' : roleNote(s)}
+    <div class="need ${needs ? '' : 'bare'}">${needs}${answerBox(s, it)}</div>
+    <div class="sec going"><div class="label"><span>${summary ? spark : ''}What's going on</span></div>${goingOn(s, summary, !it && s.status === 'working')}</div>
+    ${detailTabs(s)}
   </div>`;
+}
+
+/* The pane beside a session's page: the model's account of it and its timeline, or the rail that brings them back. */
+function sessionSide(s, summary, stale, key) {
+  const label = `<span class="label">${summary ? spark : ''}What's going on</span>`;
+  return state.sideShut
+    ? `<aside class="pane side"><button class="rail" data-act="side" title="Show what's going on" aria-expanded="false"><span>‹</span>${label}</button></aside>`
+    : `<aside class="pane side" data-scroll="${key}"><div class="head">${label}<button data-act="side" title="Hide this panel" aria-expanded="true">›</button></div>${goingOn(s, summary, stale)}${timeline(s, true)}</aside>`;
+}
+
+function liveItemDetail(it) {
+  return it.feed ? feedItemDetail(it) : sessionPage(it.session, it, `<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span>`);
 }
 
 function connect() {
@@ -1578,75 +1630,75 @@ function pendingBox(s) {
     <textarea data-keep="deny-${p.id}" placeholder="If you deny, you can tell it why…" style="display:block;width:100%;min-height:44px;margin-top:10px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);resize:vertical"></textarea>`;
 }
 
-function liveDetail(s) {
-  const pending = s.pending ? `<div class="pend"><div class="label" style="margin-bottom:8px">${s.pending.question || askedQuestions(s.pending) ? 'Waiting for your answer' : 'Waiting for your permission'}</div>${pendingBox(s)}</div>` : '';
-  const lines = [];
-  if (s.lastPrompt) lines.push(['you', s.lastPrompt]);
-  if (s.lastReply) lines.push([s.agent, s.lastReply]);
-  const sent = (s.replies || []).map(r => `<div><b>${esc(r.state)}</b> · ${esc(r.text)}</div>`).join('');
-  const box = s.canReply
-    ? `<div class="livebox">${pullAsks(pullOf(s), `live-${s.id}`) ? `<div class="replies">${pullAsks(pullOf(s), `live-${s.id}`)}</div>` : ''}<textarea data-keep="live-${s.id}" placeholder="Reply to this session…"></textarea>
-        <div class="send"><span>Arrives as your next message once the session is idle.</span>
-        <button class="btn go" data-act="liveSend" data-id="${s.id}">Send</button></div>
-        ${sent ? `<div class="sent">${sent}</div>` : ''}</div>`
-    : `<div class="none" style="margin:10px 0 16px">This session isn't running the Slorp mod, so it can be watched but not replied to.</div>`;
-  return `${roleNote(s)}${pending}${lines.length ? rawBlock(lines) : '<div class="none">No transcript found for this session.</div>'}${box}
-    <div class="bar" style="margin:0 0 14px">${moveSelect(s)}${roleSelect(s)}${stopButton(s)}</div>`;
+/* What a session's row says under its name: what it waits on, else the model's line on it, else what the user last said. */
+const doingNow = s => s.pending ? (s.pending.question ? `Asks: ${s.pending.summary}` : `Wants to run ${s.pending.tool}: ${s.pending.summary}`)
+  : s.status !== 'working' && s.insight?.title ? s.insight.title : s.lastPrompt ? `You last said: ${s.lastPrompt}` : '';
+
+/* The sessions as Activity lists them: the open ones, the latest to do anything first, and the closed, the latest to close first.
+   Open sessions whose ages read the same keep one order between them, so two that are both working do not trade places. */
+function liveActivity() {
+  const age = s => Math.floor(minsSince(s.activeAt));
+  return [live.slice().sort((a, b) => age(a) - age(b) || new Date(b.startedAt) - new Date(a.startedAt) || a.id.localeCompare(b.id)), archive];
 }
 
-function viewActivityLive() {
-  const n = k => live.filter(s => s.status === k).length;
-  const lede = live.length
-    ? `${cap(num(live.length))} agent session${live.length === 1 ? ' is' : 's are'} open on this machine: ${n('waiting')} awaiting you, ${n('working')} working, ${n('idle') + n('done') + n('failed')} quiet.`
-    : 'No agent sessions are open on this machine.';
-  const rows = live.map(s => {
-    const open = state.expanded[s.id], [dot, label] = LIVE_STATUS[s.status] || LIVE_STATUS.idle;
-    const name = clip(s.label, 90);
-    const what = state.fluent ? `<span class="ttl">${esc(name)}</span>` : `<span class="mono ttl">${esc(`${s.agent} · ${tilde(s.cwd)} · ${s.id.slice(0, 8)}`)}</span>`;
-    const sub = s.pending ? (s.pending.question ? `Asks: ${s.pending.summary}` : `Wants to run ${s.pending.tool}: ${s.pending.summary}`) : s.insight && s.status !== 'working' ? s.insight.summary : s.lastPrompt ? `You last said: ${s.lastPrompt}` : '';
-    return `<tr class="s ${open ? 'open' : ''}" data-act="expand" data-id="${s.id}">
-        <td class="st"><span class="dot ${dot}"></span>${label}${s.waitingFor ? `<div class="dim">${esc(s.waitingFor)}</div>` : ''}</td>
-        <td><div>${what}</div>${state.fluent && sub ? `<div class="doing">${esc(clip(sub, 220))}</div>` : ''}</td>
-        <td class="dim">${kindBadge(s.agent)}${s.kind === 'background' ? ' · background' : ''}${s.canReply ? ' · connected' : ''}${s.model ? `<div style="margin-top:5px">${runsOn(s)}</div>` : ''}${s.role ? `<div style="margin-top:5px">${roleChip(s)}</div>` : ''}${s.pull ? `<div style="margin-top:5px">${pullChip(s, true)}</div>` : ''}</td>
-        <td class="dim hide">${contextUse(s)}</td>
-        <td class="dim hide">${s.effort ? esc(effortById(s.effort).name) : ''}</td>
-        <td class="dim hide mono" title="${esc(s.cwd)}">${esc(shortPath(s.cwd))}</td>
-        <td class="dim hide">${span(minsSince(s.startedAt))}</td>
-        <td class="dim">${ago(minsSince(s.activeAt))}</td>
-      </tr>${open ? `<tr class="x"><td></td><td colspan="7">${liveDetail(s)}</td></tr>` : ''}`;
-  }).join('');
-  return `<div class="page">
-    <h1>Everything that's running</h1>
-    <p class="prose" style="margin:10px 0 18px">${esc(lede)}${isOffline ? ' <b>The Slorp service stopped responding; this is the last thing it reported.</b>' : ''}</p>
-    <table class="tbl"><thead><tr><th class="label">Status</th><th class="label">What</th><th class="label">Agent</th><th class="label hide">Context</th><th class="label hide">Effort</th><th class="label hide">Where</th><th class="label hide">Age</th><th class="label">Last activity</th></tr></thead>
-    <tbody>${rows}</tbody></table>
-    ${closedSessions()}
+function sessionRowLive(s) {
+  const long = state.rows !== 'short', sub = doingNow(s), [dot, word] = statusOf(s);
+  const name = state.fluent ? `<span class="t">${esc(clip(s.label, 90))}</span>` : `<span class="mono t">${esc(rawOf(s))}</span>`;
+  return `<button class="row ${s.id === state.actSel ? 'sel' : ''}" data-act="actSel" data-id="${s.id}" style="${kindColor(s.agent)}">
+    <span class="h">${name}<span class="w"><span>${ago(minsSince(s.activeAt))}</span>${stat(dot, word)}</span></span>
+    ${state.fluent && sub ? `<span class="st">${esc(clip(sub, 160))}</span>` : ''}
+    ${long ? `<span class="m">${kindBadge(s.agent)}${roleChip(s)}${pullChip(s)}${s.effort ? `<span>${esc(effortById(s.effort).name)}</span>` : ''}</span>` : ''}
+    ${long && s.model ? `<span class="m"><span>${runsOn(s)}</span>${contextUse(s, true)}</span>` : ''}
+  </button>`;
+}
+
+function closedRow(a) {
+  const name = state.fluent ? `<span class="t">${esc(clip(a.label, 90))}</span>` : `<span class="mono t">${esc(`${a.agent} · ${shortPath(a.cwd || '')} · ${a.id.slice(0, 8)}`)}</span>`;
+  return `<button class="row ${a.id === state.actSel ? 'sel' : ''}" data-act="actSel" data-id="${a.id}" style="${kindColor(a.agent)}">
+    <span class="h">${name}<span class="w"><span>${ago(minsSince(a.endedAt))}</span></span></span>
+    ${state.fluent && a.title ? `<span class="st">${esc(clip(a.title, 160))}</span>` : ''}
+    ${state.rows === 'short' ? '' : `<span class="m">${a.agent ? kindBadge(a.agent) : ''}${a.effort ? `<span>${esc(effortById(a.effort).name)}</span>` : ''}</span>`}
+  </button>`;
+}
+
+/* A closed session's page: how it stood when it closed, a way back into it, and its timeline. */
+const shellWord = s => /^[\w./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
+const resumeCommand = a => a.agent === 'claude' && a.cwd ? `cd ${shellWord(a.cwd)} && claude --resume ${shellWord(a.id)}` : '';
+function closedPage(a) {
+  const doc = archiveDocs[a.id], cmd = resumeCommand(a);
+  const ran = a.startedAt ? `<span>open for ${span((new Date(a.endedAt) - new Date(a.startedAt)) / 60000)}</span>` : '';
+  return `<div class="inner">
+    <div class="crumb">${a.effort ? `<button class="eff" data-act="effort" data-id="${a.effort}">${esc(effortById(a.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${a.agent ? kindBadge(a.agent) : ''}${stat('done', `closed ${ago(minsSince(a.endedAt))}`)}${ran}${a.branch ? `<span class="mono">${esc(a.branch)}</span>` : ''}${a.cwd ? `<span class="mono" title="${esc(a.cwd)}">${esc(shortPath(a.cwd))}</span>` : ''}</div>
+    <h1>${esc(a.label)}</h1>
+    ${a.title && state.fluent ? `<p class="subt">${spark}${esc(a.title)}</p>` : ''}
+    ${cmd ? `<div class="need"><div class="label">Pick it back up</div>
+      <div class="cmd"><span class="mono">${esc(cmd)}</span><button class="btn" data-act="copyText" data-text="${esc(cmd)}" title="Copy the command that reopens this session in a terminal">Copy</button></div>
+      <div class="replies"><button class="btn go" data-act="reopen" data-id="${a.id}">Reopen in the background</button>
+        <span class="none" style="align-self:center">Its conversation is kept. Reopened, it waits for a message.</span></div></div>` : ''}
+    <div class="sec"><div class="label"><span>${a.summary ? spark : ''}How it stood</span></div>
+      <p class="prose">${a.summary ? esc(a.summary) : `<span class="none">${modelless() ? `${NO_MODEL}, so it was not summarized.` : 'The model wrote nothing about it before it closed.'}</span>`}</p></div>
+    ${doc ? timeline(doc) || '<div class="label tlhead"><span>Timeline</span></div><div class="none">Nothing was said in it while Slorp was watching.</div>' : '<div class="none" style="margin-top:28px">Fetching its timeline…</div>'}
   </div>`;
 }
 
-/* Sessions that have closed, as they stood, with a way back into each. */
-const shellWord = s => /^[\w./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
-const resumeCommand = a => a.agent === 'claude' && a.cwd ? `cd ${shellWord(a.cwd)} && claude --resume ${shellWord(a.id)}` : '';
-function closedSessions() {
-  if (!archive.length) return '';
-  const shown = state.archiveAll ? archive : archive.slice(0, 8);
-  const rows = shown.map(a => {
-    const open = state.expanded['closed:' + a.id], doc = archiveDocs[a.id], cmd = resumeCommand(a);
-    const detail = !open ? '' : `<tr class="x"><td></td><td colspan="4"><div class="closed">
-        ${a.summary ? `<p class="prose">${spark}${esc(a.summary)}</p>` : ''}
-        ${cmd ? `<div class="cmd"><span class="mono">${esc(cmd)}</span><span><button class="btn" data-act="copyText" data-text="${esc(cmd)}" title="Copy the command that reopens this session in a terminal">Copy</button><button class="btn" data-act="reopen" data-id="${a.id}" title="Reopens this session in the background, where it waits for a message">Reopen in the background</button></span></div>` : ''}
-        ${doc ? timeline(doc) || '<div class="none">Nothing was said in it while Slorp was watching.</div>' : '<div class="none">Fetching its timeline…</div>'}</div></td></tr>`;
-    return `<tr class="s ${open ? 'open' : ''}" data-act="archived" data-id="${a.id}" id="closed-${a.id}">
-        <td class="st"><span class="dot done"></span>closed<div class="dim">${ago(minsSince(a.endedAt))}</div></td>
-        <td><div><span class="ttl">${esc(clip(a.label, 90))}</span></div>${a.title ? `<div class="doing">${esc(clip(a.title, 220))}</div>` : ''}</td>
-        <td class="dim">${a.agent ? kindBadge(a.agent) : ''}</td>
-        <td class="dim hide">${a.effort ? esc(effortById(a.effort).name) : ''}</td>
-        <td class="dim hide mono" title="${esc(a.cwd)}">${esc(shortPath(a.cwd || ''))}</td>
-      </tr>${detail}`;
-  }).join('');
-  return `<h2 class="sub2">Closed sessions</h2>
-    <p class="none" style="margin:4px 0 10px">Each as it stood when it closed. ${archive.length > shown.length ? `<button class="link" data-act="archiveAll">Show all ${archive.length}</button>` : ''}</p>
-    <table class="tbl"><tbody>${rows}</tbody></table>`;
+function viewActivityLive() {
+  const [open, closed] = liveActivity();
+  const find = id => open.find(s => s.id === id) || closed.find(a => a.id === id);
+  if (!find(state.actSel)) state.actSel = actShown(open, closed).map(x => x.id)[0] || null;
+  const sel = find(state.actSel), isOpen = sel && open.includes(sel), it = isOpen && itemOf(sel);
+  if (sel && !isOpen) fetchArchived(sel.id);
+  const n = k => open.filter(s => s.status === k).length;
+  const line = `${open.length ? `${cap(num(n('waiting')))} awaiting you, ${num(n('working'))} working, ${num(n('idle') + n('done') + n('failed'))} quiet.` : 'No agent sessions are open on this machine.'}${isOffline ? ' <b>The Slorp service stopped responding; this is the last it reported.</b>' : ''}`;
+  let detail = '', side = '';
+  if (isOpen) {
+    const [dot, word] = statusOf(sel), stale = !it && sel.status === 'working';
+    detail = sessionPage(sel, it, `${stat(dot, sel.waitingFor ? `${word}, ${esc(sel.waitingFor)}` : word)}<span>active ${ago(minsSince(sel.activeAt))}</span>`);
+    side = sessionSide(sel, it ? it.summary : sel.insight?.summary, stale, 'act-side');
+  } else if (sel) detail = closedPage(sel);
+  return activityView([
+    ['active', 'Active', open.length, line, open.map(sessionRowLive).join('')],
+    ['closed', 'Closed', closed.length, closed.length ? 'Each as it stood when it closed.' : 'Sessions are kept here once they close.', closed.map(closedRow).join('')],
+  ], detail, side);
 }
 
 /* ───────────────────────── Pull requests ───────────────────────── */
@@ -1947,12 +1999,7 @@ const actions = {
     ask('/api/plugins/claude', {}, () => toast('Done. Sessions already open pick it up after /reload-plugins or a restart.'), () => { installing = false; });
   },
   expand: d => { state.expanded[d.id] = !state.expanded[d.id]; },
-  archived: d => {
-    const key = 'closed:' + d.id;
-    state.expanded[key] = !state.expanded[key];
-    if (state.expanded[key]) fetchArchived(d.id);
-  },
-  archiveAll: () => { state.archiveAll = true; },
+  actSel: d => { state.actSel = d.id; },
   backfill: d => {
     fetch(`/api/sessions/${encodeURIComponent(d.id)}/backfill`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
       .then(res => res.ok ? res.json().then(r => toast(r.queued ? `Read ${plural(r.exchanges, 'exchange')}; the local model will fill in ${num(r.queued)}` : `Read ${plural(r.exchanges, 'exchange')}; nothing was left to fill in`))
@@ -1964,7 +2011,6 @@ const actions = {
     Promise.resolve().then(() => navigator.clipboard.writeText(d.text)).then(() => toast('Copied')).catch(() => toast('The browser would not let Slorp copy that'));
     return false;
   },
-  actFilter: d => { state.actFilter = d.f; },
   detailTab: d => { state.detailTab = d.t; },
   sourceRaw: d => { state.sourceRaw = d.on === '1'; },
   copyReply: d => {
@@ -2032,7 +2078,7 @@ const actions = {
   startCancel: () => { starting = null; },
   stop: d => {
     const s = live.find(x => x.id === d.id);
-    toast(`Stop "${clip(s ? s.label : d.id, 50)}"? Its conversation is kept.`, () => { ask(`/api/sessions/${d.id}/stop`, {}, () => toast('Stopped. Reopen it from Closed sessions.')); }, 'Stop');
+    toast(`Stop "${clip(s ? s.label : d.id, 50)}"? Its conversation is kept.`, () => { ask(`/api/sessions/${d.id}/stop`, {}, () => toast('Stopped. Reopen it from the closed sessions under Activity.')); }, 'Stop');
     return false;
   },
   reopen: d => { ask(`/api/archive/${d.id}/resume`, {}, () => toast('Reopened in the background')); return false; },
@@ -2178,6 +2224,10 @@ document.addEventListener('keydown', e => {
   else if (att && (e.key === 'j' || e.key === 'k')) {
     const order = visibleOrder(), i = order.indexOf(state.sel) + (e.key === 'j' ? 1 : -1);
     if (order[i]) state.sel = order[i];
+  }
+  else if (state.view === 'activity' && (e.key === 'j' || e.key === 'k')) {
+    const order = actShown(...(live ? liveActivity() : mockActivity())).map(x => x.id), i = order.indexOf(state.actSel) + (e.key === 'j' ? 1 : -1);
+    if (order[i]) state.actSel = order[i];
   }
   else if (att && state.sel && e.key === 'e') actions.dismiss({ id: state.sel });
   else if (att && state.sel && e.key === 's') actions.snooze({ id: state.sel, for: 'hour' });
