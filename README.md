@@ -14,21 +14,17 @@ You need [Go](https://go.dev/dl/) 1.27 or later and [Claude Code](https://claude
    go install github.com/jefflinse/slorp@latest
    ```
 
-2. Install the Claude Code plugin, then restart Claude Code or run `/reload-plugins` in an open session.
-
-   ```sh
-   claude plugin install slorp --marketplace https://github.com/jefflinse/slorp.git
-   ```
-
-3. Run Slorp and open <http://127.0.0.1:4747>.
+2. Run it and open <http://127.0.0.1:4747>.
 
    ```sh
    slorp
    ```
 
-To try it without installing, `go run github.com/jefflinse/slorp@latest` does the same as steps 1 and 3.
+3. If Claude Code doesn't have the Slorp plugin yet, the page says so and offers to install it. Sessions already open load it after `/reload-plugins` or a restart.
 
-Slorp lists Claude Code sessions with or without the plugin. The plugin is what lets you reply to a session and answer its permission prompts from the page. See [its README](integrations/claude-code/README.md) for configuration.
+To try Slorp without installing it, `go run github.com/jefflinse/slorp@latest` does the same as steps 1 and 2.
+
+Slorp lists Claude Code sessions with or without the plugin. The plugin is what lets you reply to a session and answer its permission prompts from the page. See [its README](integrations/claude-code/README.md) to install it by hand or configure it.
 
 Summaries are written by a local model. Slorp looks for an OpenAI-compatible server at `http://localhost:1234`; point it elsewhere with `-llm`, or pass `-llm ""` to go without. `slorp -h` lists the other options.
 

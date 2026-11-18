@@ -10,6 +10,8 @@ Slorp finds the sessions themselves with `claude agents --json`, so a session wi
 
 ## Install
 
+Slorp's page offers to install the plugin when Claude Code doesn't have it. To install it by hand:
+
 ```sh
 claude plugin install slorp --marketplace https://github.com/jefflinse/slorp.git
 ```
