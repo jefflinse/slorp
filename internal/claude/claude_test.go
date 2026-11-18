@@ -464,3 +464,109 @@ func TestPollBuildsTheRoster(t *testing.T) {
 		t.Error("a failed poll wiped the sessions already known")
 	}
 }
+
+// by is a user entry as the session id wrote it.
+func by(id, prompt string) map[string]any {
+	e := user(prompt)
+	e["session_id"] = id
+	return e
+}
+
+func TestOrigin(t *testing.T) {
+	home := t.TempDir()
+	project := filepath.Join(home, ".claude", "projects", "-w")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	side := by("a-subagent", "inside a subagent")
+	side["isSidechain"] = true
+	write := func(id string, entries ...map[string]any) {
+		t.Helper()
+		for _, e := range entries {
+			appendTo(t, filepath.Join(project, id+".jsonl"), line(t, e))
+		}
+	}
+	write("fresh", map[string]any{"type": "ai-title", "aiTitle": "A title"}, user("said before the id was written"), side, by("fresh", "go"), by("later", "on"))
+	write("carried", side, by("before", "copied from the session before"), by("carried", "said here"))
+	write("silent", user("nothing says who wrote this"))
+
+	a := &Adapter{Home: home}
+	for id, want := range map[string]string{"fresh": "fresh", "carried": "before", "silent": "", "missing": "", "*": "", "../-w/fresh": "", "": ""} {
+		if got := a.origin(id); got != want {
+			t.Errorf("origin(%q) = %q, want %q", id, got, want)
+		}
+	}
+
+	tl := &tail{path: filepath.Join(project, "carried.jsonl")}
+	tl.read()
+	if tl.origin != "before" {
+		t.Errorf("a transcript read to its end began with %q, want the first session to write in it", tl.origin)
+	}
+}
+
+func TestPollFollowsAConversationToItsNewID(t *testing.T) {
+	bin, _ := fakeClaude(t, `[{"id":"j1","cwd":"/w","kind":"interactive","startedAt":1700000000000,"status":"idle","sessionId":"old"}]`, "")
+	home := t.TempDir()
+	project := filepath.Join(home, ".claude", "projects", "-w")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	appendTo(t, filepath.Join(project, "old.jsonl"), line(t, by("old", "add flanges")))
+	st := testdb.Open(t)
+	h := hub.New(testdb.KB(t, st), st)
+	a := &Adapter{Hub: h, Bin: bin, Home: home, tails: map[string]*tail{}}
+	if err := a.poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.Rename("old", "Flange work")
+
+	// The conversation moved on twice while nothing was watching its second id.
+	appendTo(t, filepath.Join(project, "between.jsonl"), line(t, by("old", "add flanges")))
+	appendTo(t, filepath.Join(project, "new.jsonl"), line(t, by("between", "now add washers")))
+	if err := os.WriteFile(filepath.Join(filepath.Dir(bin), "roster"), []byte(`[{"id":"j1","cwd":"/w","kind":"background","startedAt":1700000000000,"status":"idle","sessionId":"new"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	got := h.State()
+	if len(got.Sessions) != 1 || len(got.Archive) != 0 {
+		t.Fatalf("%d open and %d closed sessions, want the one conversation under its new id", len(got.Sessions), len(got.Archive))
+	}
+	s := got.Sessions[0]
+	if s.ID != "new" || s.Label != "Flange work" || len(s.Timeline) != 2 || s.Timeline[0].Prompt != "add flanges" || s.Timeline[1].Prompt != "now add washers" {
+		t.Errorf("session %q named %q with timeline %+v; want the new id with the old one's name and both prompts", s.ID, s.Label, s.Timeline)
+	}
+}
+
+func TestRunTracesTheSessionsThatClosedBeforeItWatched(t *testing.T) {
+	home := t.TempDir()
+	project := filepath.Join(home, ".claude", "projects", "-w")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	appendTo(t, filepath.Join(project, "old.jsonl"), line(t, by("old", "add flanges")))
+	appendTo(t, filepath.Join(project, "new.jsonl"), line(t, by("old", "now add washers")))
+	st := testdb.Open(t)
+	h := hub.New(testdb.KB(t, st), st)
+	at := time.Now().Add(-time.Hour)
+	old := hub.Session{ID: "old", Agent: Agent, Status: hub.Idle, LastPrompt: "add flanges", PromptAt: at}
+	h.SetRoster(Agent, []hub.Session{old, {ID: "new", Agent: Agent, Status: hub.Idle, LastPrompt: "now add washers", PromptAt: at.Add(time.Minute)}})
+	h.SetRoster(Agent, nil)
+	if got := h.Untraced(Agent); len(got) != 2 {
+		t.Fatalf("untraced = %v, want both closed sessions", got)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	(&Adapter{Hub: h, Bin: filepath.Join(home, "no-claude"), Home: home, Interval: time.Hour}).Run(ctx)
+
+	if got := h.Untraced(Agent); len(got) != 0 {
+		t.Errorf("untraced = %v after Run, want every closed session traced", got)
+	}
+	h.SetRoster(Agent, []hub.Session{old})
+	if got := h.State(); len(got.Archive) != 0 || len(got.Sessions) != 1 || len(got.Sessions[0].Timeline) != 2 {
+		t.Errorf("%d closed and sessions %+v; want the reopened session to hold what the one that continued it did", len(got.Archive), got.Sessions)
+	}
+}

@@ -32,7 +32,9 @@ const (
 	ReplyLimit = 30000
 
 	maxFirstRead = 64 << 20
-	promptLimit  = 8000
+	// originRead is how much of a transcript is read for where it began.
+	originRead  = 16 << 20
+	promptLimit = 8000
 	// exchangeReply is how much of an answer Exchanges keeps, in runes.
 	exchangeReply = 2000
 )
@@ -60,6 +62,9 @@ func (a *Adapter) woken() chan struct{} {
 // Run polls until ctx ends.
 func (a *Adapter) Run(ctx context.Context) {
 	a.tails = map[string]*tail{}
+	for _, id := range a.Hub.Untraced(Agent) {
+		a.trace(id, a.origin(id))
+	}
 	t := time.NewTicker(a.Interval)
 	defer t.Stop()
 	for {
@@ -128,6 +133,9 @@ func (a *Adapter) poll(ctx context.Context) error {
 			if !t.modTime.IsZero() {
 				s.ActiveAt = t.modTime
 			}
+			if t.origin != "" {
+				a.trace(r.SessionID, t.origin)
+			}
 		}
 		live = append(live, s)
 	}
@@ -156,13 +164,56 @@ func (a *Adapter) tail(sessionID string) *tail {
 	if t, ok := a.tails[sessionID]; ok {
 		return t
 	}
-	m, _ := filepath.Glob(filepath.Join(a.Home, ".claude", "projects", "*", sessionID+".jsonl"))
-	if len(m) == 0 {
+	path := a.transcript(sessionID)
+	if path == "" {
 		return nil
 	}
-	t := &tail{path: m[0]}
+	t := &tail{path: path}
 	a.tails[sessionID] = t
 	return t
+}
+
+// transcript returns the path of a session's transcript, or "" when there
+// is none or sessionID could not name one.
+func (a *Adapter) transcript(sessionID string) string {
+	if sessionID == "" || strings.ContainsFunc(sessionID, func(r rune) bool {
+		return !(r == '-' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z')
+	}) {
+		return ""
+	}
+	m, _ := filepath.Glob(filepath.Join(a.Home, ".claude", "projects", "*", sessionID+".jsonl"))
+	if len(m) == 0 {
+		return ""
+	}
+	return m[0]
+}
+
+// origin reads the start of a session's transcript for the session that
+// began it: another when the transcript continues that one, and the session
+// itself otherwise. It is "" when the transcript does not say.
+func (a *Adapter) origin(sessionID string) string {
+	f, err := os.Open(a.transcript(sessionID))
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	var t tail
+	for r := bufio.NewReaderSize(io.LimitReader(f, originRead), 1<<20); t.origin == ""; {
+		line, err := r.ReadBytes('\n')
+		if err != nil {
+			break
+		}
+		t.apply(line)
+	}
+	return t.origin
+}
+
+// trace tells the hub which session id continues, and likewise of each
+// session before it that the hub has heard nothing of.
+func (a *Adapter) trace(id, from string) {
+	for a.Hub.Link(id, from) {
+		id, from = from, a.origin(from)
+	}
 }
 
 // tail incrementally reads one transcript. The entry format is internal to
@@ -173,6 +224,9 @@ type tail struct {
 	modTime time.Time
 
 	title, branch, lastPrompt, lastReply string
+	// origin is the session the transcript's first entry was written by,
+	// which is another session when this one continues it.
+	origin string
 	// named is the name the user gave the session with /rename, if any.
 	named string
 	// promptAt is when lastPrompt was said, zero when the file does not say.
@@ -200,6 +254,9 @@ type entry struct {
 	Subtype   string `json:"subtype"`
 	Timestamp string `json:"timestamp"`
 	Effort    string `json:"effort"`
+	// WrittenBy is the session that wrote the entry, which an entry keeps
+	// when it is copied or carried into another session's transcript.
+	WrittenBy string `json:"session_id"`
 	Message   struct {
 		Content json.RawMessage `json:"content"`
 		ID      string          `json:"id"`
@@ -277,6 +334,9 @@ func (t *tail) apply(line []byte) {
 	if e.IsSidechain {
 		return
 	}
+	if t.origin == "" {
+		t.origin = e.WrittenBy
+	}
 	if e.GitBranch != "" {
 		t.branch = e.GitBranch
 	}
@@ -340,16 +400,11 @@ func (e entry) said() string {
 // what the agent last answered before the user spoke again. At most limit
 // are returned.
 func (a *Adapter) Exchanges(sessionID string, limit int) ([]hub.Exchange, error) {
-	if sessionID == "" || strings.ContainsFunc(sessionID, func(r rune) bool {
-		return !(r == '-' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z')
-	}) {
-		return nil, fmt.Errorf("%q is not a session id", sessionID)
+	path := a.transcript(sessionID)
+	if path == "" {
+		return nil, fmt.Errorf("no transcript was found for the session %q", sessionID)
 	}
-	found, _ := filepath.Glob(filepath.Join(a.Home, ".claude", "projects", "*", sessionID+".jsonl"))
-	if len(found) == 0 {
-		return nil, fmt.Errorf("no transcript was found for the session")
-	}
-	f, err := os.Open(found[0])
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}

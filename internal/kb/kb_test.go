@@ -390,3 +390,43 @@ func TestRoles(t *testing.T) {
 		t.Error("removing a role did not change the role revision")
 	}
 }
+
+func TestCarry(t *testing.T) {
+	st := testdb.Open(t)
+	k := testdb.KB(t, st)
+	widgets, gears := create(t, k, "Widgets"), create(t, k, "Gears")
+	reviewer, triage := role(t, k, "Reviewer", ""), role(t, k, "Triage", "")
+	filed := func(k *kb.Store, id string) string {
+		effort, via, _ := k.Resolve(id, "")
+		r, _ := k.RoleOf(id)
+		return effort + "/" + via + "/" + r.ID
+	}
+	must(t, k.Assign("old", widgets))
+	must(t, k.SetRole("old", reviewer))
+
+	must(t, k.Carry("old", "new"))
+	if got := filed(k, "new"); got != widgets+"/"+kb.ViaUser+"/"+reviewer {
+		t.Errorf("the new session is filed %q, want the effort and role the user gave the old", got)
+	}
+	if _, _, ok := k.Resolve("old", ""); ok {
+		t.Error("the old session is still filed where the user put it")
+	}
+	if _, ok := k.RoleOf("old"); ok {
+		t.Error("the old session still has the role the user gave it")
+	}
+	if got := filed(testdb.KB(t, st), "new"); got != widgets+"/"+kb.ViaUser+"/"+reviewer {
+		t.Errorf("after reopening, the new session is filed %q", got)
+	}
+
+	// What the user said of the session carried to stands.
+	must(t, k.Assign("older", gears))
+	must(t, k.SetRole("older", triage))
+	must(t, k.Carry("older", "new"))
+	if got := filed(k, "new"); got != widgets+"/"+kb.ViaUser+"/"+reviewer {
+		t.Errorf("the new session is filed %q, want what it already had kept", got)
+	}
+	if _, _, ok := k.Resolve("older", ""); ok {
+		t.Error("a session whose filing was not needed is still filed")
+	}
+	must(t, k.Carry("nothing", "new"))
+}

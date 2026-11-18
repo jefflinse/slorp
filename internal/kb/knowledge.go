@@ -135,6 +135,29 @@ func (s *Store) RoleOf(sessionID string) (role Role, ok bool) {
 	return Role{}, found
 }
 
+// Carry hands what the user said of one session, its effort and its role, to
+// another the user has not said the same of, and forgets it for the first.
+func (s *Store) Carry(from, to string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	moved := false
+	for _, said := range []map[string]string{s.f.Assignments, s.f.SessionRoles} {
+		v, ok := said[from]
+		if !ok {
+			continue
+		}
+		if _, has := said[to]; !has {
+			said[to] = v
+		}
+		delete(said, from)
+		moved = true
+	}
+	if !moved {
+		return nil
+	}
+	return s.save()
+}
+
 // HasRole reports whether a role with that ID exists.
 func (s *Store) HasRole(id string) bool {
 	s.mu.Lock()

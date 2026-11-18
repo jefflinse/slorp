@@ -404,6 +404,7 @@ type Cache interface {
 	Get(kind, id string, v any) (bool, error)
 	Put(kind, id string, v any) error
 	Each(kind string, fn func(id string, body []byte)) error
+	Delete(kind, id string) error
 }
 
 // What the model wrote about one session, kept so a restart need not ask again.
@@ -480,6 +481,9 @@ type Hub struct {
 	backfill map[string][]Exchange
 	// rostered holds the agents whose open sessions a roster lists.
 	rostered map[string]bool
+	// origins holds, for each session something is known of, the session
+	// it continues, empty for one that continues none.
+	origins map[string]string
 }
 
 type note struct {
@@ -491,7 +495,7 @@ type note struct {
 func New(k *kb.Store, c Cache) *Hub {
 	h := &Hub{sessions: map[string]*Session{}, subs: map[chan struct{}]struct{}{}, kb: k, notes: map[string]note{},
 		cache: c, settings: Settings{AnswerPermissions: true}, waiters: map[string]chan Decision{}, feeds: map[string]*feed{}, wrapups: map[string]Wrapup{},
-		archive: map[string]sessionDoc{}, unsettled: map[string]sessionDoc{}, started: time.Now()}
+		archive: map[string]sessionDoc{}, unsettled: map[string]sessionDoc{}, started: time.Now(), origins: map[string]string{}}
 	h.warn(c.Each("session", func(id string, body []byte) {
 		var d sessionDoc
 		switch {
@@ -502,6 +506,12 @@ func New(k *kb.Store, c Cache) *Hub {
 			}
 		case d.Agent != "":
 			h.unsettled[id] = d
+		}
+	}))
+	h.warn(c.Each("origin", func(id string, body []byte) {
+		var from string
+		if json.Unmarshal(body, &from) == nil {
+			h.origins[id] = from
 		}
 	}))
 	h.warn(c.Each("wrapup", func(day string, body []byte) {
@@ -620,6 +630,7 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 		}
 	}
 	h.sweep(agent)
+	h.fold(agent)
 	h.changed()
 }
 
