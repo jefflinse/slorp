@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -79,6 +80,32 @@ type Launcher interface {
 	Uninstall(ctx context.Context) error
 }
 
+// Prober tries a local model server.
+type Prober interface {
+	// Probe tries the server and model in use, or with m those m would
+	// have Slorp use.
+	Probe(ctx context.Context, m *hub.ModelSettings) hub.ModelCheck
+}
+
+// modelURL returns the address of a model server as the user wrote it, in
+// the form Slorp keeps: with a scheme, and without the /v1 its API paths
+// begin with. Empty stays empty. It reports false for anything that is not
+// an http or https address.
+func modelURL(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", true
+	}
+	if !strings.Contains(s, "://") {
+		s = "http://" + s
+	}
+	u, err := url.Parse(s)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
+		return "", false
+	}
+	return u.Scheme + "://" + u.Host + strings.TrimSuffix(strings.TrimRight(u.Path, "/"), "/v1"), true
+}
+
 // directory returns path as the absolute directory it names, reading a
 // leading "~" as the user's home.
 func directory(path string) (string, error) {
@@ -114,7 +141,7 @@ func Page(built []byte, path string) http.Handler {
 // New serves the page and its API. history and launchers are by agent; an
 // agent with no history keeps no record Slorp can read, and one with no
 // launcher has sessions Slorp can only watch.
-func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history map[string]History, launchers map[string]Launcher, page http.Handler) http.Handler {
+func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history map[string]History, launchers map[string]Launcher, prober Prober, page http.Handler) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
@@ -681,8 +708,33 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		if !readJSON(w, r, &in) {
 			return
 		}
+		var ok bool
+		if in.Model.URL, ok = modelURL(in.Model.URL); !ok {
+			http.Error(w, "the model server's address must be an http or https one", http.StatusBadRequest)
+			return
+		}
+		in.Model.Name = strings.TrimSpace(in.Model.Name)
 		h.SetSettings(in)
 		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("POST /api/model/check", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			// Model is what to try in place of what is in use.
+			Model *hub.ModelSettings `json:"model"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		if in.Model != nil {
+			var ok bool
+			if in.Model.URL, ok = modelURL(in.Model.URL); !ok {
+				http.Error(w, "the model server's address must be an http or https one", http.StatusBadRequest)
+				return
+			}
+			in.Model.Name = strings.TrimSpace(in.Model.Name)
+		}
+		writeJSON(w, http.StatusOK, prober.Probe(r.Context(), in.Model))
 	})
 
 	mux.HandleFunc("POST /api/bridge/ack", func(w http.ResponseWriter, r *http.Request) {

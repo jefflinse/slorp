@@ -118,10 +118,11 @@ func TestModelUsesWhatIsAlreadyLoaded(t *testing.T) {
 		{"only an embedding model loaded", `{"data":[{"id":"embed","type":"embeddings","state":"loaded"}]}`, "", "", "", "no model is loaded"},
 		{"a model the user named", `{"data":[]}`, "", "chosen", "chosen", ""},
 		{"a server other than LM Studio with one model", "", `{"object":"list","data":[{"id":"only","object":"model"}]}`, "", "only", ""},
-		{"such a server with several models", "", `{"data":[{"id":"one"},{"id":"two"}]}`, "", "", "-model"},
+		{"such a server with several models", "", `{"data":[{"id":"one"},{"id":"two"}]}`, "", "", "name one"},
 		{"such a server with none", "", `{"data":[]}`, "", "", "no model is loaded"},
 		{"a server that lists models in neither way", `not json`, "", "", "", "unreachable"},
 		{"a server that answers neither", "", "", "", "", "unreachable"},
+		{"a model the user named, on a server that answers neither", "", "", "chosen", "", "unreachable"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -160,6 +161,139 @@ func TestSaysWhichModelIsLoadedWithNothingToDo(t *testing.T) {
 	if f.requests != 0 {
 		t.Errorf("%d requests to the model with nothing to do", f.requests)
 	}
+}
+
+func TestStartupConfig(t *testing.T) {
+	plain := Startup{URL: DefaultURL}
+	tests := []struct {
+		name    string
+		started Startup
+		chosen  hub.ModelSettings
+		want    Config
+	}{
+		{"nothing chosen", plain, hub.ModelSettings{}, Config{URL: DefaultURL}},
+		{"a server and model chosen", plain, hub.ModelSettings{URL: "http://box:8080", Name: "qwen"}, Config{URL: "http://box:8080", Model: "qwen"}},
+		{"turned off", plain, hub.ModelSettings{URL: "http://box:8080", Off: true}, Config{Model: ""}},
+		{"a server given at startup", Startup{URL: "http://given:1", URLGiven: true}, hub.ModelSettings{URL: "http://box:8080", Name: "qwen"},
+			Config{URL: "http://given:1", Model: "qwen", FixedURL: true}},
+		{"a server given at startup, and the model turned off since", Startup{URL: "http://given:1", URLGiven: true}, hub.ModelSettings{Off: true},
+			Config{URL: "http://given:1", FixedURL: true}},
+		{"started without one", Startup{URL: "", URLGiven: true}, hub.ModelSettings{URL: "http://box:8080"}, Config{FixedURL: true}},
+		{"a model given at startup", Startup{URL: DefaultURL, Model: "given", ModelGiven: true}, hub.ModelSettings{URL: "http://box:8080", Name: "qwen"},
+			Config{URL: "http://box:8080", Model: "given", FixedModel: true}},
+	}
+	for _, tt := range tests {
+		if got := tt.started.Config(tt.chosen); got != tt.want {
+			t.Errorf("%s: config = %+v, want %+v", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestStepFollowsTheUsersSettings(t *testing.T) {
+	first := (&fakeLLM{models: `{"data":[{"id":"warm","type":"llm","state":"loaded"}]}`}).enricher(t)
+	second := (&fakeLLM{listed: `{"data":[{"id":"one"},{"id":"two"}]}`}).enricher(t)
+	st := testdb.Open(t)
+	h := hub.New(testdb.KB(t, st), st)
+	e := &Enricher{Hub: h, Resolve: Startup{URL: first.BaseURL}.Config, failed: map[string]time.Time{}}
+	said := func() hub.Summarizer { e.step(ctx); return h.State().Summarizer }
+	choose := func(m hub.ModelSettings) {
+		s := h.Settings()
+		s.Model = m
+		h.SetSettings(s)
+	}
+
+	if got := said(); got != (hub.Summarizer{Model: "warm", URL: first.BaseURL}) {
+		t.Fatalf("summarizer = %+v, want the model loaded where Slorp was started with", got)
+	}
+	e.failed["s"] = time.Now()
+	choose(hub.ModelSettings{URL: second.BaseURL})
+	if got := said(); got.URL != second.BaseURL || got.Model != "" || !strings.Contains(got.Error, "name one") {
+		t.Errorf("summarizer = %+v, want the server just chosen asked at once, and what it said", got)
+	}
+	if len(e.failed) != 0 {
+		t.Error("what failed with the server before is still held back from the one chosen")
+	}
+	choose(hub.ModelSettings{URL: second.BaseURL, Name: "two"})
+	if got := said(); got != (hub.Summarizer{Model: "two", Named: "two", URL: second.BaseURL}) {
+		t.Errorf("summarizer = %+v, want the model named", got)
+	}
+	choose(hub.ModelSettings{URL: second.BaseURL, Name: "two", Off: true})
+	if got := said(); got != (hub.Summarizer{Off: true, Named: "two"}) {
+		t.Errorf("summarizer = %+v, want it off", got)
+	}
+	choose(hub.ModelSettings{})
+	if got := said(); got.Model != "warm" || got.Off {
+		t.Errorf("summarizer = %+v, want it back on with the server Slorp was started with", got)
+	}
+
+	fixed := &Enricher{Hub: h, Resolve: Startup{URL: first.BaseURL, URLGiven: true, Model: "given", ModelGiven: true}.Config, failed: map[string]time.Time{}}
+	choose(hub.ModelSettings{URL: second.BaseURL, Name: "two"})
+	fixed.step(ctx)
+	if got := h.State().Summarizer; got != (hub.Summarizer{Model: "given", Named: "given", URL: first.BaseURL, FixedURL: true, FixedModel: true}) {
+		t.Errorf("summarizer = %+v, want what was given at startup, marked as fixed", got)
+	}
+}
+
+func TestProbe(t *testing.T) {
+	loaded := `{"data":[{"id":"embed","type":"embeddings","state":"loaded"},{"id":"cold","type":"llm","state":"not-loaded"},{"id":"warm","type":"llm","state":"loaded"}]}`
+	t.Run("a model that answers", func(t *testing.T) {
+		f := &fakeLLM{models: loaded, content: "pong"}
+		e := f.enricher(t)
+		got := e.Probe(ctx, nil)
+		if !got.Reached || !got.Answered || got.Error != "" || got.Model != "warm" || got.URL != e.BaseURL || strings.Join(got.Models, ",") != "cold,warm" {
+			t.Errorf("probe = %+v, want the loaded model answering and the chat models listed", got)
+		}
+		if f.requests != 1 || f.request.Model != "warm" || len(f.request.Messages) != 1 || f.request.Messages[0].Content != "ping" {
+			t.Errorf("the model was sent %+v in %d requests, want one word and nothing else", f.request, f.requests)
+		}
+	})
+	t.Run("a model the user named", func(t *testing.T) {
+		f := &fakeLLM{models: loaded}
+		e := f.enricher(t)
+		e.Model = "cold"
+		if got := e.Probe(ctx, nil); !got.Answered || got.Model != "cold" || f.request.Model != "cold" {
+			t.Errorf("probe = %+v after asking %q, want the named model tried", got, f.request.Model)
+		}
+	})
+	t.Run("a server that does not answer", func(t *testing.T) {
+		f := &fakeLLM{}
+		e := f.enricher(t)
+		if got := e.Probe(ctx, nil); got.Reached || got.Answered || !strings.Contains(got.Error, "unreachable") || got.Models == nil || f.requests != 0 {
+			t.Errorf("probe = %+v after %d requests, want it unreachable and the model not asked", got, f.requests)
+		}
+	})
+	t.Run("no model to settle on", func(t *testing.T) {
+		f := &fakeLLM{listed: `{"data":[{"id":"one"},{"id":"two"}]}`}
+		got := f.enricher(t).Probe(ctx, nil)
+		if !got.Reached || got.Answered || got.Model != "" || !strings.Contains(got.Error, "name one") || len(got.Models) != 2 || f.requests != 0 {
+			t.Errorf("probe = %+v after %d requests, want the server reached, its models listed, and none asked", got, f.requests)
+		}
+	})
+	t.Run("a model that fails", func(t *testing.T) {
+		f := &fakeLLM{models: loaded, status: 500}
+		if got := f.enricher(t).Probe(ctx, nil); !got.Reached || got.Answered || !strings.Contains(got.Error, "warm did not answer") || !strings.Contains(got.Error, "500") {
+			t.Errorf("probe = %+v, want the server reached and the model's failure said", got)
+		}
+	})
+	t.Run("settings yet to be saved", func(t *testing.T) {
+		inUse := (&fakeLLM{models: loaded}).enricher(t)
+		other := &fakeLLM{listed: `{"data":[{"id":"only"}]}`}
+		st := testdb.Open(t)
+		e := &Enricher{Hub: hub.New(testdb.KB(t, st), st), Resolve: Startup{URL: inUse.BaseURL}.Config}
+		if got := e.Probe(ctx, nil); got.URL != inUse.BaseURL || got.Model != "warm" || !got.Answered {
+			t.Errorf("probe = %+v, want the server in use tried", got)
+		}
+		at := other.enricher(t).BaseURL
+		if got := e.Probe(ctx, &hub.ModelSettings{URL: at}); got.URL != at || got.Model != "only" || !got.Answered {
+			t.Errorf("probe = %+v, want the server asked about tried", got)
+		}
+		if got := e.Probe(ctx, &hub.ModelSettings{URL: at, Off: true}); got.Reached || !strings.Contains(got.Error, "without a local model") || other.requests != 1 {
+			t.Errorf("probe = %+v after %d requests, want nothing tried with the model off", got, other.requests)
+		}
+		if got := e.Hub.Settings().Model; got != (hub.ModelSettings{}) {
+			t.Errorf("settings = %+v after probing, want them untouched", got)
+		}
+	})
 }
 
 func TestDescribe(t *testing.T) {

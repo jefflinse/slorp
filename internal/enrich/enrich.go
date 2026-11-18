@@ -5,6 +5,7 @@ package enrich
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,7 +21,16 @@ import (
 	"github.com/jefflinse/slorp/internal/integrations"
 )
 
+// DefaultURL is where a local model server is looked for unless the user
+// says otherwise.
+const DefaultURL = "http://localhost:1234"
+
 const (
+	// probeTimeout bounds how long a model has to answer a health check.
+	probeTimeout = 30 * time.Second
+	// listTimeout bounds how long a server has to say what it offers.
+	listTimeout = 5 * time.Second
+
 	tick       = 2 * time.Second
 	retryAfter = time.Minute
 	idleCheck  = 30 * time.Second
@@ -38,10 +48,16 @@ const (
 )
 
 type Enricher struct {
-	Hub     *hub.Hub
+	Hub *hub.Hub
+	// BaseURL is the server's address, and Model names the model to use,
+	// empty for whichever one is loaded. With Resolve set, both follow the
+	// user's settings.
 	BaseURL string
-	// Model names the model to use; empty means whichever one is loaded.
-	Model string
+	Model   string
+	// Resolve turns the user's settings into the server and model to use.
+	// It is asked before each piece of work, so a change takes effect at
+	// once.
+	Resolve func(hub.ModelSettings) Config
 	// Offer returns the lookups the model may use for a session working in
 	// dir, with a note on what each reaches. Nil means none.
 	Offer func(ctx context.Context, dir string) ([]integrations.Tool, []string)
@@ -50,12 +66,57 @@ type Enricher struct {
 	failed map[string]time.Time
 	// checked is when the model was last asked after.
 	checked time.Time
+	// cfg is what Resolve last gave.
+	cfg Config
+}
+
+// Config is where the local model is and which one to use.
+type Config struct {
+	// URL is the server's address, empty to run without a model.
+	URL string
+	// Model names the model to use; empty means whichever one is loaded.
+	Model string
+	// FixedURL and FixedModel say the value was given when Slorp started,
+	// where the user's settings do not reach.
+	FixedURL, FixedModel bool
+}
+
+// Startup is the server and model Slorp was started with, and whether each
+// was given outright.
+type Startup struct {
+	URL, Model           string
+	URLGiven, ModelGiven bool
+}
+
+// Config returns what to use under the user's settings m. What was given
+// outright at startup stands whatever m says; otherwise m decides, and
+// what it leaves empty falls back to what Slorp was started with.
+func (s Startup) Config(m hub.ModelSettings) Config {
+	c := Config{URL: cmp.Or(m.URL, s.URL), Model: cmp.Or(m.Name, s.Model), FixedURL: s.URLGiven, FixedModel: s.ModelGiven}
+	if m.Off {
+		c.URL = ""
+	}
+	if s.URLGiven {
+		c.URL = s.URL
+	}
+	if s.ModelGiven {
+		c.Model = s.Model
+	}
+	return c
+}
+
+var defaultClient = &http.Client{Timeout: 3 * time.Minute}
+
+func (e *Enricher) http() *http.Client {
+	if e.client != nil {
+		return e.client
+	}
+	return defaultClient
 }
 
 // Run describes undescribed sessions, one at a time, until ctx ends. Session
 // content goes only to BaseURL.
 func (e *Enricher) Run(ctx context.Context) {
-	e.client = &http.Client{Timeout: 3 * time.Minute}
 	e.failed = map[string]time.Time{}
 	t := time.NewTicker(tick)
 	defer t.Stop()
@@ -70,9 +131,23 @@ func (e *Enricher) Run(ctx context.Context) {
 }
 
 // step does one piece of work if there is one, and tells the hub which model
-// is there to do it: before each piece, and every idleCheck while there is
-// none.
+// is there to do it: before each piece, every idleCheck while there is
+// none, and at once when the user's settings change which to use.
 func (e *Enricher) step(ctx context.Context) {
+	if e.Resolve != nil {
+		if cfg := e.Resolve(e.Hub.Settings().Model); cfg != e.cfg || e.checked.IsZero() {
+			e.cfg, e.BaseURL, e.Model = cfg, cfg.URL, cfg.Model
+			e.checked = time.Time{}
+			clear(e.failed)
+		}
+	}
+	said := hub.Summarizer{URL: e.BaseURL, Named: e.Model, FixedURL: e.cfg.FixedURL, FixedModel: e.cfg.FixedModel}
+	if e.BaseURL == "" {
+		said.Off = true
+		e.checked = time.Now()
+		e.Hub.SetSummarizer(said)
+		return
+	}
 	key, what, job := e.next()
 	if job == nil && time.Since(e.checked) < idleCheck {
 		return
@@ -80,10 +155,12 @@ func (e *Enricher) step(ctx context.Context) {
 	model, err := e.model(ctx)
 	e.checked = time.Now()
 	if err != nil {
-		e.Hub.SetSummarizer(hub.Summarizer{Error: err.Error(), URL: e.BaseURL})
+		said.Error = err.Error()
+		e.Hub.SetSummarizer(said)
 		return
 	}
-	e.Hub.SetSummarizer(hub.Summarizer{Model: model, URL: e.BaseURL})
+	said.Model = model
+	e.Hub.SetSummarizer(said)
 	if job == nil {
 		return
 	}
@@ -256,11 +333,30 @@ func (e *Enricher) note(ctx context.Context, model string, w hub.Unnoted) (hub.N
 // model returns the configured model, or the first chat model the server
 // reports as loaded, so that Slorp never causes another model to be loaded.
 // A server that does not say what is loaded has its model taken when it
-// lists just the one.
+// lists just the one. Either way the server has to answer.
 func (e *Enricher) model(ctx context.Context) (string, error) {
+	l, err := e.list(ctx, e.BaseURL)
+	if err != nil {
+		return "", err
+	}
 	if e.Model != "" {
 		return e.Model, nil
 	}
+	return l.pick()
+}
+
+// listing is what a server offers. loaded is the models it says are loaded,
+// and saysLoaded whether it says at all.
+type listing struct {
+	models, loaded []string
+	saysLoaded     bool
+}
+
+// list asks the server at base what it offers, leaving out models that only
+// embed.
+func (e *Enricher) list(ctx context.Context, base string) (listing, error) {
+	ctx, cancel := context.WithTimeout(ctx, listTimeout)
+	defer cancel()
 	var out struct {
 		Data []struct {
 			ID    string `json:"id"`
@@ -269,26 +365,91 @@ func (e *Enricher) model(ctx context.Context) (string, error) {
 		} `json:"data"`
 	}
 	// LM Studio says which of its models are loaded.
-	if e.get(ctx, "/api/v0/models", &out) == nil {
+	if e.get(ctx, base, "/api/v0/models", &out) == nil {
+		l := listing{saysLoaded: true}
 		for _, m := range out.Data {
-			if m.State == "loaded" && m.Type != "embeddings" {
-				return m.ID, nil
+			if m.Type == "embeddings" {
+				continue
+			}
+			l.models = append(l.models, m.ID)
+			if m.State == "loaded" {
+				l.loaded = append(l.loaded, m.ID)
 			}
 		}
+		return l, nil
+	}
+	// Any other server lists what it can run without saying what is loaded.
+	if e.get(ctx, base, "/v1/models", &out) != nil {
+		return listing{}, errors.New("local model server unreachable")
+	}
+	var l listing
+	for _, m := range out.Data {
+		l.models = append(l.models, m.ID)
+	}
+	return l, nil
+}
+
+// pick returns the model to use when none is named: the first one loaded,
+// or the only one listed by a server that does not say what is loaded.
+func (l listing) pick() (string, error) {
+	switch {
+	case len(l.loaded) > 0:
+		return l.loaded[0], nil
+	case l.saysLoaded || len(l.models) == 0:
 		return "", errNoModel
+	case len(l.models) == 1:
+		return l.models[0], nil
 	}
-	// Any other server lists what it can run without saying what is
-	// loaded, so only a model listed alone is taken.
-	if e.get(ctx, "/v1/models", &out) != nil {
-		return "", fmt.Errorf("local model server unreachable")
+	return "", errors.New("it lists several models, so name one")
+}
+
+// Probe tries a local model server: whether it answers, what it offers, and
+// whether the model that would be used replies to a one-word message. It
+// tries the server and model in use, or with m those m would have Slorp
+// use. Nothing of any session is sent.
+func (e *Enricher) Probe(ctx context.Context, m *hub.ModelSettings) hub.ModelCheck {
+	cfg := Config{URL: e.BaseURL, Model: e.Model}
+	if e.Resolve != nil {
+		at := e.Hub.Settings().Model
+		if m != nil {
+			at = *m
+		}
+		cfg = e.Resolve(at)
 	}
-	switch len(out.Data) {
-	case 0:
-		return "", errNoModel
-	case 1:
-		return out.Data[0].ID, nil
+	check := hub.ModelCheck{URL: cfg.URL, Models: []string{}}
+	if cfg.URL == "" {
+		check.Error = "Slorp is running without a local model"
+		return check
 	}
-	return "", fmt.Errorf("it lists several models, so name one with -model")
+	l, err := e.list(ctx, cfg.URL)
+	if err != nil {
+		check.Error = err.Error()
+		return check
+	}
+	check.Reached, check.Models = true, append(check.Models, l.models...)
+	if check.Model = cfg.Model; check.Model == "" {
+		if check.Model, err = l.pick(); err != nil {
+			check.Error = err.Error()
+			return check
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	began := time.Now()
+	_, err = e.chat(ctx, cfg.URL, map[string]any{
+		"model": check.Model, "max_tokens": 1, "reasoning_effort": "none",
+		"messages": []map[string]string{{"role": "user", "content": "ping"}},
+	})
+	check.Millis = time.Since(began).Milliseconds()
+	switch {
+	case ctx.Err() != nil:
+		check.Error = fmt.Sprintf("%s did not answer within %s", check.Model, probeTimeout)
+	case err != nil:
+		check.Error = fmt.Sprintf("%s did not answer: %v", check.Model, err)
+	default:
+		check.Answered = true
+	}
+	return check
 }
 
 var errNoModel = errors.New("no model is loaded")
@@ -354,7 +515,7 @@ func (e *Enricher) lookUp(ctx context.Context, model string, s hub.Session, exch
 		byName[t.Name] = t
 		defs = append(defs, map[string]any{"type": "function", "function": map[string]any{"name": t.Name, "description": t.Description, "parameters": t.Params}})
 	}
-	msg, err := e.chat(ctx, map[string]any{
+	msg, err := e.chat(ctx, e.BaseURL, map[string]any{
 		"model": model, "temperature": 0, "max_tokens": maxTokens, "reasoning_effort": "none",
 		"messages": []map[string]string{{"role": "system", "content": planSystem}, {"role": "user", "content": exchange + "\n\n" + strings.Join(notes, "\n")}},
 		"tools":    defs,
@@ -432,7 +593,7 @@ func (e *Enricher) describe(ctx context.Context, model string, w hub.Undescribed
 // ask sends one system and user message and decodes the reply, which the
 // server constrains to schema, into out.
 func (e *Enricher) ask(ctx context.Context, model, system, user, name string, schema json.RawMessage, out any) error {
-	msg, err := e.chat(ctx, map[string]any{
+	msg, err := e.chat(ctx, e.BaseURL, map[string]any{
 		"model": model, "temperature": 0.2, "max_tokens": maxTokens,
 		// These tasks need no deliberation; servers and models that cannot
 		// turn reasoning off ignore this.
@@ -459,12 +620,13 @@ type message struct {
 	} `json:"tool_calls"`
 }
 
-// chat sends one chat completion request and returns the model's message.
-func (e *Enricher) chat(ctx context.Context, request map[string]any) (message, error) {
+// chat sends one chat completion request to the server at base and returns
+// the model's message.
+func (e *Enricher) chat(ctx context.Context, base string, request map[string]any) (message, error) {
 	body, _ := json.Marshal(request)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, e.BaseURL+"/v1/chat/completions", bytes.NewReader(body))
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/chat/completions", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	res, err := e.client.Do(req)
+	res, err := e.http().Do(req)
 	if err != nil {
 		return message{}, err
 	}
@@ -484,9 +646,9 @@ func (e *Enricher) chat(ctx context.Context, request map[string]any) (message, e
 	return reply.Choices[0].Message, nil
 }
 
-func (e *Enricher) get(ctx context.Context, path string, v any) error {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, e.BaseURL+path, nil)
-	res, err := e.client.Do(req)
+func (e *Enricher) get(ctx context.Context, base, path string, v any) error {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
+	res, err := e.http().Do(req)
 	if err != nil {
 		return err
 	}

@@ -312,8 +312,43 @@ type Summarizer struct {
 	Error string `json:"error,omitempty"`
 	// URL is where the local model server is looked for.
 	URL string `json:"url,omitempty"`
-	// Off says Slorp was started without a local model to look for.
+	// Named is the model asked for by name, empty when whichever is loaded
+	// is used.
+	Named string `json:"named,omitempty"`
+	// Off says Slorp is running without a local model to look for.
 	Off bool `json:"off,omitempty"`
+	// FixedURL and FixedModel say the address and the model's name were
+	// given when Slorp started, where the user's settings do not reach.
+	FixedURL   bool `json:"fixedUrl,omitempty"`
+	FixedModel bool `json:"fixedModel,omitempty"`
+}
+
+// ModelSettings is the user's choice of local model.
+type ModelSettings struct {
+	// URL is the address of an OpenAI-compatible server, empty for the
+	// usual one.
+	URL string `json:"url"`
+	// Name is the model to use, empty for whichever one is loaded.
+	Name string `json:"name"`
+	// Off runs Slorp without a local model.
+	Off bool `json:"off"`
+}
+
+// ModelCheck is how one try of a local model server went.
+type ModelCheck struct {
+	URL string `json:"url"`
+	// Reached says the server answered, and Models lists what it offers.
+	Reached bool     `json:"reached"`
+	Models  []string `json:"models"`
+	// Model is the one that would be used, empty when none could be
+	// settled on.
+	Model string `json:"model,omitempty"`
+	// Answered says Model replied to a one-word message, and Millis how
+	// long it took.
+	Answered bool  `json:"answered"`
+	Millis   int64 `json:"millis,omitempty"`
+	// Error is what stopped the try, empty when the model answered.
+	Error string `json:"error,omitempty"`
 }
 
 // Undescribed is a settled session whose current content has no insight yet.
@@ -406,6 +441,8 @@ type Settings struct {
 	// AnswerPermissions lets permission prompts be answered in Slorp as well
 	// as in the session's terminal.
 	AnswerPermissions bool `json:"answerPermissions"`
+	// Model is which local model to use and where it is.
+	Model ModelSettings `json:"model"`
 	// Integrations are the ones the user has turned on, by ID.
 	Integrations map[string]bool `json:"integrations"`
 	// IntegrationsRevision counts changes to Integrations.

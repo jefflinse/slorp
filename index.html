@@ -352,6 +352,17 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
 .card .q { font-size: 14.5px; }
 .card .does { display: flex; flex-direction: column; gap: 8px; flex: none; }
 .card.set { align-items: center; }
+.check { margin: 0 0 6px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--raised); font-size: 13.5px; line-height: 1.5; }
+.check > div + div { margin-top: 4px; }
+.add.model { flex-direction: column; gap: 16px; padding-top: 18px; }
+.add.model label { display: grid; gap: 2px; }
+.add.model .nm { font-weight: 600; font-size: 15px; color: var(--ink); }
+.add.model .why { color: var(--ink2); font-size: 13.5px; max-width: 58ch; }
+.add.model input { margin-top: 6px; max-width: 460px; font-size: 13px; }
+.add.model input:disabled { opacity: 0.6; }
+.add.model .send { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--ink3); font-size: 12px; }
+.add.model .send span:last-child { display: flex; gap: 8px; }
+.none.warn { color: var(--warn); }
 .card.set .why { max-width: 58ch; font-size: 13.5px; }
 .icon.on { background: var(--sel); color: var(--ink); border-color: var(--ink3); }
 .facts.keys { gap: 9px 26px; }
@@ -1327,15 +1338,15 @@ const NO_MODEL = 'No local model is running';
 /* What is missing without one and why there is none; in full adds how soon one is noticed. */
 function modelWhy(full) {
   const where = summarizer.url ? ` at ${summarizer.url}` : '';
-  const how = summarizer.off ? 'Slorp was started without one.'
+  const how = summarizer.off ? (summarizer.fixedUrl ? 'Slorp was started without one.' : 'It is turned off in Settings.')
     : /unreachable/.test(summarizer.error) ? `Slorp looks for an LLM server${where}.`
     : `The LLM server${where} answered, but ${summarizer.error.replace(/^it /, '')}.`;
-  return `${NO_MODEL}, so sessions are shown as they are: no summaries, suggested replies, automatic filing or wrap-ups. ${how}${full && !summarizer.off && !/-model/.test(summarizer.error) ? ' It notices a loaded model within half a minute.' : ''}`;
+  return `${NO_MODEL}, so sessions are shown as they are: no summaries, suggested replies, automatic filing or wrap-ups. ${how}${full && !summarizer.off && !/name one/.test(summarizer.error) ? ' It notices a loaded model within half a minute.' : ''}`;
 }
 /* Says so once, until dismissed, when a model was looked for and not found. */
 function modelNotice() {
   if (!modelless() || summarizer.off || state.modelNoticeOff) return '';
-  return `<div><span title="${esc(modelWhy(true))}">${esc(modelWhy())}</span><button class="btn" data-act="modelNoticeOff">Dismiss</button></div>`;
+  return `<div><span title="${esc(modelWhy(true))}">${esc(modelWhy())}</span><button class="btn" data-act="setGo" data-s="model">Settings</button><button class="btn" data-act="modelNoticeOff">Dismiss</button></div>`;
 }
 
 function ask(path, body, done, always) {
@@ -1912,16 +1923,63 @@ function agentsBody() {
   return claude + opencode;
 }
 
-function modelBody() {
-  const facts = [
-    ['Model', summarizer.model ? `<span class="mono">${esc(summarizer.model)}</span>` : 'none'],
-    ['Server', summarizer.off ? 'none; Slorp was started without one' : summarizer.url ? `<span class="mono">${esc(summarizer.url)}</span>` : 'not looked for yet'],
-    summarizer.error && ['Last problem', esc(summarizer.error)],
+/* How the last health check of the local model went, and whether one is under way. tried is what was typed, when it was that and not what is in use. */
+let modelCheck = null, modelChecking = false;
+/* Counts changes to the model's saved settings, so that the form then shows what was saved and not what had been typed. */
+let modelRev = 0, modelSaved = '';
+function checkModel(tried) {
+  if (modelChecking) return;
+  modelChecking = true;
+  fetch('/api/model/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(tried ? { model: tried } : {}) })
+    .then(async res => { if (!res.ok) throw new Error((await res.text()).trim() || res.status); return res.json(); })
+    .then(c => { modelCheck = { ...c, at: Date.now(), tried: !!tried }; })
+    .catch(err => { modelCheck = { error: err instanceof TypeError ? 'Could not reach the Slorp service' : err.message, models: [], at: Date.now(), tried: !!tried }; })
+    .finally(() => { modelChecking = false; render(); });
+  render();
+}
+/* What the form for choosing the model holds, as settings to save or to try. */
+const modelTyped = () => ({ url: $('[data-keep^="model-url"]')?.value.trim() ?? '', name: $('[data-keep^="model-name"]')?.value.trim() ?? '', off: false });
+const local = url => { try { return /^(localhost|127\.\d+\.\d+\.\d+|\[::1\])$/.test(new URL(url).hostname); } catch (e) { return true; } };
+
+function checkResult() {
+  if (modelChecking) return `<div class="check"><span class="dot running"></span>Checking…</div>`;
+  const c = modelCheck;
+  if (!c) return '';
+  const ms = n => n >= 1000 ? `${(n / 1000).toFixed(1)}s` : `${n}ms`;
+  const lines = [
+    c.url && [c.reached, c.reached ? `The server at ${c.url} answered, and offers ${c.models.length ? plural(c.models.length, 'model') : 'no models'}.` : `The server at ${c.url} did not answer.`],
+    c.model && [c.answered, c.answered ? `${c.model} replied in ${ms(c.millis)}.` : c.error],
+    !c.model && c.error && (c.reached || !c.url) && [false, c.reached ? `No model to use: ${c.error}.` : c.error],
   ].filter(Boolean);
-  return `<dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
-    ${modelless() ? `<p class="none" style="margin-top:14px">${esc(modelWhy(true))}</p>` : ''}
-    <div class="sec"><div class="label"><span>Changing it</span></div>
-      <p class="prose" style="font-size:14px">The server and model are chosen when Slorp starts. <span class="mono">-llm</span> gives the address of an OpenAI-compatible server, <span class="mono">-model</span> names a model where the server offers several, and <span class="mono">-llm ""</span> runs without one.</p></div>`;
+  return `<div class="check">${lines.map(([ok, text]) => `<div><span class="dot ${ok ? 'running' : 'error'}"></span>${esc(text)}</div>`).join('')}
+    <div class="none">${c.tried ? 'That was what is typed below, not yet saved. ' : ''}Checked ${ago((Date.now() - c.at) / 60000)}. A check sends the model the word "ping" and nothing from any session.</div></div>`;
+}
+
+function modelBody() {
+  const m = settings.model || {}, s = summarizer, off = !!s.off, saved = JSON.stringify([m.url, m.name]);
+  if (saved !== modelSaved) { modelSaved = saved; modelRev++; }
+  const [dot, word] = off ? ['idle', 'Off'] : s.model ? ['running', 'Connected'] : s.error ? ['error', 'Not connected'] : ['idle', 'Looking…'];
+  const why = off ? (s.fixedUrl ? 'Slorp was started with -llm "", so it runs without a local model.' : 'Slorp is running without a local model.')
+    : s.model ? `Using ${s.model}${s.named ? ', which you named' : ', the one the server has loaded'}.`
+    : s.error ? (/unreachable/.test(s.error) ? `Nothing answered at ${s.url}.` : `The server at ${s.url} answered, but ${s.error.replace(/^it /, '')}.`) : 'Slorp has not looked yet.';
+  const listed = [...new Set((modelCheck?.models || []).concat(s.model || []))];
+  const far = !off && s.url && !local(s.url);
+  return `<div class="card set"><div class="body"><div class="nm"><span class="stat"><span class="dot ${dot}"></span>${word}</span></div><div class="why">${esc(why)}${off ? '' : ` Slorp looks again every half minute, and at once when these settings change.`}</div></div>
+      <button class="btn" data-act="modelCheck" ${modelChecking || off ? 'disabled' : ''}>${modelChecking ? 'Checking…' : 'Check now'}</button></div>
+    ${checkResult()}
+    ${setting('Local model', s.fixedUrl ? 'Slorp was started with <span class="mono">-llm</span>, which decides this until it is started without.' : 'Off, sessions are shown as they are: no summaries, suggested replies, automatic filing or wrap-ups.',
+      s.fixedUrl ? `<span class="none">${off ? 'off' : 'on'}</span>` : choice('modelOff', m.off ? 'off' : 'on', [['on', 'On'], ['off', 'Off']], 'Local model'))}
+    <form class="add model" data-form="model">
+      <label><span class="nm">Server</span><span class="why">An OpenAI-compatible server, such as LM Studio, Ollama or llama.cpp.${s.fixedUrl ? ' Given with <span class="mono">-llm</span> when Slorp started.' : ''}</span>
+        <input name="url" class="mono" data-keep="model-url-${modelRev}" value="${esc(s.fixedUrl ? s.url || '' : m.url || '')}" placeholder="http://localhost:1234" spellcheck="false" autocomplete="off" ${s.fixedUrl ? 'disabled' : ''}></label>
+      <label><span class="nm">Model</span><span class="why">Leave empty to use whichever one the server has loaded, so that Slorp never causes another to be loaded.${s.fixedModel ? ' Given with <span class="mono">-model</span> when Slorp started.' : ''}</span>
+        <input name="name" class="mono" data-keep="model-name-${modelRev}" list="model-names" value="${esc(s.fixedModel ? s.named || '' : m.name || '')}" placeholder="Whichever is loaded" spellcheck="false" autocomplete="off" ${s.fixedModel ? 'disabled' : ''}>
+        <datalist id="model-names">${listed.map(id => `<option value="${esc(id)}"></option>`).join('')}</datalist></label>
+      ${far ? `<p class="none warn">${esc(s.url)} is not on this machine. What your sessions say is sent there to be summarized.</p>` : ''}
+      <div class="send"><span>Saving takes effect at once.</span>
+        <span><button type="button" class="btn" data-act="modelTry" ${modelChecking ? 'disabled' : ''} title="Checks the server and model typed here without saving them">Try without saving</button>
+        <button class="btn go" ${s.fixedUrl && s.fixedModel ? 'disabled' : ''}>Save</button></span></div>
+    </form>`;
 }
 
 const KEYS = [['1 – 5', 'Attention, Efforts, Activity, PRs, Knowledge'], [',', 'Settings'], ['j  k', 'Next and previous in the Attention and Activity lists'], ['e', 'Dismiss the selected item'], ['s', 'Snooze the selected item for an hour'],
@@ -1930,7 +1988,7 @@ const KEYS = [['1 – 5', 'Attention, Efforts, Activity, PRs, Knowledge'], [',',
 const SETTINGS_LEDE = {
   general: 'How this page looks and behaves.',
   integrations: 'What Slorp is connected to: the agents whose sessions it watches, and the tools it reads.',
-  model: 'Summaries, suggested replies, automatic filing and wrap-ups are written by a model running on this machine. Nothing a session says is sent anywhere else.',
+  model: 'Summaries, suggested replies, automatic filing and wrap-ups are written by a model on a server you choose, usually one running on this machine. What your sessions say is sent to that server and nowhere else.',
   keys: 'They work anywhere outside a text box.',
 };
 function settingsBody(sec) {
@@ -1948,7 +2006,7 @@ function settingsBody(sec) {
 function viewSettings() {
   if (!SETTINGS[state.setSel]) state.setSel = 'general';
   const on = (plugins.claude?.installed && plugins.claude.enabled ? 1 : 0) + integrations.filter(i => i.enabled).length;
-  const aside = { integrations: live ? on : '', model: live ? (summarizer.model ? 'on' : 'none') : '' };
+  const aside = { integrations: live ? on : '', model: live ? (summarizer.off ? 'off' : summarizer.model ? 'on' : 'none') : '' };
   const nav = Object.entries(SETTINGS).map(([k, name]) => `<button class="${state.setSel === k ? 'on' : ''}" data-act="setSel" data-s="${k}">${name}<span>${aside[k] ?? ''}</span></button>`).join('');
   return `<div class="split narrow">
     <section class="pane list kbnav"><div class="label">Settings</div>${nav}</section>
@@ -2041,6 +2099,9 @@ const actions = {
   fluent: d => { state.fluent = d.on === '1'; },
   themeTo: d => { state.theme = d.to; },
   setSel: d => { state.setSel = d.s; },
+  modelCheck: () => { checkModel(); return false; },
+  modelTry: () => { checkModel(modelTyped()); return false; },
+  modelOff: d => { api('POST', '/api/settings', { model: { off: d.to === 'off' } }, () => { modelCheck = null; }); return false; },
   setGo: d => { state.setSel = d.s; go('settings'); },
   theme: () => {
     const dark = state.theme === 'dark' || (state.theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
@@ -2288,6 +2349,15 @@ document.addEventListener('submit', e => {
   const clear = () => form.querySelectorAll('input').forEach(el => { el.value = ''; });
   if (sec === 'name') { api('POST', `/api/sessions/${form.dataset.id}/name`, { name: f.name }); renaming = null; render(); return; }
   if (sec === 'effort') { api('POST', '/api/efforts', { name: f.name, about: f.about }); clear(); return; }
+  if (sec === 'model') {
+    const typed = modelTyped(), chosen = { ...(summarizer.fixedUrl ? {} : { url: typed.url }), ...(summarizer.fixedModel ? {} : { name: typed.name }) };
+    ask('/api/settings', { model: chosen }, () => {
+      form.querySelectorAll('[data-keep]').forEach(el => el.removeAttribute('data-keep'));
+      toast('Saved'); modelCheck = null;
+      if (!summarizer.off) checkModel();
+    });
+    return;
+  }
   if (sec === 'start') {
     if (launching) return;
     const effort = form.dataset.id === 'unsorted' ? '' : form.dataset.id;

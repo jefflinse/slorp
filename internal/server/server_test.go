@@ -34,6 +34,8 @@ type fixture struct {
 	record *record
 	// launcher is what the server asked of Claude Code's launcher.
 	launcher *launcher
+	// prober is what the server asked to have tried of the local model.
+	prober *prober
 }
 
 // launcher records what it was asked to start, reopen, stop and install.
@@ -69,6 +71,17 @@ func (l *launcher) Uninstall(context.Context) error {
 	return l.err
 }
 
+// prober stands in for the local model, recording what it was asked to try.
+type prober struct {
+	tried []*hub.ModelSettings
+	says  hub.ModelCheck
+}
+
+func (p *prober) Probe(_ context.Context, m *hub.ModelSettings) hub.ModelCheck {
+	p.tried = append(p.tried, m)
+	return p.says
+}
+
 type asked struct{ checks, rescans int }
 
 func (a *asked) Check()  { a.checks++ }
@@ -89,10 +102,10 @@ func newFixture(t *testing.T) *fixture {
 		Scope: func(string) (string, bool) { return "", true },
 		Tools: []integrations.Tool{{Name: "fake_lookup", Description: "Look something up."}},
 	})
-	rec, launch := &record{}, &launcher{}
-	srv := httptest.NewServer(New(h, k, tools, feeds, map[string]History{"claude": rec.read}, map[string]Launcher{"claude": launch}, Page([]byte("<title>slorp</title>"), "")))
+	rec, launch, probe := &record{}, &launcher{}, &prober{}
+	srv := httptest.NewServer(New(h, k, tools, feeds, map[string]History{"claude": rec.read}, map[string]Launcher{"claude": launch}, probe, Page([]byte("<title>slorp</title>"), "")))
 	t.Cleanup(srv.Close)
-	return &fixture{t, srv, h, k, feeds, probes, rec, launch}
+	return &fixture{t, srv, h, k, feeds, probes, rec, launch, probe}
 }
 
 type record struct {
@@ -1080,5 +1093,78 @@ func TestStoppingAndReopeningASession(t *testing.T) {
 	f.launcher.err, f.launcher.calls = nil, nil
 	if code := f.post("/api/archive/bg/resume", `{}`); code != 400 || len(f.launcher.calls) != 0 {
 		t.Errorf("reopening where the directory is gone = %d after %q, want 400 and no launch", code, f.launcher.calls)
+	}
+}
+
+func TestModelURL(t *testing.T) {
+	tests := []struct {
+		in, want string
+		ok       bool
+	}{
+		{"", "", true},
+		{"  http://localhost:1234  ", "http://localhost:1234", true},
+		{"http://localhost:11434/v1", "http://localhost:11434", true},
+		{"http://localhost:11434/v1/", "http://localhost:11434", true},
+		{"localhost:8080", "http://localhost:8080", true},
+		{"https://models.example/openai/v1?key=1#top", "https://models.example/openai", true},
+		{"http://127.0.0.1:1234/", "http://127.0.0.1:1234", true},
+		{"ftp://localhost:21", "", false},
+		{"http://", "", false},
+		{"http://user:secret@localhost:1234", "", false},
+		{"http://local host", "", false},
+	}
+	for _, tt := range tests {
+		if got, ok := modelURL(tt.in); got != tt.want || ok != tt.ok {
+			t.Errorf("modelURL(%q) = %q, %v; want %q, %v", tt.in, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
+func TestChoosingTheLocalModel(t *testing.T) {
+	f := newFixture(t)
+	if code := f.post("/api/settings", `{"model":{"url":" localhost:11434/v1/ ","name":" qwen "}}`); code != 204 {
+		t.Fatalf("settings = %d, want 204", code)
+	}
+	if got, want := f.state().Settings.Model, (hub.ModelSettings{URL: "http://localhost:11434", Name: "qwen"}); got != want {
+		t.Errorf("model settings = %+v, want %+v", got, want)
+	}
+	if !f.state().Settings.AnswerPermissions {
+		t.Error("choosing the model changed where permission prompts are answered")
+	}
+	if code, body := f.do("POST", "/api/settings", `{"model":{"url":"file:///etc/passwd"}}`, nil); code != 400 || !strings.Contains(body, "http") {
+		t.Errorf("an address that is not a server's = %d %q, want 400 saying what it must be", code, body)
+	}
+	if got := f.state().Settings.Model.URL; got != "http://localhost:11434" {
+		t.Errorf("address = %q after one that was refused, want it left alone", got)
+	}
+	if code := f.post("/api/settings", `{"model":{"off":true}}`); code != 204 || !f.state().Settings.Model.Off || f.state().Settings.Model.URL == "" {
+		t.Errorf("turning the model off = %d, leaving %+v; want it off and its address kept", code, f.state().Settings.Model)
+	}
+}
+
+func TestCheckingTheLocalModel(t *testing.T) {
+	f := newFixture(t)
+	f.prober.says = hub.ModelCheck{URL: "http://localhost:1234", Reached: true, Models: []string{"warm"}, Model: "warm", Answered: true, Millis: 12}
+	code, body := f.do("POST", "/api/model/check", `{}`, nil)
+	var got hub.ModelCheck
+	if err := json.Unmarshal([]byte(body), &got); code != 200 || err != nil || !got.Answered || got.Model != "warm" || got.Millis != 12 {
+		t.Errorf("check = %d %s, want how the try went", code, body)
+	}
+	if len(f.prober.tried) != 1 || f.prober.tried[0] != nil {
+		t.Errorf("tried %v, want what is in use", f.prober.tried)
+	}
+
+	if code, _ := f.do("POST", "/api/model/check", `{"model":{"url":"localhost:9/v1","name":" other "}}`, nil); code != 200 {
+		t.Fatalf("check of another server = %d, want 200", code)
+	}
+	if m := f.prober.tried[len(f.prober.tried)-1]; m == nil || *m != (hub.ModelSettings{URL: "http://localhost:9", Name: "other"}) {
+		t.Errorf("tried %+v, want the server and model asked about", m)
+	}
+	if got := f.state().Settings.Model; got != (hub.ModelSettings{}) {
+		t.Errorf("model settings = %+v after a check, want them untouched", got)
+	}
+
+	if code, _ := f.do("POST", "/api/model/check", `{"model":{"url":"ftp://x"}}`, nil); code != 400 || len(f.prober.tried) != 2 {
+		t.Errorf("check of an address that is not a server's = %d after %d tries, want 400 and nothing tried", code, len(f.prober.tried))
 	}
 }

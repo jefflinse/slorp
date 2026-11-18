@@ -56,8 +56,8 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:4747", "loopback address to listen on")
 	ui := flag.String("ui", "", "path to a web UI page to serve in place of the one built in, read afresh for each request")
 	claudeBin := flag.String("claude", "claude", "Claude Code executable")
-	llm := flag.String("llm", "http://localhost:1234", "OpenAI-compatible local model server; empty disables summaries")
-	model := flag.String("model", "", "model to summarize with (default: whichever one is loaded)")
+	llm := flag.String("llm", enrich.DefaultURL, "OpenAI-compatible local model server, in place of the one chosen in Settings; empty runs without a model")
+	model := flag.String("model", "", "model to summarize with, in place of the one chosen in Settings (default: whichever one is loaded)")
 	data := flag.String("data", "", "directory for Slorp's database (default: ~/.slorp)")
 	plugin := flag.String("plugin", "", "directory of the Slorp plugin to load into sessions started here; empty when Claude Code has it installed")
 	flag.Parse()
@@ -100,11 +100,13 @@ func main() {
 	transcripts := &claude.Adapter{Hub: h, Bin: *claudeBin, Home: home, Interval: 5 * time.Second, Plugin: *plugin, URL: "http://" + *addr}
 	go transcripts.Run(ctx)
 	go (&opencode.Adapter{Hub: h, Interval: 2 * time.Second, Silence: 30 * time.Second}).Run(ctx)
-	if *llm != "" {
-		go (&enrich.Enricher{Hub: h, BaseURL: *llm, Model: *model, Offer: tools.Offer}).Run(ctx)
-	} else {
-		h.SetSummarizer(hub.Summarizer{Off: true})
-	}
+	started := enrich.Startup{URL: *llm, Model: *model}
+	flag.Visit(func(f *flag.Flag) {
+		started.URLGiven = started.URLGiven || f.Name == "llm"
+		started.ModelGiven = started.ModelGiven || f.Name == "model"
+	})
+	summarizer := &enrich.Enricher{Hub: h, Resolve: started.Config, Offer: tools.Offer}
+	go summarizer.Run(ctx)
 
 	poller := feed.New(h, tools, func() (dirs []string) {
 		for _, e := range k.Efforts() {
@@ -114,7 +116,7 @@ func main() {
 	})
 	go poller.Run(ctx)
 
-	srv := &http.Server{Addr: *addr, Handler: server.New(h, k, tools, poller, map[string]server.History{claude.Agent: transcripts.Exchanges}, map[string]server.Launcher{claude.Agent: transcripts}, server.Page(page, *ui))}
+	srv := &http.Server{Addr: *addr, Handler: server.New(h, k, tools, poller, map[string]server.History{claude.Agent: transcripts.Exchanges}, map[string]server.Launcher{claude.Agent: transcripts}, summarizer, server.Page(page, *ui))}
 	go func() {
 		<-ctx.Done()
 		srv.Close()
