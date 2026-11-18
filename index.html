@@ -1302,9 +1302,9 @@ const NO_MODEL = 'No local model is running';
 function modelWhy(full) {
   const where = summarizer.url ? ` at ${summarizer.url}` : '';
   const how = summarizer.off ? 'Slorp was started without one.'
-    : /loaded/.test(summarizer.error || '') ? `LM Studio is running${where} with no model loaded.`
-    : `Slorp looks for LM Studio${where}.`;
-  return `${NO_MODEL}, so sessions are shown as they are: no summaries, suggested replies, automatic filing or wrap-ups. ${how}${full && !summarizer.off ? ' It notices a loaded model within half a minute.' : ''}`;
+    : /unreachable/.test(summarizer.error) ? `Slorp looks for an LLM server${where}.`
+    : `The LLM server${where} answered, but ${summarizer.error.replace(/^it /, '')}.`;
+  return `${NO_MODEL}, so sessions are shown as they are: no summaries, suggested replies, automatic filing or wrap-ups. ${how}${full && !summarizer.off && !/-model/.test(summarizer.error) ? ' It notices a loaded model within half a minute.' : ''}`;
 }
 /* Says so once, until dismissed, when a model was looked for and not found. */
 function modelNotice() {

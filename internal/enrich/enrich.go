@@ -1,11 +1,13 @@
 // Package enrich writes an Insight for each settled session by asking a local
-// model through an OpenAI-compatible API such as LM Studio's.
+// model through an OpenAI-compatible API, such as LM Studio's, Ollama's or
+// llama.cpp's.
 package enrich
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -253,6 +255,8 @@ func (e *Enricher) note(ctx context.Context, model string, w hub.Unnoted) (hub.N
 
 // model returns the configured model, or the first chat model the server
 // reports as loaded, so that Slorp never causes another model to be loaded.
+// A server that does not say what is loaded has its model taken when it
+// lists just the one.
 func (e *Enricher) model(ctx context.Context) (string, error) {
 	if e.Model != "" {
 		return e.Model, nil
@@ -264,16 +268,30 @@ func (e *Enricher) model(ctx context.Context) (string, error) {
 			State string `json:"state"`
 		} `json:"data"`
 	}
-	if err := e.get(ctx, "/api/v0/models", &out); err != nil {
+	// LM Studio says which of its models are loaded.
+	if e.get(ctx, "/api/v0/models", &out) == nil {
+		for _, m := range out.Data {
+			if m.State == "loaded" && m.Type != "embeddings" {
+				return m.ID, nil
+			}
+		}
+		return "", errNoModel
+	}
+	// Any other server lists what it can run without saying what is
+	// loaded, so only a model listed alone is taken.
+	if e.get(ctx, "/v1/models", &out) != nil {
 		return "", fmt.Errorf("local model server unreachable")
 	}
-	for _, m := range out.Data {
-		if m.State == "loaded" && m.Type != "embeddings" {
-			return m.ID, nil
-		}
+	switch len(out.Data) {
+	case 0:
+		return "", errNoModel
+	case 1:
+		return out.Data[0].ID, nil
 	}
-	return "", fmt.Errorf("no model is loaded")
+	return "", fmt.Errorf("it lists several models, so name one with -model")
 }
+
+var errNoModel = errors.New("no model is loaded")
 
 const system = `You write entries for a developer's personal dashboard of their AI coding agent sessions. You are given one session's state and its most recent exchange. Return JSON describing it for the developer, addressed to them as "you".
 

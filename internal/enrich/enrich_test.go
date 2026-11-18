@@ -21,6 +21,9 @@ type fakeLLM struct {
 	content string
 	status  int
 	models  string
+	// listed is what the server lists as an OpenAI-compatible one does,
+	// empty for a server with no such listing.
+	listed string
 	// calls is what the model asks to look up when it is offered tools.
 	calls []call
 	// plan is the request that offered tools, when there was one.
@@ -53,7 +56,17 @@ func (f *fakeLLM) enricher(t *testing.T) *Enricher {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v0/models":
+			if f.models == "" {
+				http.NotFound(w, r)
+				return
+			}
 			io.WriteString(w, f.models)
+		case "/v1/models":
+			if f.listed == "" {
+				http.NotFound(w, r)
+				return
+			}
+			io.WriteString(w, f.listed)
 		case "/v1/chat/completions":
 			body, _ := io.ReadAll(r.Body)
 			f.requests++
@@ -91,27 +104,32 @@ func (f *fakeLLM) system() string { return f.request.Messages[0].Content }
 var ctx = context.Background()
 
 func TestModelUsesWhatIsAlreadyLoaded(t *testing.T) {
+	cold := `{"data":[{"id":"cold","type":"llm","state":"not-loaded"}]}`
 	tests := []struct {
-		name, models, configured string
-		want                     string
-		wantErr                  bool
+		name, models, listed, configured string
+		want, wantErr                    string
 	}{
 		{"a loaded chat model", `{"data":[
 			{"id":"embed","type":"embeddings","state":"loaded"},
 			{"id":"cold","type":"llm","state":"not-loaded"},
-			{"id":"warm","type":"vlm","state":"loaded"}]}`, "", "warm", false},
-		{"nothing loaded", `{"data":[{"id":"cold","type":"llm","state":"not-loaded"}]}`, "", "", true},
-		{"only an embedding model loaded", `{"data":[{"id":"embed","type":"embeddings","state":"loaded"}]}`, "", "", true},
-		{"a model the user named", `{"data":[]}`, "chosen", "chosen", false},
-		{"a server that is not LM Studio", `not json`, "", "", true},
+			{"id":"warm","type":"vlm","state":"loaded"}]}`, "", "", "warm", ""},
+		{"nothing loaded", cold, "", "", "", "no model is loaded"},
+		{"nothing loaded, though the server lists the model too", cold, `{"data":[{"id":"cold"}]}`, "", "", "no model is loaded"},
+		{"only an embedding model loaded", `{"data":[{"id":"embed","type":"embeddings","state":"loaded"}]}`, "", "", "", "no model is loaded"},
+		{"a model the user named", `{"data":[]}`, "", "chosen", "chosen", ""},
+		{"a server other than LM Studio with one model", "", `{"object":"list","data":[{"id":"only","object":"model"}]}`, "", "only", ""},
+		{"such a server with several models", "", `{"data":[{"id":"one"},{"id":"two"}]}`, "", "", "-model"},
+		{"such a server with none", "", `{"data":[]}`, "", "", "no model is loaded"},
+		{"a server that lists models in neither way", `not json`, "", "", "", "unreachable"},
+		{"a server that answers neither", "", "", "", "", "unreachable"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e := (&fakeLLM{models: tt.models}).enricher(t)
+			e := (&fakeLLM{models: tt.models, listed: tt.listed}).enricher(t)
 			e.Model = tt.configured
 			got, err := e.model(ctx)
-			if got != tt.want || (err != nil) != tt.wantErr {
-				t.Errorf("model = %q, err %v; want %q, error %v", got, err, tt.want, tt.wantErr)
+			if got != tt.want || (err == nil) != (tt.wantErr == "") || err != nil && !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("model = %q, err %v; want %q, error %q", got, err, tt.want, tt.wantErr)
 			}
 		})
 	}
