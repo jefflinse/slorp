@@ -80,6 +80,16 @@ type Launcher interface {
 	Uninstall(ctx context.Context) error
 }
 
+// Delegates reads from an agent's own record the subagents its sessions
+// started, for sessions that are open and ones that have closed.
+type Delegates interface {
+	// Subagents lists those a session started, the first started first.
+	Subagents(sessionID string) []hub.Subagent
+	// Report returns what one of them was asked and what it reported, and
+	// false when the session started no such subagent.
+	Report(sessionID, id string) (hub.SubagentReport, bool)
+}
+
 // Prober tries a local model server.
 type Prober interface {
 	// Probe tries the server and model in use, or with m those m would
@@ -138,10 +148,11 @@ func Page(built []byte, path string) http.Handler {
 	})
 }
 
-// New serves the page and its API. history and launchers are by agent; an
-// agent with no history keeps no record Slorp can read, and one with no
-// launcher has sessions Slorp can only watch.
-func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history map[string]History, launchers map[string]Launcher, prober Prober, page http.Handler) http.Handler {
+// New serves the page and its API. history, launchers and delegates are by
+// agent; an agent with no history keeps no record Slorp can read, one with
+// no launcher has sessions Slorp can only watch, and one with no delegates
+// has subagents Slorp knows nothing of.
+func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history map[string]History, launchers map[string]Launcher, delegates map[string]Delegates, prober Prober, page http.Handler) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
@@ -437,7 +448,31 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			http.Error(w, "no such closed session", http.StatusNotFound)
 			return
 		}
+		if d := delegates[a.Agent]; d != nil {
+			a.Subagents = d.Subagents(a.ID)
+		}
 		writeJSON(w, http.StatusOK, a)
+	})
+
+	// What one subagent of a session, open or closed, was asked and reported.
+	mux.HandleFunc("GET /api/sessions/{id}/subagents/{sub}", func(w http.ResponseWriter, r *http.Request) {
+		id, agent := r.PathValue("id"), ""
+		if at := slices.IndexFunc(h.Sessions(), func(s hub.Session) bool { return s.ID == id }); at >= 0 {
+			agent = h.Sessions()[at].Agent
+		} else if a, ok := h.Archive(id); ok {
+			agent = a.Agent
+		}
+		d := delegates[agent]
+		if d == nil {
+			http.Error(w, "no such session with subagents Slorp can read", http.StatusNotFound)
+			return
+		}
+		report, ok := d.Report(id, r.PathValue("sub"))
+		if !ok {
+			http.Error(w, "no such subagent", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, report)
 	})
 
 	// The page asks for a day, named as "2006-01-02", to be wrapped up.

@@ -26,6 +26,9 @@ type Archived struct {
 	// Moments counts its timeline, which only Archive itself carries.
 	Moments  int      `json:"moments"`
 	Timeline []Moment `json:"timeline,omitempty"`
+	// Subagents are the agents it started, which its agent's own record is
+	// read for when one closed session is asked after.
+	Subagents []Subagent `json:"subagents,omitempty"`
 }
 
 // Archive returns one closed session with its timeline.

@@ -570,3 +570,173 @@ func TestRunTracesTheSessionsThatClosedBeforeItWatched(t *testing.T) {
 		t.Errorf("%d closed and sessions %+v; want the reopened session to hold what the one that continued it did", len(got.Archive), got.Sessions)
 	}
 }
+
+// spawned writes what Claude Code keeps of one subagent of the session whose
+// transcript is at path: its note, and entries added to its own transcript.
+func spawned(t *testing.T, path, id, note string, entries ...map[string]any) {
+	t.Helper()
+	dir := subagentsDir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if note != "" {
+		if err := os.WriteFile(filepath.Join(dir, "agent-"+id+".meta.json"), []byte(note), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var lines string
+	for _, e := range entries {
+		e["isSidechain"], e["agentId"] = true, id
+		lines += line(t, e)
+	}
+	appendTo(t, filepath.Join(dir, "agent-"+id+".jsonl"), lines)
+}
+
+// at stamps an entry with a time of day on one fixed date.
+func at(clock string, e map[string]any) map[string]any {
+	e["timestamp"] = "2026-11-17T" + clock + "Z"
+	return e
+}
+
+func toolUse(name string, input map[string]any) map[string]any {
+	return map[string]any{"type": "tool_use", "name": name, "input": input}
+}
+
+func TestPollListsASessionsSubagents(t *testing.T) {
+	bin, _ := fakeClaude(t, `[{"id":"aaa00000","cwd":"/w/a","kind":"interactive","startedAt":1700000000000,"status":"busy","sessionId":"aaa"}]`, "")
+	home := t.TempDir()
+	path := filepath.Join(home, ".claude", "projects", "-w-a", "aaa.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	appendTo(t, path, line(t, user("look into both"))+line(t, block("msg_main", 1, 2, 3, 4)))
+
+	asked := at("02:55:54", user("Find every caller of Apply."))
+	first := at("02:56:10", block("msg_a1", 10, 20, 30, 40))
+	first["message"].(map[string]any)["content"] = []map[string]any{text("Looking."), toolUse("Bash", map[string]any{"command": "grep"}), toolUse("Read", nil)}
+	spawned(t, path, "a-late", `{"agentType":"general-purpose","description":"Write the fix","spawnDepth":2,"requestShape":"foreground","model":"claude-haiku-5-5"}`,
+		at("03:10:00", user("Fix it.")))
+	spawned(t, path, "z-early", `{"agentType":"Explore","description":"Find the callers","spawnDepth":1,"requestShape":"background","model":"claude-opus-5-5"}`, asked, first)
+
+	st := testdb.Open(t)
+	h := hub.New(testdb.KB(t, st), st)
+	a := &Adapter{Hub: h, Bin: bin, Home: home, tails: map[string]*tail{}}
+	poll := func() hub.Session {
+		t.Helper()
+		if err := a.poll(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		return h.Sessions()[0]
+	}
+
+	s := poll()
+	if len(s.Subagents) != 2 || s.Subagents[0].ID != "z-early" || s.Subagents[1].ID != "a-late" {
+		t.Fatalf("subagents = %+v, want both, the first started first", s.Subagents)
+	}
+	early, late := s.Subagents[0], s.Subagents[1]
+	if early.Type != "Explore" || early.Description != "Find the callers" || !early.Background || early.Depth != 1 || early.Done {
+		t.Errorf("what it was started as: %+v", early)
+	}
+	if early.StartedAt.Format("15:04:05") != "02:55:54" || early.ActiveAt.Format("15:04:05") != "02:56:10" {
+		t.Errorf("times: started %v, active %v; want its first and last entries'", early.StartedAt, early.ActiveAt)
+	}
+	if early.Model != "claude-fable-5-2" || early.Effort != "high" || early.Tools != 2 || early.Used != (hub.Tokens{In: 10, CacheWrite: 20, CacheRead: 30, Out: 40}) {
+		t.Errorf("model %q, effort %q, %d tool calls, used %+v; want them from its transcript, whatever model it was started on", early.Model, early.Effort, early.Tools, early.Used)
+	}
+	if late.Background || late.Depth != 2 || late.Model != "claude-haiku-5-5" || late.Tools != 0 || late.Done {
+		t.Errorf("one that has yet to answer: %+v, want what it was started as and the model it was started on", late)
+	}
+	if s.Used != (hub.Tokens{In: 11, CacheWrite: 22, CacheRead: 33, Out: 44}) {
+		t.Errorf("session used %+v, want its subagents' tokens counted with its own", s.Used)
+	}
+
+	// The response grows by a block, and the subagent hands back and finishes.
+	more := at("02:57:00", block("msg_a1", 10, 20, 30, 90))
+	more["message"].(map[string]any)["content"] = []map[string]any{toolUse(handback, map[string]any{"message": "Two callers: hub and server."})}
+	spawned(t, path, "z-early", `{"agentType":"Explore","description":"Find the callers","spawnDepth":1,"requestShape":"background","model":"claude-opus-5-5","finished":true}`, more)
+	s = poll()
+	if early = s.Subagents[0]; !early.Done || early.Tools != 3 || early.Used.Out != 90 || early.Used.In != 10 || early.ActiveAt.Format("15:04:05") != "02:57:00" {
+		t.Errorf("after it finished: %+v; want it done, with only what was new read", early)
+	}
+	if s.Used.Out != 94 {
+		t.Errorf("session used %+v, want the subagent's later tokens in place of its earlier", s.Used)
+	}
+
+	if got := a.Subagents("aaa"); len(got) != 2 || got[0] != early {
+		t.Errorf("read afresh = %+v, want what the roster has", got)
+	}
+	if got := a.Subagents("zzz"); got != nil {
+		t.Errorf("subagents of a session with no transcript = %+v", got)
+	}
+}
+
+func TestReport(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".claude", "projects", "-w-a", "aaa.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	appendTo(t, path, line(t, user("go")))
+	said := func(s string) map[string]any { return at("02:56:00", assistant(text(s))) }
+	spawned(t, path, "handed", `{}`, at("02:55:00", user("Find every caller.")), at("02:55:30", user([]map[string]any{{"type": "tool_result", "content": "x"}})),
+		said("Looking."), at("02:57:00", assistant(text("Reporting."), toolUse(handback, map[string]any{"message": "Two callers."}))), said("Done."))
+	spawned(t, path, "talking", `{}`, at("02:55:00", user("Fix it.")), said("Trying one thing."), said("Trying another."))
+	// A transcript outside the session's subagents, and one where a session
+	// with no transcript of its own would be looked for.
+	elsewhere := t.TempDir()
+	t.Chdir(elsewhere)
+	for _, outside := range []string{filepath.Join(filepath.Dir(path), "agent-outside.jsonl"), filepath.Join(elsewhere, "subagents", "agent-handed.jsonl")} {
+		if err := os.MkdirAll(filepath.Dir(outside), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(outside, []byte(line(t, at("02:55:00", user("secret")))), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	a := &Adapter{Home: home}
+	if got, ok := a.Report("aaa", "handed"); !ok || got != (hub.SubagentReport{Prompt: "Find every caller.", Report: "Two callers.", Handed: true}) {
+		t.Errorf("report = %+v, %v; want what it was first told and what it handed back", got, ok)
+	}
+	if got, ok := a.Report("aaa", "talking"); !ok || got != (hub.SubagentReport{Prompt: "Fix it.", Report: "Trying another."}) {
+		t.Errorf("report = %+v, %v; want the last thing it said, for one that has handed nothing back", got, ok)
+	}
+	for _, id := range []string{"nobody", "", "../../../../agent-outside", "..%2Foutside"} {
+		if got, ok := a.Report("aaa", id); ok {
+			t.Errorf("report of %q = %+v, want none", id, got)
+		}
+	}
+	if _, ok := a.Report("zzz", "handed"); ok {
+		t.Error("a report from a session with no transcript")
+	}
+}
+
+func TestSubagentsAreReadOnlyAsFarAsTheyAreNew(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "aaa.jsonl")
+	first := at("02:56:10", block("msg_1", 10, 20, 30, 40))
+	first["message"].(map[string]any)["content"] = []map[string]any{toolUse("Bash", nil), toolUse("Read", nil)}
+	spawned(t, path, "sub", `{}`, at("02:55:54", user("Find them.")), first)
+
+	known := map[string]*subagent{}
+	if got := subagents(path, known); len(got) != 1 || got[0].Tools != 2 {
+		t.Fatalf("subagents = %+v, want the one with its two tool calls", got)
+	}
+
+	// What was read is blanked where it lies, and more is written after it.
+	file := filepath.Join(subagentsDir(path), "agent-sub.jsonl")
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte(strings.Repeat(" ", len(raw)-1)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	more := at("02:57:00", block("msg_2", 1, 2, 3, 4))
+	more["message"].(map[string]any)["content"] = []map[string]any{toolUse("Edit", nil)}
+	spawned(t, path, "sub", "", more)
+
+	got := subagents(path, known)
+	if len(got) != 1 || got[0].Tools != 3 || got[0].Used != (hub.Tokens{In: 11, CacheWrite: 22, CacheRead: 33, Out: 44}) || got[0].StartedAt.Format("15:04:05") != "02:55:54" {
+		t.Errorf("subagents = %+v, want what was read before kept and only the rest read", got)
+	}
+}

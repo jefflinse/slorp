@@ -51,6 +51,9 @@ type Adapter struct {
 	URL string
 
 	tails map[string]*tail
+	// subs holds the readers of each session's subagents, by session and
+	// then by subagent.
+	subs map[string]map[string]*subagent
 	// pluginAt is when Claude Code was last asked whether it has the plugin.
 	pluginAt time.Time
 	once     sync.Once
@@ -140,6 +143,17 @@ func (a *Adapter) poll(ctx context.Context) error {
 			}
 			if t.origin != "" {
 				a.trace(r.SessionID, t.origin)
+			}
+			if a.subs == nil {
+				a.subs = map[string]map[string]*subagent{}
+			}
+			if a.subs[r.SessionID] == nil {
+				a.subs[r.SessionID] = map[string]*subagent{}
+			}
+			s.Subagents = subagents(t.path, a.subs[r.SessionID])
+			for _, sub := range s.Subagents {
+				s.Used.In, s.Used.CacheWrite = s.Used.In+sub.Used.In, s.Used.CacheWrite+sub.Used.CacheWrite
+				s.Used.CacheRead, s.Used.Out = s.Used.CacheRead+sub.Used.CacheRead, s.Used.Out+sub.Used.Out
 			}
 		}
 		live = append(live, s)
@@ -239,8 +253,8 @@ type tail struct {
 	model, reasoning string
 	// contextTokens is zero from a compaction until the next response.
 	contextTokens int
-	// used totals every response in the file, subagents' included. counted
-	// holds each response's share, as one is written once per block.
+	// used totals every response in the file. counted holds each
+	// response's share, as one is written once per block.
 	used    hub.Tokens
 	counted map[string]hub.Tokens
 }

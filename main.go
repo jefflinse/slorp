@@ -116,7 +116,7 @@ func main() {
 	})
 	go poller.Run(ctx)
 
-	srv := &http.Server{Addr: *addr, Handler: server.New(h, k, tools, poller, map[string]server.History{claude.Agent: transcripts.Exchanges}, map[string]server.Launcher{claude.Agent: transcripts}, summarizer, server.Page(page, *ui))}
+	srv := &http.Server{Addr: *addr, Handler: server.New(h, k, tools, poller, map[string]server.History{claude.Agent: transcripts.Exchanges}, map[string]server.Launcher{claude.Agent: transcripts}, map[string]server.Delegates{claude.Agent: transcripts}, summarizer, server.Page(page, *ui))}
 	go func() {
 		<-ctx.Done()
 		srv.Close()

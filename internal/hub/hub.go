@@ -107,6 +107,9 @@ type Session struct {
 	// CostUSD is the agent's own estimate of what the session has cost, zero
 	// when it gave none.
 	CostUSD float64 `json:"costUsd,omitempty"`
+	// Subagents are the agents the session has started to do parts of its
+	// work, the first started first. Used counts what they took as well.
+	Subagents []Subagent `json:"subagents,omitempty"`
 
 	bridgeSeen time.Time
 	key        string
@@ -321,6 +324,42 @@ type Summarizer struct {
 	// given when Slorp started, where the user's settings do not reach.
 	FixedURL   bool `json:"fixedUrl,omitempty"`
 	FixedModel bool `json:"fixedModel,omitempty"`
+}
+
+// Subagent is an agent a session started to do part of its work.
+type Subagent struct {
+	ID string `json:"id"`
+	// Type is the kind of agent it was started as, and Description the few
+	// words its session gave the task.
+	Type        string `json:"type"`
+	Description string `json:"description"`
+	// Background is true for one its session did not wait on.
+	Background bool `json:"background,omitempty"`
+	// Depth is 1 for one the session started itself, 2 for one such a
+	// subagent started, and so on.
+	Depth int `json:"depth,omitempty"`
+	// Done is true once it has finished.
+	Done      bool      `json:"done"`
+	StartedAt time.Time `json:"startedAt,omitzero"`
+	// ActiveAt is when it last did anything, which for one that is done is
+	// when it finished.
+	ActiveAt time.Time `json:"activeAt,omitzero"`
+	// Model is the model that gave its last response, and Effort how hard
+	// it was asked to think.
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
+	// Tools counts the tool calls it has made.
+	Tools int    `json:"tools"`
+	Used  Tokens `json:"used"`
+}
+
+// SubagentReport is what a subagent was asked and what came of it.
+type SubagentReport struct {
+	Prompt string `json:"prompt"`
+	// Report is what it handed back to its session when Handed is true,
+	// and otherwise the last thing it said.
+	Report string `json:"report"`
+	Handed bool   `json:"handed"`
 }
 
 // ModelSettings is the user's choice of local model.

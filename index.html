@@ -230,6 +230,23 @@ h1 .pen:hover { color: var(--accent); background: var(--sel); }
 .asked .opt span:last-child { color: var(--ink2); font-size: 13px; }
 .role { display: inline-flex; align-items: center; white-space: nowrap; padding: 0 7px; border-radius: 99px; border: 1px solid var(--ink3); color: var(--ink2); font-size: 11.5px; font-weight: 500; line-height: 1.5; }
 .role .spark { margin-right: 4px; }
+.subs { display: inline-flex; align-items: center; white-space: nowrap; color: var(--ink3); font-size: 12px; }
+.subs.live { color: var(--ink2); }
+.run { margin-top: 16px; }
+.rhead { display: flex; justify-content: space-between; gap: 10px; padding-bottom: 4px; border-bottom: 1px solid var(--line); color: var(--ink3); font-size: 12px; font-variant-numeric: tabular-nums; }
+.lane { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(90px, 1fr) 128px; gap: 3px 16px; align-items: center; width: 100%; padding: 9px 0; border-bottom: 1px solid var(--line); text-align: left; }
+.lane:hover .t { color: var(--accent); }
+.lane .what { grid-row: span 2; min-width: 0; }
+.lane .t { display: block; font-size: 14px; font-weight: 500; line-height: 1.35; overflow-wrap: anywhere; }
+.lane .m { display: block; margin-top: 1px; color: var(--ink3); font-size: 12px; }
+.lane .track { position: relative; height: 8px; border-radius: 99px; background: color-mix(in srgb, var(--line) 55%, transparent); }
+.lane .track i { position: absolute; top: 0; bottom: 0; min-width: 3px; border-radius: 99px; background: var(--ink3); }
+.lane .track i.running { background: var(--k-local); animation: pulse 1.8s ease-in-out infinite; }
+.lane .track i.idle { background: transparent; box-shadow: inset 0 0 0 1.5px var(--ink3); }
+.lane .num { display: flex; gap: 12px; justify-content: flex-end; color: var(--ink2); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.lane .num span:last-child { min-width: 44px; text-align: right; }
+.lane .stand { grid-column: 2 / -1; color: var(--ink3); font-size: 12px; }
+.subdoc { padding: 12px 0 16px 14px; margin: 0 0 4px 2px; border-left: 3px solid var(--line); }
 .tag { font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 1px 6px; border-radius: 4px; }
 .tag.blocking { background: var(--fill); color: var(--fill-ink); }
 .tag.awaiting { color: var(--warn); border: 1px solid currentColor; }
@@ -812,7 +829,7 @@ function briefing(items) {
 
 function rowHtml(it, act = 'select') {
   const grouped = act === 'select' ? state.groupBy : 'effort';
-  const chips = `${grouped === 'source' ? '' : kindBadge(it.kind)}${it.live && it.session ? roleChip(it.session) + pullChip(it.session) : ''}${grouped === 'effort' ? '' : `<span>${esc(effortById(effortOf(it)).name)}</span>`}`;
+  const chips = `${grouped === 'source' ? '' : kindBadge(it.kind)}${it.live && it.session ? roleChip(it.session) + pullChip(it.session) + subChip(it.session) : ''}${grouped === 'effort' ? '' : `<span>${esc(effortById(effortOf(it)).name)}</span>`}`;
   /* The short form keeps the title, its age and urgency, and the description. */
   const long = state.rows !== 'short';
   return `<button class="row ${it.urgency} ${state.view === 'attention' && it.id === state.sel ? 'sel' : ''} ${it.id === freshId ? 'fresh' : ''}" data-act="${act}" data-id="${it.id}" style="${kindColor(it.kind)}">
@@ -968,7 +985,7 @@ function usageTotal() {
   if (!all) return '';
   const sum = (...keys) => counted.reduce((n, s) => n + keys.reduce((m, k) => m + s.used[k], 0), 0);
   const priced = live.filter(s => s.costUsd), usd = priced.reduce((n, s) => n + s.costUsd, 0);
-  const about = `New tokens in the ${num(counted.length)} open session${counted.length === 1 ? '' : 's'} with a transcript, since each began: ${tokens(sum('in', 'cacheWrite'))} sent for the first time and ${tokens(sum('out'))} written by the model. Reading the conversation back from the cache on every request came to another ${tokens(sum('cacheRead'))}, left out of the figure. `
+  const about = `New tokens in the ${num(counted.length)} open session${counted.length === 1 ? '' : 's'} with a transcript and in their subagents, since each began: ${tokens(sum('in', 'cacheWrite'))} sent for the first time and ${tokens(sum('out'))} written by the model. Reading the conversation back from the cache on every request came to another ${tokens(sum('cacheRead'))}, left out of the figure. `
     + (priced.length ? `The cost is each agent's own estimate at list prices, from ${priced.length === live.length ? 'all of them' : `${num(priced.length)} of the ${num(live.length)} open`}; inside a subscription it is not a charge.` : 'No session has reported what it cost.');
   const agents = [...new Set(counted.map(s => s.agent))];
   return `<span class="used" id="used" style="${agents.length === 1 ? kindColor(agents[0]) : ''}" title="${esc(about)}"><i></i>${priced.length ? `≈${money(usd)} · ` : ''}${tokens(sum('in', 'cacheWrite', 'out'))} tokens</span>`;
@@ -1485,9 +1502,79 @@ function md(src) {
   return `<div class="md">${out.join('')}</div>`;
 }
 
+/* ── Subagents: the agents a session started to do parts of its work. ── */
+
+/* How long a subagent may say nothing before it is no longer taken to be running, in minutes. */
+const SUB_QUIET = 10;
+const newTokens = u => (u?.in || 0) + (u?.cacheWrite || 0) + (u?.out || 0);
+const subQuiet = a => a.activeAt ? minsSince(a.activeAt) : 0;
+const subRunning = a => !a.done && subQuiet(a) < SUB_QUIET;
+/* How a subagent stands, as a dot and a word. One in a closed session that never finished did not finish. */
+const subStatus = (a, closed) => a.done ? ['done', 'finished'] : closed ? ['idle', 'did not finish'] : subRunning(a) ? ['running', 'running'] : ['idle', `no word for ${span(subQuiet(a))}`];
+const lasted = ms => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s` : `${Math.floor(s / 3600)}h ${String(Math.floor(s % 3600 / 60)).padStart(2, '0')}m`; };
+function subChip(s) {
+  const all = s.subagents || [], going = all.filter(subRunning).length;
+  if (!all.length) return '';
+  return `<span class="subs ${going ? 'live' : ''}" title="Agents this session started to do parts of its work">${going ? `<span class="dot running"></span>${going} of ${all.length}` : all.length} subagent${all.length === 1 ? '' : 's'}${going ? ' running' : ''}</span>`;
+}
+
+/* What each subagent was asked and reported, fetched when its lane is opened and again as it gets further. */
+const subDocs = {}, subAsked = {};
+function fetchSub(sessionId, a) {
+  const key = `${sessionId}/${a.id}`, had = subDocs[key];
+  if (subAsked[key] || (had && (had.at === a.activeAt || Date.now() - had.fetched < 15000))) return;
+  subAsked[key] = true;
+  fetch(`/api/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(a.id)}`).then(r => r.ok ? r.json() : { missing: true })
+    .then(doc => { subDocs[key] = { ...doc, at: a.activeAt, fetched: Date.now() }; }).catch(() => { subDocs[key] = { ...(had || { failed: true }), fetched: Date.now() }; })
+    .finally(() => { delete subAsked[key]; render(); });
+}
+
+/* The subagents in the runs they were started in: those whose times overlap, or nearly, share a run and its time scale. */
+function subRuns(list, closed) {
+  const now = Date.now(), runs = [];
+  const spans = list.map(a => { const from = a.startedAt ? +new Date(a.startedAt) : now; return { a, from, to: Math.max(from, subRunning(a) && !closed ? now : +new Date(a.activeAt || from)) }; }).sort((x, y) => x.from - y.from);
+  for (const sp of spans) {
+    const run = runs[runs.length - 1];
+    if (run && sp.from <= run.to + 60000) { run.spans.push(sp); run.to = Math.max(run.to, sp.to); }
+    else runs.push({ from: sp.from, to: sp.to, spans: [sp] });
+  }
+  return runs;
+}
+
+/* A session's subagents: each a lane on the time scale of its run, opening onto what it was asked and reported. */
+function subsBody(sessionId, list, closed, used) {
+  const theirs = list.reduce((n, a) => n + newTokens(a.used), 0), mine = used ? newTokens(used) - theirs : 0;
+  const today = new Date().toDateString();
+  const runs = subRuns(list, closed).reverse().map(run => {
+    const began = new Date(run.from), width = Math.max(1, run.to - run.from);
+    const lanes = run.spans.map(({ a, from, to }) => {
+      const [dot, word] = subStatus(a, closed), key = `sub:${sessionId}/${a.id}`, open = state.expanded[key], doc = subDocs[`${sessionId}/${a.id}`];
+      if (open) fetchSub(sessionId, a);
+      const about = [a.type, a.model && modelName(a.model), a.effort, plural(a.tools, 'tool call'), a.background ? 'in the background' : ''].filter(Boolean).map(esc).join(' · ');
+      const said = !open ? '' : !doc ? '<div class="subdoc"><div class="none">Fetching what it was asked and reported…</div></div>'
+        : doc.missing ? '<div class="subdoc"><div class="none">Claude Code no longer has this subagent\'s record.</div></div>'
+        : doc.failed ? '<div class="subdoc"><div class="none">Could not reach the Slorp service for what it was asked and reported.</div></div>'
+        : `<div class="subdoc">${doc.prompt ? `<div class="said ${state.expanded['said:' + key] ? 'open' : ''}"><div class="label">What it was asked</div><div class="tx">${esc(doc.prompt)}</div>
+            <button class="link" data-act="expand" data-id="said:${key}" hidden>${state.expanded['said:' + key] ? 'Show less' : 'Show all of it'}</button></div>` : ''}
+          <div class="label" style="margin-bottom:6px">${doc.handed ? 'What it reported' : a.done || closed ? 'The last thing it said' : 'The last thing it has said'}</div>
+          ${doc.report ? md(doc.report) : '<div class="none">Nothing yet.</div>'}</div>`;
+      return `<button class="lane ${open ? 'open' : ''}" data-act="expand" data-id="${key}" style="${a.depth > 1 ? `padding-left:${(a.depth - 1) * 16}px` : ''}" aria-expanded="${!!open}">
+          <span class="what"><span class="t">${esc(a.description || a.type || a.id)}</span><span class="m">${about}</span></span>
+          <span class="track" title="${esc(`${new Date(from).toLocaleTimeString()} to ${subRunning(a) && !closed ? 'now' : new Date(to).toLocaleTimeString()}`)}"><i class="${dot}" style="left:${(100 * (from - run.from) / width).toFixed(2)}%;width:${(100 * (to - from) / width).toFixed(2)}%"></i></span>
+          <span class="num"><span>${lasted(to - from)}</span><span>${tokens(newTokens(a.used))}</span></span>
+          <span class="stand">${stat(dot, word)}</span>
+        </button>${said}`;
+    }).join('');
+    return `<div class="run"><div class="rhead"><span>${began.toDateString() === today ? '' : `${began.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}, `}${began.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+        <span>${run.spans.length > 1 ? `${num(run.spans.length)} together over ${lasted(run.to - run.from)}` : ''}</span></div>${lanes}</div>`;
+  }).join('');
+  return `<p class="none" style="margin-bottom:6px">${cap(plural(list.length, 'subagent'))} took ${tokens(theirs)} tokens${list.length > 1 ? ' between them' : ''}${mine > 0 ? `, beside ${tokens(mine)} in the conversation itself` : ''}. Each bar is when it ran, on the scale of the run it was started in; the figures are how long it took and the new tokens it used.</p>${runs}`;
+}
+
 /* What Slorp knows of a session that its page does not otherwise say. */
 function aboutSession(s) {
   const fresh = (s.used?.in || 0) + (s.used?.cacheWrite || 0), out = s.used?.out || 0, read = s.used?.cacheRead || 0;
+  const subs = s.subagents || [], theirs = subs.reduce((n, a) => n + newTokens(a.used), 0);
   const facts = [
     ['Directory', `<span class="mono">${esc(tilde(s.cwd))}</span>`],
     s.branch && ['Branch', `<span class="mono">${esc(s.branch)}</span>`],
@@ -1496,7 +1583,7 @@ function aboutSession(s) {
     ['Last active', `<span title="${esc(new Date(s.activeAt).toLocaleString())}">${ago(minsSince(s.activeAt))}</span>`],
     s.model && ['Model', runsOn(s)],
     s.contextTokens && ['Context', contextUse(s)],
-    fresh + out > 0 && ['Used', `${tokens(fresh)} tokens sent for the first time and ${tokens(out)} written by the model${read ? `, with another ${tokens(read)} read back from the cache` : ''}${s.costUsd ? `. Its agent puts that at about ${money(s.costUsd)} at list prices` : ''}.`],
+    fresh + out > 0 && ['Used', `${tokens(fresh)} tokens sent for the first time and ${tokens(out)} written by the model${read ? `, with another ${tokens(read)} read back from the cache` : ''}${s.costUsd ? `. Its agent puts that at about ${money(s.costUsd)} at list prices` : ''}.${theirs ? ` Of the new tokens, ${tokens(theirs)} went to its ${subs.length === 1 ? 'subagent' : `${num(subs.length)} subagents`}.` : ''}`],
     ['Filed under', `${esc(effortById(s.effort || 'unsorted').name)}${s.effort && VIA[s.effortVia] ? `, ${VIA[s.effortVia]}` : ''}`],
     s.role && roleById(s.role) && ['Role', `${esc(roleById(s.role).name)}, ${s.roleVia === 'guess' ? 'guessed by the model' : 'given by you'}`],
     ['Session', `<span class="mono">${esc(s.id)}</span> <button class="link" data-act="copyText" data-text="${esc(s.id)}">copy</button>`],
@@ -1509,7 +1596,8 @@ function aboutSession(s) {
 /* The tabs under a session: what the agent last said, rendered or as it was
    written, what else is going on in the same effort, and its particulars. */
 function detailTabs(s) {
-  const effort = s.effort || 'unsorted', others = alsoRows(effort, s.id), on = ['also', 'about'].includes(state.detailTab) ? state.detailTab : 'source';
+  const effort = s.effort || 'unsorted', others = alsoRows(effort, s.id), subs = s.subagents || [];
+  const on = ['also', 'about'].concat(subs.length ? 'subs' : []).includes(state.detailTab) ? state.detailTab : 'source';
   const tab = (key, name) => `<button class="label ${on === key ? 'on' : ''}" data-act="detailTab" data-t="${key}">${name}</button>`;
   const shown = state.sourceRaw ? `<div class="rawblock"><div class="tx">${esc(s.lastReply)}</div></div>` : md(s.lastReply);
   const open = state.expanded['said:' + s.id];
@@ -1517,10 +1605,10 @@ function detailTabs(s) {
       <button class="link" data-act="expand" data-id="said:${s.id}" hidden>${open ? 'Show less' : 'Show all of it'}</button></div>` : ''}
     ${s.lastReply ? shown : '<div class="none">No response found for this session.</div>'}
     <div class="none mono" style="margin-top:12px">${esc(rawOf(s))}</div>`;
-  return `<div class="tabs" role="tablist">${tab('source', 'Most Recent Agent Response')}${tab('also', `Also In ${esc(effortById(effort).name)}<span class="n">${others.count}</span>`)}${tab('about', 'Details')}
+  return `<div class="tabs" role="tablist">${tab('source', 'Most Recent Agent Response')}${subs.length ? tab('subs', `Subagents<span class="n">${subs.length}</span>`) : ''}${tab('also', `Also In ${esc(effortById(effort).name)}<span class="n">${others.count}</span>`)}${tab('about', 'Details')}
       ${on !== 'source' ? '' : `<span class="tools">${s.lastReply ? `<button class="btn" data-act="copyReply" data-id="${s.id}" title="Copy the response as it was written">Copy</button>` : ''}
         <span class="seg" role="group" aria-label="How the response is shown"><button class="${state.sourceRaw ? '' : 'on'}" data-act="sourceRaw" data-on="0">Rendered</button><button class="${state.sourceRaw ? 'on' : ''}" data-act="sourceRaw" data-on="1">Raw</button></span></span>`}</div>
-    <div class="tabbody">${on === 'also' ? others.html : on === 'about' ? aboutSession(s) : source()}</div>`;
+    <div class="tabbody">${on === 'also' ? others.html : on === 'about' ? aboutSession(s) : on === 'subs' ? subsBody(s.id, subs, false, s.used) : source()}</div>`;
 }
 
 /* The local model's account of a session: beside its page where there is room, within it where there is not.
@@ -1665,7 +1753,7 @@ function sessionRowLive(s) {
   return `<button class="row ${s.id === state.actSel ? 'sel' : ''}" data-act="actSel" data-id="${s.id}" style="${kindColor(s.agent)}">
     <span class="h">${name}<span class="w"><span>${ago(minsSince(s.activeAt))}</span>${stat(dot, word)}</span></span>
     ${state.fluent && sub ? `<span class="st">${esc(clip(sub, 160))}</span>` : ''}
-    ${long ? `<span class="m">${kindBadge(s.agent)}${roleChip(s)}${pullChip(s)}${s.effort ? `<span>${esc(effortById(s.effort).name)}</span>` : ''}</span>` : ''}
+    ${long ? `<span class="m">${kindBadge(s.agent)}${roleChip(s)}${pullChip(s)}${subChip(s)}${s.effort ? `<span>${esc(effortById(s.effort).name)}</span>` : ''}</span>` : ''}
     ${long && s.model ? `<span class="m"><span>${runsOn(s)}</span>${contextUse(s, true)}</span>` : ''}
   </button>`;
 }
@@ -1695,6 +1783,7 @@ function closedPage(a) {
         <span class="none" style="align-self:center">Its conversation is kept. Reopened, it waits for a message.</span></div></div>` : ''}
     <div class="sec"><div class="label"><span>${a.summary ? spark : ''}How it stood</span></div>
       <p class="prose">${a.summary ? esc(a.summary) : `<span class="none">${modelless() ? `${NO_MODEL}, so it was not summarized.` : 'The model wrote nothing about it before it closed.'}</span>`}</p></div>
+    ${doc && (doc.subagents || []).length ? `<div class="sec"><div class="label"><span>Subagents (${doc.subagents.length})</span></div>${subsBody(a.id, doc.subagents, true)}</div>` : ''}
     ${doc ? timeline(doc) || '<div class="label tlhead"><span>Timeline</span></div><div class="none">Nothing was said in it while Slorp was watching.</div>' : '<div class="none" style="margin-top:28px">Fetching its timeline…</div>'}
   </div>`;
 }

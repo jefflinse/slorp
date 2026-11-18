@@ -103,7 +103,7 @@ func newFixture(t *testing.T) *fixture {
 		Tools: []integrations.Tool{{Name: "fake_lookup", Description: "Look something up."}},
 	})
 	rec, launch, probe := &record{}, &launcher{}, &prober{}
-	srv := httptest.NewServer(New(h, k, tools, feeds, map[string]History{"claude": rec.read}, map[string]Launcher{"claude": launch}, probe, Page([]byte("<title>slorp</title>"), "")))
+	srv := httptest.NewServer(New(h, k, tools, feeds, map[string]History{"claude": rec.read}, map[string]Launcher{"claude": launch}, map[string]Delegates{"claude": rec}, probe, Page([]byte("<title>slorp</title>"), "")))
 	t.Cleanup(srv.Close)
 	return &fixture{t, srv, h, k, feeds, probes, rec, launch, probe}
 }
@@ -112,6 +112,17 @@ type record struct {
 	exchanges []hub.Exchange
 	err       error
 	asked     []string
+	// subagents are what each session is read as having started, by
+	// session, and reports what each reported, by session and subagent.
+	subagents map[string][]hub.Subagent
+	reports   map[string]hub.SubagentReport
+}
+
+func (r *record) Subagents(sessionID string) []hub.Subagent { return r.subagents[sessionID] }
+
+func (r *record) Report(sessionID, id string) (hub.SubagentReport, bool) {
+	report, ok := r.reports[sessionID+"/"+id]
+	return report, ok
 }
 
 func (r *record) read(sessionID string, limit int) ([]hub.Exchange, error) {
@@ -1166,5 +1177,43 @@ func TestCheckingTheLocalModel(t *testing.T) {
 
 	if code, _ := f.do("POST", "/api/model/check", `{"model":{"url":"ftp://x"}}`, nil); code != 400 || len(f.prober.tried) != 2 {
 		t.Errorf("check of an address that is not a server's = %d after %d tries, want 400 and nothing tried", code, len(f.prober.tried))
+	}
+}
+
+func TestASessionsSubagentsCanBeRead(t *testing.T) {
+	f := newFixture(t)
+	f.record.subagents = map[string][]hub.Subagent{"s1": {{ID: "a1", Type: "Explore", Description: "Find the callers", Done: true, Tools: 3}}}
+	f.record.reports = map[string]hub.SubagentReport{"s1/a1": {Prompt: "find them", Report: "there are two", Handed: true}}
+	f.connect("s1")
+	f.post("/api/bridge/event", `{"sessionId":"s1","type":"turn.start","text":"who calls this"}`)
+
+	report := func(path string) (int, hub.SubagentReport) {
+		code, body := f.do("GET", path, "", nil)
+		var got hub.SubagentReport
+		json.Unmarshal([]byte(body), &got)
+		return code, got
+	}
+	want := hub.SubagentReport{Prompt: "find them", Report: "there are two", Handed: true}
+	if code, got := report("/api/sessions/s1/subagents/a1"); code != 200 || got != want {
+		t.Errorf("a subagent of an open session = %d %+v, want %+v", code, got, want)
+	}
+	if code, _ := report("/api/sessions/s1/subagents/a2"); code != 404 {
+		t.Errorf("a subagent the session did not start = %d, want 404", code)
+	}
+	if code, _ := report("/api/sessions/s9/subagents/a1"); code != 404 {
+		t.Errorf("a subagent of a session Slorp has not heard of = %d, want 404", code)
+	}
+
+	f.hub.SetRoster("claude", nil)
+	if code, got := report("/api/sessions/s1/subagents/a1"); code != 200 || got != want {
+		t.Errorf("a subagent of a closed session = %d %+v, want %+v", code, got, want)
+	}
+	code, body := f.do("GET", "/api/archive/s1", "", nil)
+	var closed hub.Archived
+	if err := json.Unmarshal([]byte(body), &closed); code != 200 || err != nil || len(closed.Subagents) != 1 || closed.Subagents[0].ID != "a1" || closed.Subagents[0].Tools != 3 {
+		t.Errorf("reading the closed session back = %d %s, want its subagent with it", code, body)
+	}
+	if listed := f.state().Archive; len(listed) != 1 || listed[0].Subagents != nil {
+		t.Errorf("listed = %+v, want it without its subagents", listed)
 	}
 }
