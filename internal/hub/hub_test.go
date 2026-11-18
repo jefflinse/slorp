@@ -838,6 +838,16 @@ func TestASessionGoesByALastingName(t *testing.T) {
 	}
 	roster(h, "dir-9c", "Its agent's later title")
 	check(h, "after the user named it", "Loop reviewer", kb.ViaUser)
+	named := func(h *Hub, as string) {
+		h.SetRoster(agent, []Session{{ID: id, Agent: agent, Status: Waiting, Name: "dir-9c", Title: "Its agent's later title", Named: as}})
+	}
+	named(h, "Named in the agent")
+	check(h, "after the user also named it in its agent", "Loop reviewer", kb.ViaUser)
+	h.Rename(id, "")
+	check(h, "with only the name given in its agent", "Named in the agent", kb.ViaUser)
+	named(h, "")
+	check(h, "once that name is gone too", "Its agent's later title", "")
+	h.Rename(id, "Loop reviewer")
 
 	h2 := New(k, st)
 	roster(h2, "dir-9c", "Its agent's later title")

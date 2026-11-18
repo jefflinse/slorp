@@ -296,6 +296,22 @@ func TestTailDoesNotTakeACompactionSummaryForAPrompt(t *testing.T) {
 	}
 }
 
+func TestTailReadsTheNameTheUserGaveTheSession(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	named := func(as string) string { return line(t, map[string]any{"type": "custom-title", "customTitle": as}) }
+	appendTo(t, path, line(t, map[string]any{"type": "ai-title", "aiTitle": "Its own title"}))
+	tl := &tail{path: path}
+	tl.read()
+	if tl.named != "" || tl.title != "Its own title" {
+		t.Fatalf("named %q, titled %q before any renaming", tl.named, tl.title)
+	}
+	appendTo(t, path, named("First name")+named("  Second name ")+line(t, map[string]any{"type": "ai-title", "aiTitle": "Its own title"}))
+	tl.read()
+	if tl.named != "Second name" || tl.title != "Its own title" {
+		t.Errorf("named %q, titled %q; want the latest name the user gave, beside the session's own title", tl.named, tl.title)
+	}
+}
+
 func TestTailReadsIncrementally(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	appendTo(t, path, line(t, assistant(text("first"))))
@@ -397,7 +413,7 @@ func TestPollBuildsTheRoster(t *testing.T) {
 	if err := os.MkdirAll(project, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	appendTo(t, filepath.Join(project, "aaa.jsonl"), line(t, map[string]any{"type": "ai-title", "aiTitle": "Session A"})+line(t, user("go"))+line(t, block("msg_1", 10, 20, 30, 900)))
+	appendTo(t, filepath.Join(project, "aaa.jsonl"), line(t, map[string]any{"type": "ai-title", "aiTitle": "Session A"})+line(t, map[string]any{"type": "custom-title", "customTitle": "Renamed A"})+line(t, user("go"))+line(t, block("msg_1", 10, 20, 30, 900)))
 
 	st := testdb.Open(t)
 	h := hub.New(testdb.KB(t, st), st)
@@ -417,7 +433,7 @@ func TestPollBuildsTheRoster(t *testing.T) {
 	if sa.Agent != Agent || sa.Status != hub.Waiting || sa.WaitingFor != "permission prompt" || sa.Cwd != "/w/a" || sa.Name != "a-1" {
 		t.Errorf("session from the roster: %+v", sa)
 	}
-	if sa.Title != "Session A" || sa.LastPrompt != "go" || sa.LastReply != "x" || sa.Branch != "feat/x" {
+	if sa.Named != "Renamed A" || sa.Label != "Renamed A" || sa.Title != "Session A" || sa.LastPrompt != "go" || sa.LastReply != "x" || sa.Branch != "feat/x" {
 		t.Errorf("session was not filled in from its transcript: %+v", sa)
 	}
 	if sa.Model != "claude-fable-5-2" || sa.Reasoning != "high" || sa.ContextTokens != 60 || sa.Used != (hub.Tokens{In: 10, CacheWrite: 20, CacheRead: 30, Out: 900}) {

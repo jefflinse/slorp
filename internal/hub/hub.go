@@ -51,12 +51,15 @@ type Session struct {
 	ID    string `json:"id"`
 	Agent string `json:"agent"`
 	Kind  string `json:"kind"`
-	// Name and Title are what the session's agent calls it.
+	// Name and Title are what the session's agent calls it, and Named what
+	// the user called it there, if they did.
 	Name  string `json:"name"`
 	Title string `json:"title"`
+	Named string `json:"-"`
 	// Label is the name the session goes by here, which outlasts what it
-	// is doing: the one the user gave it, else its agent's title, else the
-	// first title the model wrote for it. LabelVia says which of those.
+	// is doing: the one the user gave it here, else the one they gave it in
+	// its agent, else its agent's title, else the first title the model
+	// wrote for it. LabelVia says whether the user or the model chose it.
 	Label      string    `json:"label"`
 	LabelVia   string    `json:"labelVia,omitempty"`
 	Cwd        string    `json:"cwd"`
@@ -1260,6 +1263,8 @@ func (s *Session) label() (name, via string) {
 	switch {
 	case s.given != "":
 		return s.given, kb.ViaUser
+	case s.Named != "":
+		return s.Named, kb.ViaUser
 	case s.Title != "":
 		return s.Title, ""
 	case s.pinned != "":

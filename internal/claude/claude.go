@@ -91,7 +91,7 @@ func (a *Adapter) poll(ctx context.Context) error {
 		if t := a.tail(r.SessionID); t != nil {
 			t.read()
 			s.Title, s.Branch, s.LastPrompt, s.LastReply, s.PromptAt = t.title, t.branch, t.lastPrompt, t.lastReply, t.promptAt
-			s.Model, s.Reasoning, s.ContextTokens, s.Used = t.model, t.reasoning, t.contextTokens, t.used
+			s.Model, s.Reasoning, s.ContextTokens, s.Used, s.Named = t.model, t.reasoning, t.contextTokens, t.used, t.named
 			if !t.modTime.IsZero() {
 				s.ActiveAt = t.modTime
 			}
@@ -137,6 +137,8 @@ type tail struct {
 	modTime time.Time
 
 	title, branch, lastPrompt, lastReply string
+	// named is the name the user gave the session with /rename, if any.
+	named string
 	// promptAt is when lastPrompt was said, zero when the file does not say.
 	promptAt         time.Time
 	model, reasoning string
@@ -151,6 +153,7 @@ type tail struct {
 type entry struct {
 	Type        string `json:"type"`
 	AITitle     string `json:"aiTitle"`
+	CustomTitle string `json:"customTitle"`
 	LastPrompt  string `json:"lastPrompt"`
 	GitBranch   string `json:"gitBranch"`
 	IsSidechain bool   `json:"isSidechain"`
@@ -175,7 +178,7 @@ type entry struct {
 }
 
 var wanted = [][]byte{
-	[]byte(`"type":"ai-title"`), []byte(`"type":"last-prompt"`),
+	[]byte(`"type":"ai-title"`), []byte(`"type":"custom-title"`), []byte(`"type":"last-prompt"`),
 	[]byte(`"type":"assistant"`), []byte(`"type":"user"`), []byte(`"subtype":"compact_boundary"`),
 }
 
@@ -246,6 +249,8 @@ func (t *tail) apply(line []byte) {
 		if e.AITitle != "" {
 			t.title = e.AITitle
 		}
+	case "custom-title":
+		t.named = strings.TrimSpace(e.CustomTitle)
 	case "last-prompt":
 		// Claude Code's own note of the prompt is cut short and untimed, so
 		// it stands in only for a prompt that was not read from its entry.
