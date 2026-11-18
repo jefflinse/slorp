@@ -410,10 +410,15 @@ type sessionDoc struct {
 	Given      string    `json:"given"`
 	Pinned     string    `json:"pinned"`
 	Timeline   []Moment  `json:"timeline,omitempty"`
-	// Label and Effort are the session's name and filing when last stored,
-	// for when it is no longer open to ask.
-	Label  string `json:"label,omitempty"`
-	Effort string `json:"effort,omitempty"`
+	// The rest is the session as it was when last stored, for when it is
+	// no longer open to ask. Ended is zero while it is open.
+	Label     string    `json:"label,omitempty"`
+	Effort    string    `json:"effort,omitempty"`
+	Agent     string    `json:"agent,omitempty"`
+	Cwd       string    `json:"cwd,omitempty"`
+	Branch    string    `json:"branch,omitempty"`
+	StartedAt time.Time `json:"startedAt,omitzero"`
+	Ended     time.Time `json:"ended,omitzero"`
 }
 
 type ReplyState string
@@ -456,6 +461,12 @@ type Hub struct {
 	limits map[string][]Limit
 	// wrapups is what has been written, or asked to be, about each day.
 	wrapups map[string]Wrapup
+	// archive holds the sessions that have closed. unsettled holds those
+	// that were open when Slorp last stopped, until their agent's open
+	// sessions are known.
+	archive   map[string]sessionDoc
+	unsettled map[string]sessionDoc
+	started   time.Time
 }
 
 type note struct {
@@ -466,7 +477,20 @@ type note struct {
 // New returns a hub restored from what c holds.
 func New(k *kb.Store, c Cache) *Hub {
 	h := &Hub{sessions: map[string]*Session{}, subs: map[chan struct{}]struct{}{}, kb: k, notes: map[string]note{},
-		cache: c, settings: Settings{AnswerPermissions: true}, waiters: map[string]chan Decision{}, feeds: map[string]*feed{}, wrapups: map[string]Wrapup{}}
+		cache: c, settings: Settings{AnswerPermissions: true}, waiters: map[string]chan Decision{}, feeds: map[string]*feed{}, wrapups: map[string]Wrapup{},
+		archive: map[string]sessionDoc{}, unsettled: map[string]sessionDoc{}, started: time.Now()}
+	h.warn(c.Each("session", func(id string, body []byte) {
+		var d sessionDoc
+		switch {
+		case json.Unmarshal(body, &d) != nil:
+		case !d.Ended.IsZero():
+			if d.worthKeeping() {
+				h.archive[id] = d
+			}
+		case d.Agent != "":
+			h.unsettled[id] = d
+		}
+	}))
 	h.warn(c.Each("wrapup", func(day string, body []byte) {
 		var w Wrapup
 		if json.Unmarshal(body, &w) == nil {
@@ -509,13 +533,24 @@ func (h *Hub) restore(s *Session) {
 	s.Insight, s.insightKey, s.guess, s.guessKey, s.insightAt = d.Insight, d.InsightKey, d.Guess, d.GuessKey, d.InsightAt
 	s.roleGuess, s.roleKey = d.RoleGuess, d.RoleKey
 	s.given, s.pinned, s.Timeline = d.Given, d.Pinned, tidy(d.Timeline)
+	delete(h.unsettled, s.ID)
+	if _, back := h.archive[s.ID]; back {
+		delete(h.archive, s.ID)
+		h.remember(s)
+	}
 }
 
 func (h *Hub) remember(s *Session) {
+	h.warn(h.cache.Put("session", s.ID, h.doc(s)))
+}
+
+// doc is what is stored of a session while it is open.
+func (h *Hub) doc(s *Session) sessionDoc {
 	label, _ := s.label()
 	effort, _ := h.filed(s)
-	h.warn(h.cache.Put("session", s.ID, sessionDoc{Insight: s.Insight, InsightKey: s.insightKey, Guess: s.guess, GuessKey: s.guessKey, InsightAt: s.insightAt,
-		RoleGuess: s.roleGuess, RoleKey: s.roleKey, Given: s.given, Pinned: s.pinned, Timeline: s.Timeline, Label: label, Effort: effort}))
+	return sessionDoc{Insight: s.Insight, InsightKey: s.insightKey, Guess: s.guess, GuessKey: s.guessKey, InsightAt: s.insightAt,
+		RoleGuess: s.roleGuess, RoleKey: s.roleKey, Given: s.given, Pinned: s.pinned, Timeline: s.Timeline, Label: label, Effort: effort,
+		Agent: s.Agent, Cwd: s.Cwd, Branch: s.Branch, StartedAt: s.StartedAt}
 }
 
 // filed returns the effort a session is filed under and how it came to be,
@@ -567,10 +602,11 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 	}
 	for id, s := range h.sessions {
 		if s.Agent == agent && !seen[id] {
-			h.remember(s)
+			h.leave(s)
 			delete(h.sessions, id)
 		}
 	}
+	h.sweep(agent)
 	h.changed()
 }
 
@@ -602,9 +638,14 @@ func (h *Hub) Retire(agent string, silence time.Duration) {
 	defer h.mu.Unlock()
 	for id, s := range h.sessions {
 		if s.Agent == agent && time.Since(s.bridgeSeen) > silence {
-			h.remember(s)
+			h.leave(s)
 			delete(h.sessions, id)
 		}
+	}
+	// A session that was open before a restart has had its chance to be
+	// heard from by now.
+	if time.Since(h.started) > silence {
+		h.sweep(agent)
 	}
 	h.changed()
 }
@@ -1008,6 +1049,8 @@ type State struct {
 	// Wrapups are the days that have been wrapped up or are waiting to be,
 	// by day.
 	Wrapups map[string]Wrapup `json:"wrapups"`
+	// Archive lists the sessions that have closed, the latest first.
+	Archive []Archived `json:"archive"`
 }
 
 func (h *Hub) State() State {
@@ -1019,7 +1062,7 @@ func (h *Hub) State() State {
 		feeds[id] = f.FeedStatus
 	}
 	return State{Sessions: sessions, Items: append(items(sessions), h.fed()...), Efforts: h.efforts(sessions), Summarizer: h.summ,
-		Settings: h.settings, Knowledge: h.kb.Knowledge(), Lookups: append([]Lookup{}, h.lookups...), Feeds: feeds, PullRequests: h.pulls(), Limits: h.limited(), Wrapups: maps.Clone(h.wrapups)}
+		Settings: h.settings, Knowledge: h.kb.Knowledge(), Lookups: append([]Lookup{}, h.lookups...), Feeds: feeds, PullRequests: h.pulls(), Limits: h.limited(), Wrapups: maps.Clone(h.wrapups), Archive: h.archives()}
 }
 
 func (h *Hub) efforts(sessions []Session) []Effort {

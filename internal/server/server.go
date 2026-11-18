@@ -164,6 +164,26 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, uiPath s
 		edited(w, k.Assign(r.PathValue("id"), in.Effort))
 	})
 
+	// The page searches the sessions, open and closed.
+	mux.HandleFunc("POST /api/search", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Query string `json:"q"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"hits": h.Search(in.Query)})
+	})
+
+	mux.HandleFunc("GET /api/archive/{id}", func(w http.ResponseWriter, r *http.Request) {
+		a, ok := h.Archive(r.PathValue("id"))
+		if !ok {
+			http.Error(w, "no such closed session", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, a)
+	})
+
 	// The page asks for a day, named as "2006-01-02", to be wrapped up.
 	mux.HandleFunc("POST /api/wrapup", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {

@@ -178,6 +178,25 @@ func TestBridgeReportsUsageWindows(t *testing.T) {
 	}
 }
 
+func TestAClosedSessionCanBeReadBack(t *testing.T) {
+	f := newFixture(t)
+	f.connect("s1")
+	f.post("/api/bridge/event", `{"sessionId":"s1","type":"turn.start","text":"fix the rounding"}`)
+	if code, _ := f.do("GET", "/api/archive/s1", "", nil); code != http.StatusNotFound {
+		t.Errorf("reading back an open session = %d, want 404", code)
+	}
+	f.hub.SetRoster("claude", nil)
+
+	code, body := f.do("GET", "/api/archive/s1", "", nil)
+	var got hub.Archived
+	if err := json.Unmarshal([]byte(body), &got); code != http.StatusOK || err != nil || got.ID != "s1" || len(got.Timeline) != 1 || got.Timeline[0].Prompt != "fix the rounding" {
+		t.Errorf("reading it back = %d %s (%v); want the session with its timeline", code, body, err)
+	}
+	if listed := f.state().Archive; len(listed) != 1 || listed[0].Moments != 1 || listed[0].Timeline != nil {
+		t.Errorf("listed = %+v, want it without its timeline", listed)
+	}
+}
+
 func TestAskingForAWrapup(t *testing.T) {
 	f := newFixture(t)
 	if code := f.post("/api/wrapup", `{"day":"tomorrow"}`); code != http.StatusBadRequest {
