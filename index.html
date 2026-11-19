@@ -1353,10 +1353,12 @@ function api(method, path, body, done) {
 }
 
 /* Asks the service to do something outside itself, and says why when it could not. */
-/* Says when Claude Code lacks the Slorp mod, and offers to put that right. */
-let installing = false, removing = false;
+/* Says when Claude Code lacks the Slorp mod, or has an older one than is offered, and offers to put that right. */
+let installing = false, removing = false, updating = false;
 function modNotice() {
   const p = plugins.claude;
+  if (live && p && p.installed && p.enabled && p.latest && state.modPassed !== p.latest) return `<div><span>Version ${esc(p.latest)} of the Slorp mod for Claude Code is out. It has ${esc(p.version)}.</span>
+    <button class="btn go" data-act="updateMod" ${updating ? 'disabled' : ''}>${updating ? 'Updating…' : 'Update it'}</button><button class="btn" data-act="modPass" data-v="${esc(p.latest)}">Dismiss</button></div>`;
   if (!live || !p || (p.installed && p.enabled)) return '';
   const off = p.installed;
   return `<div><span>${off ? 'The Slorp mod is turned off in Claude Code' : "Claude Code doesn't have the Slorp mod"}, so its sessions can be watched here but not answered.</span>
@@ -2416,14 +2418,15 @@ function generalBody() {
 function agentsBody() {
   const p = plugins.claude, open = agent => live.filter(s => s.agent === agent), wired = agent => open(agent).filter(s => s.canReply).length;
   const running = agent => open(agent).length ? `${wired(agent)} of ${plural(open(agent).length, 'open session')} ${wired(agent) === 1 ? 'is' : 'are'} running it` : 'no open sessions';
-  const [word, tone] = !p ? ['checking', 'whenever'] : p.installed && p.enabled ? ['installed', 'blocking'] : p.installed ? ['turned off', 'awaiting'] : ['not installed', 'whenever'];
-  const busy = installing || removing;
+  const [word, tone] = !p ? ['checking', 'whenever'] : p.installed && p.enabled ? (p.latest ? ['update available', 'awaiting'] : ['installed', 'blocking']) : p.installed ? ['turned off', 'awaiting'] : ['not installed', 'whenever'];
+  const busy = installing || removing || updating;
   const claude = `<div class="card"><span class="glyph" style="${kindColor('claude')};color:var(--k)">C</span>
       <div class="body"><div class="nm">Claude Code <span class="tag ${tone}">${word}</span></div>
       <div class="why">The Slorp mod for Claude Code. With it you can reply to a session and answer its permission prompts from here, and Slorp is told each session's context window, cost and usage limits. Without it sessions are listed and can only be watched.</div>
-      <div class="meta">${p && p.version ? `<span>version ${esc(p.version)}</span>` : ''}<span>${running('claude')}</span></div>
+      <div class="meta">${p && p.version ? `<span>version ${esc(p.version)}</span>` : ''}${p && p.latest ? `<span>${esc(p.latest)} is out</span>` : ''}<span>${running('claude')}</span></div>
       <div class="seen">Sessions already open take up a change after <span class="mono">/reload-plugins</span> or a restart.</div></div>
       <span class="does">${p && !(p.installed && p.enabled) ? `<button class="btn go" data-act="installMod" ${busy ? 'disabled' : ''}>${installing ? (p.installed ? 'Turning it on…' : 'Installing…') : p.installed ? 'Turn on' : 'Install'}</button>` : ''}
+        ${p && p.installed && p.latest ? `<button class="btn go" data-act="updateMod" ${busy ? 'disabled' : ''}>${updating ? 'Updating…' : 'Update'}</button>` : ''}
         ${p && p.installed ? `<button class="btn" data-act="uninstallMod" ${busy ? 'disabled' : ''}>${removing ? 'Uninstalling…' : 'Uninstall'}</button>` : ''}</span></div>`;
   const opencode = `<div class="card"><span class="glyph" style="${kindColor('opencode')};color:var(--k)">O</span>
       <div class="body"><div class="nm">OpenCode</div>
@@ -2661,12 +2664,18 @@ const actions = {
   openItem: d => { state.sel = d.id; go('attention'); },
   modelNoticeOff: () => { state.modelNoticeOff = true; },
   installMod: () => {
-    if (installing) return false;
+    if (installing || updating) return false;
     installing = true;
     ask('/api/plugins/claude', {}, () => toast('Done. Sessions already open pick it up after /reload-plugins or a restart.'), () => { installing = false; });
   },
+  updateMod: () => {
+    if (installing || removing || updating) return false;
+    updating = true;
+    ask('/api/plugins/claude/update', {}, () => toast('Updated. Sessions already open pick it up after /reload-plugins or a restart.'), () => { updating = false; });
+  },
+  modPass: d => { state.modPassed = d.v; },
   uninstallMod: () => {
-    if (installing || removing) return false;
+    if (installing || removing || updating) return false;
     toast('Uninstall the Slorp mod from Claude Code? Its sessions could then only be watched.', () => {
       removing = true;
       fetch('/api/plugins/claude', { method: 'DELETE' })

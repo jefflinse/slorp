@@ -50,6 +50,9 @@ type Adapter struct {
 	Plugin string
 	// URL is where the plugin reaches Slorp, set when Slorp installs it.
 	URL string
+	// Updates is how often the plugin's marketplace is asked for a newer
+	// version than the one installed. Zero never asks.
+	Updates time.Duration
 
 	tails map[string]*tail
 	// subs holds the readers of each session's subagents, by session and
@@ -57,8 +60,15 @@ type Adapter struct {
 	subs map[string]map[string]*subagent
 	// pluginAt is when Claude Code was last asked whether it has the plugin.
 	pluginAt time.Time
-	once     sync.Once
-	wake     chan struct{}
+	// offer is the version of the plugin its marketplace last listed, and
+	// when to ask again.
+	offer struct {
+		sync.Mutex
+		version string
+		again   time.Time
+	}
+	once sync.Once
+	wake chan struct{}
 }
 
 // woken is signalled when the roster is worth reading before the next tick.

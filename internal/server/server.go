@@ -91,6 +91,8 @@ type Launcher interface {
 	Stop(ctx context.Context, job string) error
 	// Install gives the agent the Slorp plugin, or turns it back on.
 	Install(ctx context.Context) error
+	// Update brings the agent's Slorp plugin up to the newest version.
+	Update(ctx context.Context) error
 	// Uninstall takes the Slorp plugin away from the agent.
 	Uninstall(ctx context.Context) error
 }
@@ -356,6 +358,19 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			return
 		}
 		if err := launcher.Install(r.Context()); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("POST /api/plugins/{agent}/update", func(w http.ResponseWriter, r *http.Request) {
+		launcher := launchers[r.PathValue("agent")]
+		if launcher == nil {
+			http.Error(w, "Slorp cannot update a plugin for this agent", http.StatusNotFound)
+			return
+		}
+		if err := launcher.Update(r.Context()); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}

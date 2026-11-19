@@ -67,6 +67,11 @@ func (l *launcher) Install(context.Context) error {
 	return l.err
 }
 
+func (l *launcher) Update(context.Context) error {
+	l.calls = append(l.calls, "update")
+	return l.err
+}
+
 func (l *launcher) Uninstall(context.Context) error {
 	l.calls = append(l.calls, "uninstall")
 	return l.err
@@ -668,6 +673,20 @@ func TestInstallingAnAgentsPlugin(t *testing.T) {
 	f.launcher.err = errors.New("blocked by policy")
 	if code, body := f.do("POST", "/api/plugins/claude", `{}`, nil); code != 502 || !strings.Contains(body, "blocked by policy") {
 		t.Errorf("a failed install = %d %q, want 502 with what went wrong", code, body)
+	}
+}
+
+func TestUpdatingAnAgentsPlugin(t *testing.T) {
+	f := newFixture(t)
+	if code := f.post("/api/plugins/claude/update", `{}`); code != 204 || len(f.launcher.calls) != 1 || f.launcher.calls[0] != "update" {
+		t.Errorf("update = %d after %v, want it done by the agent's launcher", code, f.launcher.calls)
+	}
+	if code := f.post("/api/plugins/opencode/update", `{}`); code != 404 || len(f.launcher.calls) != 1 {
+		t.Errorf("update for an agent with no launcher = %d after %v, want 404 and nothing run", code, f.launcher.calls)
+	}
+	f.launcher.err = errors.New("blocked by policy")
+	if code, body := f.do("POST", "/api/plugins/claude/update", `{}`, nil); code != 502 || !strings.Contains(body, "blocked by policy") {
+		t.Errorf("a failed update = %d %q, want 502 with what went wrong", code, body)
 	}
 }
 

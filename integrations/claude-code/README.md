@@ -11,7 +11,7 @@ Slorp finds the sessions themselves with `claude agents --json`, so a session wi
 
 ## Install
 
-Slorp's page offers to install the plugin when Claude Code doesn't have it. To install it by hand:
+Slorp's page offers to install the plugin when Claude Code doesn't have it, and to update it when a newer version is out. Slorp looks for one when it starts and once a day after, by having Claude Code refresh the plugin's marketplace. To install it by hand:
 
 ```sh
 claude plugin install slorp --marketplace https://github.com/jefflinse/slorp.git
@@ -19,7 +19,7 @@ claude plugin install slorp --marketplace https://github.com/jefflinse/slorp.git
 
 Then restart Claude Code, or run `/reload-plugins` in an open session.
 
-To update:
+To update it by hand:
 
 ```sh
 claude plugin marketplace update slorp

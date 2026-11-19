@@ -138,6 +138,8 @@ type Plugin struct {
 	// Enabled is false for one that is installed and turned off.
 	Enabled bool   `json:"enabled"`
 	Version string `json:"version,omitempty"`
+	// Latest is the version its marketplace offers, when newer than Version.
+	Latest string `json:"latest,omitempty"`
 }
 
 // Tokens counts what a session's responses took, by how each is charged.
