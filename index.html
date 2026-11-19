@@ -1487,34 +1487,47 @@ const effortChip = id => { const e = effortById(id); return `<span class="echip"
 /* The efforts there are cards for, in the user's order, with Unsorted last where anything is. */
 const cardEfforts = () => !live ? EFFORTS.concat(UNSORTED)
   : openEfforts().concat(live.some(s => !s.effort) || liveItems.some(i => i.effort === 'unsorted') || !openEfforts().length ? [LIVE_UNSORTED] : []);
-/* What a card says of an effort: the things in it that need the user, the most pressing first, its sessions,
-   each as its status and what to say of it, and how many minutes it is since anything filed under it was
-   active, null when nothing ever was. */
+/* What a card says of an effort: the things in it that need the user, the most pressing first, its open
+   sessions that need nothing, the latest to do anything first, all of its sessions, each as its status and
+   what to say of it, and how many minutes it is since anything filed under it was active, null when nothing
+   ever was. */
 function effortFacts(e) {
   const sess = live ? live.filter(s => (s.effort || 'unsorted') === e.id) : SESSIONS.filter(s => sessEffort(s) === e.id);
-  if (!live) return { needs: activeMockItems().filter(i => effortOf(i) === e.id).sort(byUrgency), idle: sess.length ? Math.min(...sess.map(s => s.last)) : null,
-    dots: sess.map(s => [s.status, `${s.title || s.name || s.id}: ${STATUS[s.status]}`]) };
+  if (!live) {
+    const needs = activeMockItems().filter(i => effortOf(i) === e.id).sort(byUrgency), asked = new Set(needs.map(i => i.session));
+    return { needs, idle: sess.length ? Math.min(...sess.map(s => s.last)) : null,
+      quiet: sess.filter(s => !asked.has(s.id)).sort((a, b) => a.last - b.last).map(s => ({ id: s.id, kind: s.kind, name: title(s, 'nt'), status: [s.status, STATUS[s.status]], mins: s.last })),
+      dots: sess.map(s => [s.status, `${s.title || s.name || s.id}: ${STATUS[s.status]}`]) };
+  }
   const idle = Math.min(e.activeAt ? minsSince(e.activeAt) : Infinity, ...sess.map(s => minsSince(s.activeAt)));
-  return { needs: activeItems().filter(i => i.effort === e.id).sort(byUrgency), idle: isFinite(idle) ? idle : null,
+  const needs = activeItems().filter(i => i.effort === e.id).sort(byUrgency), asked = new Set(needs.map(i => i.session?.id));
+  return { needs, idle: isFinite(idle) ? idle : null,
+    quiet: sess.filter(s => !asked.has(s.id)).sort((a, b) => minsSince(a.activeAt) - minsSince(b.activeAt))
+      .map(s => ({ id: s.id, kind: s.agent, name: state.fluent ? `<span class="gen nt">${esc(clip(s.label, 90))}</span>` : `<span class="mono nt">${esc(rawOf(s))}</span>`, status: statusOf(s), mins: minsSince(s.activeAt) })),
     dots: sess.map(s => [statusOf(s)[0], `${clip(s.label, 60)}: ${statusOf(s)[1]}`]) };
 }
 /* The name a card keeps on the board and in the column. */
 const cardName = e => `view-transition-name:effort-${e.id}`;
 
-/* An effort as a card: what it is, where it stands, the first things in it that need the user, and its
-   sessions as dots with when it was last active. A mini card is one collapsed in the column beside the effort that is open, and keeps only
+/* An effort as a card: what it is, where it stands, a row for each thing in it that needs the user and then
+   for each of its other open sessions, up to CARD_ROWS of them, and its sessions as dots with when it was
+   last active. A mini card is one collapsed in the column beside the effort that is open, and keeps only
    the name, how many things need the user, the dots and the time; sel marks the one that is open. Unsorted, which the
    user did not declare, and a shelved effort stay where they are put. */
+const CARD_ROWS = 6;
 function effortCard(e, mini, sel) {
-  const { needs, dots, idle } = effortFacts(e), n = needs.length, shown = needs.slice(0, 2), loose = e.id === 'unsorted' || !!e.shelved;
+  const { needs, quiet, dots, idle } = effortFacts(e), n = needs.length, loose = e.id === 'unsorted' || !!e.shelved;
+  const rows = needs.map(i => `<button class="en" data-act="openItem" data-id="${i.id}" style="${kindColor(i.kind)}">${title(i, 'nt')}
+        <span class="w">${i.urgency === 'whenever' ? '' : `<span class="tag ${i.urgency}">${i.urgency}</span>`}<span>${ago(ageOf(i))}</span></span></button>`)
+    .concat(quiet.map(q => `<button class="en" data-act="openSession" data-id="${esc(q.id)}" style="${kindColor(q.kind)}">${q.name}
+        <span class="w">${stat(...q.status)}<span>${ago(q.mins)}</span></span></button>`));
   const line = state.fluent && e.line && (!live || dots.length) ? `<p class="l">${spark}${esc(e.line)}</p>` : e.about ? `<p class="l">${esc(e.about)}</p>` : '';
   const about = `${e.name}: ${n ? `${num(n)} need${n === 1 ? 's' : ''} you` : 'nothing needs you'}, ${plural(dots.length, 'session')}`;
   return `<div class="ecard ${mini ? 'mini' : ''} ${sel ? 'sel' : ''} ${loose ? 'loose' : ''}" role="button" tabindex="0" ${sel ? 'aria-current="true"' : ''} ${loose ? '' : `draggable="true" aria-keyshortcuts="${mini ? 'Shift+ArrowUp Shift+ArrowDown' : 'Shift+ArrowLeft Shift+ArrowRight'}"`} data-act="effort" data-id="${e.id}" style="${cardName(e)}" aria-label="${esc(about)}">
     <div class="eh">${effortMark(e)}${title(e, 't')}${n ? `<span class="count" title="${n} need${n === 1 ? 's' : ''} you">${n}</span>` : ''}${loose || mini ? '' : '<span class="grip" aria-hidden="true" title="Drag to rearrange">⠿</span>'}</div>
     ${mini ? '' : line}
-    ${n && !mini ? `<div class="ens">${shown.map(i => `<button class="en" data-act="openItem" data-id="${i.id}" style="${kindColor(i.kind)}">${title(i, 'nt')}
-        <span class="w">${i.urgency === 'whenever' ? '' : `<span class="tag ${i.urgency}">${i.urgency}</span>`}<span>${ago(ageOf(i))}</span></span></button>`).join('')}
-      ${n > shown.length ? `<span class="more">and ${num(n - shown.length)} more</span>` : ''}</div>` : ''}
+    ${rows.length && !mini ? `<div class="ens">${rows.slice(0, CARD_ROWS).join('')}
+      ${rows.length > CARD_ROWS ? `<span class="more">and ${num(rows.length - CARD_ROWS)} more</span>` : ''}</div>` : ''}
     <div class="ef">${dots.length ? `<span class="dots">${dots.slice(0, 12).map(([status, tip]) => `<span class="dot ${status}" title="${esc(tip)}"></span>`).join('')}</span>` : ''}
       <span>${dots.length ? plural(dots.length, 'session') : 'No open sessions'}${idle == null ? '' : ` · ${mini ? '' : 'active '}${ago(idle)}`}</span></div>
   </div>`;
