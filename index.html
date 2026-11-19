@@ -200,6 +200,7 @@ a.pr:hover, button.pr:hover { border-color: var(--k-github); color: var(--ink); 
 .brief p { font-size: 15px; line-height: 1.5; }
 .listbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 8px; padding: 10px 18px; }
 .listbar .segs { display: flex; gap: 6px; }
+.listbar .btn { padding: 3px 10px; font-size: 12px; }
 
 /* Groups and rows */
 .ghead { display: flex; align-items: baseline; gap: 8px; padding: 14px 18px 4px; }
@@ -1274,8 +1275,9 @@ function roleNote(s) {
     ? `<div class="none" style="margin-bottom:10px">As a ${esc(r.name)} session it ${r.attention === 'none' ? 'never shows under Attention' : 'shows under Attention only when it is stopped'}.</div>` : '';
 }
 
-/* Starting a session: the effort the dialog was opened from, whether a start is on its way, what the session
-   is to run on, and whether the local model is to think. The last choices made are kept for the next one. */
+/* Starting a session: the effort the dialog was opened from, or none when it was opened from Sessions, whether
+   a start is on its way, what the session is to run on, and whether the local model is to think. The last
+   choices made are kept for the next one. */
 let starting = null, launching = false, startWith = 'claude', startThinking = true;
 const START_MODELS = [['', 'Default'], ['fable', 'Fable'], ['opus', 'Opus'], ['sonnet', 'Sonnet'], ['haiku', 'Haiku']];
 const START_EFFORTS = [['', 'Default'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max']];
@@ -1290,21 +1292,23 @@ function startModal() {
   const e = effortById(starting);
   if (!live || !e) { modal = null; return ''; }
   const real = e.id !== 'unsorted', last = state.startOpts || {}, local = localName(), on = startWith === 'local' && local ? 'local' : 'claude';
-  const dirs = [...new Set((real ? e.dirs : []).concat(live.filter(s => (s.effort || 'unsorted') === e.id).map(s => s.cwd)).filter(Boolean).map(tilde))];
+  const dirs = [...new Set((starting ? (real ? e.dirs : []).concat(live.filter(s => (s.effort || 'unsorted') === e.id).map(s => s.cwd))
+    : liveSessions()[0].map(s => s.cwd).concat(openEfforts().flatMap(x => x.dirs))).filter(Boolean).map(tilde))];
+  const first = starting ? dirs[0] : '';
   const pick = (name, label, options, chosen) => `<label><span>${label}</span><select class="btn" name="${name}" data-keep="start-${name}">${options.map(([v, t]) => `<option value="${v}" ${v === (chosen || '') ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`;
   const way = (id, label, off) => `<button type="button" class="${on === id ? 'on' : ''}" data-act="startWith" data-to="${id}" aria-pressed="${on === id}" ${off ? `disabled title="${esc(off)}"` : ''}>${esc(label)}</button>`;
   return `<div class="veil"><div class="modal start" data-act="noop" role="dialog" aria-label="New Session">
     <h2>New Session</h2>
     <form data-form="start" data-id="${e.id}">
       <div class="seg wide" role="group" aria-label="What it runs on">${way('claude', 'Claude Code')}${way('opencode', 'OpenCode', 'Slorp cannot start OpenCode sessions yet')}${way('local', local || 'Local model', local ? '' : 'No local model is running')}</div>
-      <label class="wide"><span>Directory</span><input name="dir" class="mono" data-keep="start-dir" list="start-dirs" value="${esc(dirs[0] || '')}" placeholder="~/dev/project" required spellcheck="false" autocomplete="off" ${dirs.length ? '' : 'data-first'}>
+      <label class="wide"><span>Directory</span><input name="dir" class="mono" data-keep="start-dir" list="start-dirs" value="${esc(first || '')}" placeholder="~/dev/project" required spellcheck="false" autocomplete="off" ${first ? '' : 'data-first'}>
         <datalist id="start-dirs">${dirs.map(d => `<option value="${esc(d)}"></option>`).join('')}</datalist></label>
       <label class="${knowledge.roles.length ? '' : 'wide'}"><span>Name <i>optional</i></span><input name="name" data-keep="start-name" maxlength="80" autocomplete="off"></label>
       ${knowledge.roles.length ? pick('role', 'Role', [['', 'No role']].concat(knowledge.roles.map(r => [r.id, esc(r.name)]))) : ''}
       ${on === 'claude' ? pick('model', 'Model', START_MODELS, last.model) + pick('effortLevel', 'Effort', START_EFFORTS, last.effortLevel)
         : `<div class="field"><span>Thinking</span><div class="seg" role="group" aria-label="Thinking"><button type="button" class="${startThinking ? 'on' : ''}" data-act="startThinking" data-to="1" aria-pressed="${startThinking}">On</button><button type="button" class="${startThinking ? '' : 'on'}" data-act="startThinking" data-to="" aria-pressed="${!startThinking}">Off</button></div></div>
           <label><span>Temperature <i>optional</i></span><input name="temperature" type="number" min="0" max="2" step="0.05" data-keep="start-temperature" value="${esc(last.temperature ?? '')}" placeholder="The model's own"></label>`}
-      <label class="wide"><span>Prompt</span><textarea name="prompt" data-keep="start-prompt" placeholder="What should it do?" required ${dirs.length ? 'data-first' : ''}></textarea></label>
+      <label class="wide"><span>Prompt</span><textarea name="prompt" data-keep="start-prompt" placeholder="What should it do?" required ${first ? 'data-first' : ''}></textarea></label>
       <div class="mfoot wide"><span>${on === 'local' ? `Starts a Claude Code session in the background that runs on ${esc(local)}` : 'Starts a Claude Code session in the background'}${real ? `, filed under ${esc(e.name)}` : ''}.</span>
         <span class="bar"><button type="button" class="btn" data-act="modalClose">Cancel</button><button class="btn go" ${launching ? 'disabled' : ''}>${launching ? 'Starting…' : 'Start session'}</button></span></div>
     </form>
@@ -1690,7 +1694,7 @@ function sessionsView(parts, detail, side = '') {
   }).join('');
   return `<div class="split ${side ? 'sided' : ''} ${side && state.sideShut ? 'shut' : ''}">
     <section class="pane list" data-scroll="act-list">
-      <div class="listbar"><span class="label">Sessions</span><span class="segs"><span class="seg" role="group" aria-label="How much each row shows" title="Short rows show only the name, how it stands, and what it is doing.">${rows}</span></span></div>
+      <div class="listbar"><span class="label">Sessions</span><span class="segs">${live ? '<button class="btn" data-act="startOpen" data-id="">New Session</button>' : ''}<span class="seg" role="group" aria-label="How much each row shows" title="Short rows show only the name, how it stands, and what it is doing.">${rows}</span></span></div>
       ${list}
     </section>
     <section class="pane detail" data-scroll="act-${state.actSel}">${detail || '<div class="empty">No session is selected.</div>'}</section>

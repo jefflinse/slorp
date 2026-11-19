@@ -66,3 +66,12 @@ test('the pane beside a session leads with its vitals and keeps Details folded u
   assert.ok(facts.includes('Directory'))
   for (const moved of ['Context', 'Model', 'Last active']) assert.ok(!facts.includes(moved))
 })
+
+test('Sessions starts a session under no effort, presuming no directory', async t => {
+  const page = await world(t, 'sessions')
+  await page.getByRole('button', { name: 'New Session', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'New Session' })
+  assert.equal(await dialog.locator('form').getAttribute('data-id'), 'unsorted')
+  assert.equal(await dialog.locator('input[name=dir]').inputValue(), '')
+  assert.ok((await dialog.locator('#start-dirs option').evaluateAll(all => all.map(o => o.value))).includes('/work/solo'))
+})

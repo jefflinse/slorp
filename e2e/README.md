@@ -1,6 +1,6 @@
 # Browser tests
 
-These tests load Slorp's real page in headless Chromium against small fixture HTTP services. They exercise question answers, plugin setup, and history capabilities, loading states, and failures, along with effort cards and a session's side pane. They do not start agent sessions or use your Slorp database.
+These tests load Slorp's real page in headless Chromium against small fixture HTTP services. They exercise question answers, plugin setup, and history capabilities, loading states, and failures, along with effort cards, a session's side pane, and starting a session from Sessions. They do not start agent sessions or use your Slorp database.
 
 From this directory:
 
