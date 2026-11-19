@@ -33,6 +33,65 @@
   --warn: #f0a35e; --err: #f2857c; --toast-act: #4f6b00;
 }
 
+/* Themes other than Slorp's own come one way only, standing over light and dark alike, and square every corner. */
+:root:is([data-look="matrix"], [data-look="hotdog"]) *:not(.dot, .blob, i) { border-radius: 0 !important; }
+
+/* The Matrix: phosphor green on black, set in mono, with rain falling behind the page. */
+:root[data-look="matrix"] {
+  color-scheme: dark;
+  --bg: #020a04; --panel: #04110a; --raised: #07190d; --sel: #0d3318;
+  --ink: #35ff6e; --ink2: #1fcf50; --ink3: #159a3b; --line: #0f4a22;
+  --accent: #b8ffc9; --fill: #00ff41; --fill-ink: #001a06;
+  --warn: #d7ff3f; --err: #ff5b4f; --toast-act: #00591a; --k-local: #00ff41;
+  --sans: var(--mono);
+}
+:root[data-look="matrix"] body { text-shadow: 0 0 6px color-mix(in srgb, currentColor 40%, transparent); }
+:root[data-look="matrix"] ::selection { background: #00ff41; color: #000; text-shadow: none; }
+#rain { display: none; position: fixed; inset: 0; z-index: -1; opacity: 0.1; pointer-events: none; }
+:root[data-look="matrix"] #rain { display: block; }
+
+/* Hot Dog Stand, after the Windows 3.1 colour scheme: red windows with white text, yellow beside them, a black
+   title bar and frames, and grey buttons. No one ink reads on all of those, so each surface names its own. */
+:root[data-look="hotdog"] {
+  color-scheme: light;
+  --bg: #ff0000; --panel: #000000; --raised: #000000; --sel: #000000;
+  --ink: #ffffff; --ink2: #ffffff; --ink3: #ffff00; --line: #000000;
+  --accent: #ffff00; --fill: #ffff00; --fill-ink: #000000;
+  --warn: #ffff00; --err: #ffff00; --toast-act: #000000;
+  --sans: "MS Sans Serif", Tahoma, Geneva, Verdana, sans-serif;
+}
+:root[data-look="hotdog"] .top { --sel: #ff0000; }
+:root[data-look="hotdog"] .top :is(.seg, .icon) { border-color: #ffffff; }
+:root[data-look="hotdog"] :is(.pane.list, .pane.side, .modal) {
+  --bg: #ffffff; --panel: #ffff00; --raised: #ffffff; --sel: #ff0000;
+  --ink: #000000; --ink2: #000000; --ink3: #800000;
+  --accent: #ff0000; --fill: #ff0000; --fill-ink: #ffffff; --warn: #800000; --err: #ff0000;
+  color: var(--ink);
+}
+:root[data-look="hotdog"] :is(.ecard:not(.loose, .new), .ebig:not(.loose), .need:not(.bare), .check, .menu .pop) {
+  --bg: #ffff00; --panel: #ffff00; --raised: #ffffff; --sel: #c0c0c0;
+  --ink: #000000; --ink2: #000000; --ink3: #800000;
+  --accent: #ff0000; --fill: #ff0000; --fill-ink: #ffffff; --warn: #800000; --err: #ff0000;
+  color: var(--ink);
+}
+:root[data-look="hotdog"] :is(.row.sel, .hit.sel, .kbnav button.on) {
+  --ink: #ffffff; --ink2: #ffffff; --ink3: #ffff00; --accent: #ffff00; --warn: #ffff00; --err: #ffff00;
+  color: var(--ink);
+}
+:root[data-look="hotdog"] :is(.btn:not(.quiet), .icon, .seg) {
+  --bg: #ffffff; --ink: #000000; --ink2: #000000; --ink3: #000000;
+  background-color: #c0c0c0; color: #000000; border-color: #000000;
+}
+:root[data-look="hotdog"] :is(.btn:not(.quiet), .icon) { box-shadow: inset 1px 1px #ffffff, inset -1px -1px #808080; }
+:root[data-look="hotdog"] :is(.btn:not(.quiet), .icon):active, :root[data-look="hotdog"] .icon.on { box-shadow: inset 1px 1px #808080; }
+:root[data-look="hotdog"] .btn.go { font-weight: 700; box-shadow: 0 0 0 1px #000000, inset 1px 1px #ffffff, inset -1px -1px #808080; }
+:root[data-look="hotdog"] .btn.danger { background-color: #000000; color: #ffffff; box-shadow: none; }
+:root[data-look="hotdog"] :is(input, textarea, select):not(.btn) { background: #ffffff; color: #000000; border-color: #000000; }
+:root[data-look="hotdog"] .kind { color: var(--ink); }
+:root[data-look="hotdog"] .emark { background: var(--ec); color: #ffffff; text-shadow: 1px 1px 0 #000000; box-shadow: 0 0 0 1px #000000; }
+:root[data-look="hotdog"] :is(.modal, .menu .pop) { box-shadow: 6px 6px 0 #000000; }
+:root[data-look="hotdog"] :is(#toast, #news) { border: 1px solid #000000; }
+
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 var(--sans); -webkit-font-smoothing: antialiased; }
@@ -578,6 +637,7 @@ button.ecard.new:hover { border-color: var(--ink3); color: var(--ink); }
 </style>
 </head>
 <body>
+<canvas id="rain" aria-hidden="true"></canvas>
 <header class="top">
   <div class="brand"><span class="blob"></span>slorp</div>
   <nav class="nav" id="nav"></nav>
@@ -844,7 +904,7 @@ const VIEWS = ['attention', 'efforts', 'sessions', 'pulls', 'journal', 'knowledg
 /* The views the top bar names, in its order; Settings is reached by its own button. Pull requests are named only while GitHub is turned on to list them. */
 const nav = () => VIEWS.filter(v => v !== 'settings' && !(v === 'pulls' && pullsOff()));
 const VIEW_NAMES = { pulls: 'PRs' };
-const fresh = () => ({ view: 'attention', sel: null, effortSel: null, effortOrder: null, kbSel: 'watch', setSel: 'general', groupBy: 'effort', srcFilter: 'all', pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', effortTab: 'sessions', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto',
+const fresh = () => ({ view: 'attention', sel: null, effortSel: null, effortOrder: null, kbSel: 'watch', setSel: 'general', groupBy: 'effort', srcFilter: 'all', pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', effortTab: 'sessions', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto', look: 'slorp',
   handled: {}, moved: {}, sessMoved: {}, extra: [], arrived: {}, collapsed: {}, showHandled: false, variant: {}, rawOpen: {},
   actSel: null, pullSel: null, journalSel: null, pullTab: 'talk', expanded: {}, kb: structuredClone(KB_SEED), seq: 100 });
 let state = fresh();
@@ -852,6 +912,9 @@ try { Object.assign(state, JSON.parse(localStorage.getItem(KEY) || '{}')); } cat
 /* The view a name leads to, whether it is one or what one used to be called. */
 const viewNamed = v => VIEWS.includes(v) ? v : { activity: 'sessions' }[v];
 state.view = viewNamed(state.view) || 'attention';
+/* The themes there are. Slorp's own is light or dark as state.theme says; the others come one way only. */
+const LOOKS = { slorp: 'Slorp', matrix: 'The Matrix', hotdog: 'Hot Dog Stand' };
+if (!LOOKS[state.look]) state.look = 'slorp';
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* ignore */ } };
 let freshId = null;
 /* Which overlay is open, if any. */
@@ -2930,8 +2993,8 @@ const choice = (act, cur, options, about) => `<span class="seg" role="group" ari
 
 function generalBody() {
   const blocked = window.Notification?.permission === 'denied';
-  return `${setting('Theme', 'How Slorp looks. There is one theme for now.', choice('noop', 'slorp', [['slorp', 'Slorp']], 'Theme'))}
-    ${setting('Appearance', 'Light, dark, or whichever this computer is set to.', choice('themeTo', state.theme, [['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']], 'Appearance'))}
+  return `${setting('Theme', `How Slorp looks.${state.look === 'slorp' ? '' : ` ${LOOKS[state.look]} comes one way only, with no light or dark to it.`}`, choice('lookTo', state.look, Object.entries(LOOKS), 'Theme'))}
+    ${state.look === 'slorp' ? setting('Appearance', 'Light, dark, or whichever this computer is set to.', choice('themeTo', state.theme, [['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']], 'Appearance')) : ''}
     ${live && window.Notification ? setting('Desktop notifications', `Tells you when something new needs you while this page is out of sight. This browser keeps the choice.${blocked ? ' <b>The browser is blocking notifications for this page.</b>' : ''}`,
       choice('notifyTo', canNotify() ? 'on' : 'off', [['on', 'On'], ['off', 'Off']], 'Desktop notifications')) : ''}
     ${live ? setting('Permission prompts', 'Where a session\'s permission prompt can be answered. Its terminal always asks; with Slorp or terminal, this page can answer too, and whichever you answer first decides.',
@@ -3061,6 +3124,36 @@ function viewSettings() {
 
 /* ───────────────────────── Shell ───────────────────────── */
 
+/* The Matrix's rain: glyphs falling in columns behind the page, drawn only while that theme is on, the page is
+   in sight, and the user has not asked for less motion. */
+const rain = (() => {
+  const CELL = 18, GLYPHS = 'ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789';
+  const canvas = $('#rain'), ctx = canvas.getContext('2d');
+  let on = false, timer = 0, drops = [];
+  const fit = () => {
+    canvas.width = innerWidth; canvas.height = innerHeight;
+    drops = Array.from({ length: Math.ceil(innerWidth / CELL) }, () => -Math.floor(Math.random() * 40));
+  };
+  const step = () => {
+    ctx.fillStyle = 'rgb(2 10 4 / 0.09)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#00ff41';
+    ctx.font = `${CELL - 2}px monospace`;
+    drops.forEach((y, x) => {
+      ctx.fillText(GLYPHS[Math.floor(Math.random() * GLYPHS.length)], x * CELL, y * CELL);
+      drops[x] = y * CELL > canvas.height && Math.random() > 0.975 ? 0 : y + 1;
+    });
+  };
+  const sync = () => {
+    const run = on && !document.hidden && !matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (run && !timer) { fit(); timer = setInterval(step, 70); }
+    else if (!run && timer) { clearInterval(timer); timer = 0; }
+  };
+  addEventListener('resize', () => { if (timer) fit(); });
+  document.addEventListener('visibilitychange', sync);
+  return want => { on = want; sync(); };
+})();
+
 const RENDER = { attention: viewAttention, efforts: viewEfforts, sessions: viewSessions, pulls: viewPulls, journal: viewJournal, knowledge: viewKnowledge, settings: viewSettings };
 
 function render() {
@@ -3082,6 +3175,8 @@ function render() {
   actsSub = acts?.open ? acts.querySelector('details[open]')?.dataset.sub || null : null;
 
   document.documentElement.dataset.theme = state.theme;
+  document.documentElement.dataset.look = state.look;
+  rain(state.look === 'matrix');
   if (state.view === 'pulls' && pullsOff()) { state.view = 'attention'; history.replaceState(place(), '', '#attention'); }
   const main = RENDER[state.view]();  // first: it may settle the selection
   const n = activeItems().length;
@@ -3091,7 +3186,7 @@ function render() {
     <span class="seg" role="group" aria-label="Voice" title="Fluent shows what the model wrote. Raw shows what the sources said. (r)">
       <button class="${state.fluent ? 'on' : ''}" data-act="fluent" data-on="1">Fluent</button><button class="${state.fluent ? '' : 'on'}" data-act="fluent" data-on="0">Raw</button></span>
     ${live ? `<button class="icon" data-act="searchOpen" title="Search sessions (/ or ⌘K)" aria-label="Search sessions">⌕</button>` : ''}
-    <button class="icon" data-act="theme" title="Light or dark" aria-label="Toggle theme">◐</button>
+    ${state.look === 'slorp' ? '<button class="icon" data-act="theme" title="Light or dark" aria-label="Toggle theme">◐</button>' : ''}
     <button class="icon ${state.view === 'settings' ? 'on' : ''}" data-act="view" data-view="settings" title="Settings (,)" aria-label="Settings">⚙</button>
     ${live ? '' : `<details class="menu" id="menu" ${menuOpen ? 'open' : ''}><summary class="icon" title="Demo controls" aria-label="Demo controls">⋯</summary>
       <div class="pop"><p>Demo controls</p>
@@ -3161,6 +3256,7 @@ const actions = {
   aboutOpen: () => { state.aboutOpen = !state.aboutOpen; },
   fluent: d => { state.fluent = d.on === '1'; },
   themeTo: d => { state.theme = d.to; },
+  lookTo: d => { state.look = d.to; },
   setSel: d => { state.setSel = d.s; },
   modelCheck: () => { checkModel(); return false; },
   modelTry: () => { checkModel(modelTyped()); return false; },
@@ -3392,7 +3488,7 @@ const actions = {
     toast(`New in ${effortById(next.effort).name}: ${next.title}`);
   },
   reset: () => {
-    const wipe = () => { const { view, theme, setSel } = state; state = Object.assign(fresh(), { view, theme, setSel }); };
+    const wipe = () => { const { view, theme, look, setSel } = state; state = Object.assign(fresh(), { view, theme, look, setSel }); };
     if (!live) { wipe(); toast('Demo reset'); return; }
     toast('Forget what this browser keeps for the page?', wipe, 'Reset');
     return false;

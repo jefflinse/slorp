@@ -75,3 +75,17 @@ test('Sessions starts a session under no effort, presuming no directory', async 
   assert.equal(await dialog.locator('input[name=dir]').inputValue(), '')
   assert.ok((await dialog.locator('#start-dirs option').evaluateAll(all => all.map(o => o.value))).includes('/work/solo'))
 })
+
+test('a theme is chosen in Settings and kept', async t => {
+  const page = await world(t, 'settings')
+  const look = () => page.evaluate(() => document.documentElement.dataset.look)
+  await page.getByRole('button', { name: 'Hot Dog Stand' }).click()
+  assert.equal(await look(), 'hotdog')
+  assert.equal(await page.getByRole('group', { name: 'Appearance' }).count(), 0)
+  await page.reload()
+  await page.getByRole('button', { name: 'The Matrix' }).click()
+  assert.equal(await look(), 'matrix')
+  await page.getByRole('button', { name: 'Slorp', exact: true }).click()
+  assert.equal(await look(), 'slorp')
+  assert.equal(await page.getByRole('group', { name: 'Appearance' }).count(), 1)
+})
