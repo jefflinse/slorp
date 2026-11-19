@@ -120,6 +120,7 @@ type Session struct {
 	bridgeSeen time.Time
 	// live is how the session's bridge last said its subagents stand.
 	live       []Subagent
+	liveSeen   time.Time
 	key        string
 	keySince   time.Time
 	insightKey string
@@ -408,6 +409,8 @@ type Summarizer struct {
 // Subagent is an agent a session started to do part of its work.
 type Subagent struct {
 	ID string `json:"id"`
+	// ReportRevision changes whenever a retained record is accepted.
+	ReportRevision int64 `json:"reportRevision,omitempty"`
 	// Type is the kind of agent it was started as, and Description the few
 	// words its session gave the task.
 	Type        string `json:"type"`
@@ -431,10 +434,9 @@ type Subagent struct {
 	Tools int    `json:"tools"`
 	Used  Tokens `json:"used"`
 
-	// The rest is what the session's bridge says of it, and is there only
-	// while the bridge is heard from. Status is how its loop stands, in its
-	// agent's own word: "running", "waiting", "idle", "completed", "failed",
-	// "killed" or "pending".
+	// Status is how its loop stands: "running", "waiting", "idle",
+	// "completed", "failed", "killed" or "pending". Retained terminal
+	// statuses outlive the bridge; other statuses, Doing and Samples expire.
 	Status string `json:"status,omitempty"`
 	// Doing is its own latest account of what it is doing.
 	Doing string `json:"doing,omitempty"`
@@ -456,15 +458,16 @@ func ended(status string) bool {
 // withLive returns the subagents read from a session's record with what its
 // bridge says of each, and after them those only the bridge knows of yet.
 func withLive(known, live []Subagent) []Subagent {
+	out := cloneSubagents(known)
 	if len(live) == 0 {
-		return known
+		return out
 	}
-	out := slices.Clone(known)
 	at := map[string]int{}
 	for i, a := range out {
 		at[a.ID] = i
 	}
 	for _, l := range live {
+		l.Samples = slices.Clone(l.Samples)
 		i, ok := at[l.ID]
 		if !ok {
 			l.Done = ended(l.Status)
@@ -472,6 +475,9 @@ func withLive(known, live []Subagent) []Subagent {
 			continue
 		}
 		a := &out[i]
+		if a.ReportRevision > 0 && a.Done {
+			continue
+		}
 		a.Status, a.Doing, a.Samples, a.CostUSD, a.ParentID = l.Status, l.Doing, l.Samples, l.CostUSD, l.ParentID
 		a.Type, a.Description, a.Model = cmp.Or(a.Type, l.Type), cmp.Or(a.Description, l.Description), cmp.Or(a.Model, l.Model)
 		a.Done = a.Done || ended(l.Status)
@@ -481,7 +487,9 @@ func withLive(known, live []Subagent) []Subagent {
 
 // Delegated records how a session's bridge says its subagents stand, in
 // place of what it said before.
-func (s *Session) Delegated(live []Subagent) { s.live = live }
+func (s *Session) Delegated(live []Subagent) {
+	s.live, s.liveSeen = cloneSubagents(live), time.Now()
+}
 
 // SubagentReport is what a subagent was asked and what came of it.
 type SubagentReport struct {
@@ -722,6 +730,9 @@ type Hub struct {
 	// origins holds, for each session something is known of, the session
 	// it continues, empty for one that continues none.
 	origins map[string]string
+	// retained holds durable child records by root and child ID.
+	retained    map[string]map[string]subagentRecord
+	retainedErr error
 }
 
 type note struct {
@@ -735,6 +746,7 @@ func New(k *kb.Store, c Cache) *Hub {
 		cache: c, settings: Settings{AnswerPermissions: true}, waiters: map[string]chan Decision{}, feeds: map[string]*feed{}, wrapups: map[string]Wrapup{},
 		archive: map[string]sessionDoc{}, unsettled: map[string]sessionDoc{}, started: time.Now(), origins: map[string]string{}, plugins: map[string]Plugin{},
 		discussed: map[string]*pullDoc{}, discussFailed: map[string]time.Time{}}
+	h.loadSubagents()
 	h.warn(c.Each("pull", func(id string, body []byte) {
 		var d pullDoc
 		if json.Unmarshal(body, &d) == nil {
@@ -746,7 +758,7 @@ func New(k *kb.Store, c Cache) *Hub {
 		switch {
 		case json.Unmarshal(body, &d) != nil:
 		case !d.Ended.IsZero():
-			if d.worthKeeping() {
+			if h.worthKeeping(id, d) {
 				h.archive[id] = d
 			}
 		case d.Agent != "":
@@ -842,9 +854,12 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 	seen := map[string]bool{}
 	for i := range live {
 		s := live[i]
+		s.Subagents = cloneSubagents(s.Subagents)
+		s.live = cloneSubagents(s.live)
 		seen[s.ID] = true
 		if old, ok := h.sessions[s.ID]; ok {
 			s.bridgeSeen, s.live = old.bridgeSeen, old.live
+			s.liveSeen = old.liveSeen
 			s.key, s.keySince, s.insightKey, s.Insight = old.key, old.keySince, old.insightKey, old.Insight
 			s.guess, s.guessKey, s.insightAt = old.guess, old.guessKey, old.insightAt
 			s.roleGuess, s.roleKey = old.roleGuess, old.roleKey
@@ -1499,7 +1514,9 @@ func (h *Hub) Unrouted() []Unrouted {
 		}
 		if _, _, ok := h.kb.Resolve(s.ID, s.Cwd); !ok {
 			know := h.kb.Knowledge()
-			out = append(out, Unrouted{Session: *s, Key: h.routeKey(s), Efforts: efforts, Hints: append(texts(know.Context), texts(know.Routing)...)})
+			c := *s
+			c.Subagents = cloneSubagents(s.Subagents)
+			out = append(out, Unrouted{Session: c, Key: h.routeKey(s), Efforts: efforts, Hints: append(texts(know.Context), texts(know.Routing)...)})
 		}
 	}
 	return out
@@ -1532,7 +1549,9 @@ func (h *Hub) Unroled() []Unroled {
 			continue
 		}
 		if _, ok := h.kb.RoleOf(s.ID); !ok {
-			out = append(out, Unroled{Session: *s, Key: key, Roles: roles})
+			c := *s
+			c.Subagents = cloneSubagents(s.Subagents)
+			out = append(out, Unroled{Session: c, Key: key, Roles: roles})
 		}
 	}
 	return out
@@ -1601,7 +1620,9 @@ func (h *Hub) Undescribed() []Undescribed {
 		outdated := s.key != s.insightKey ||
 			(s.Insight != nil && len(s.Insight.Lookups) > 0 && time.Since(s.insightAt) > lookupTTL)
 		if hasContent && outdated && time.Since(s.keySince) >= quiet && (s.Status != Working || s.Pending != nil) {
-			out = append(out, Undescribed{Session: *s, Key: s.key, Context: texts(h.kb.Knowledge().Context)})
+			c := *s
+			c.Subagents = cloneSubagents(s.Subagents)
+			out = append(out, Undescribed{Session: c, Key: s.key, Context: texts(h.kb.Knowledge().Context)})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Session.ActiveAt.After(out[j].Session.ActiveAt) })
@@ -1871,9 +1892,7 @@ func (h *Hub) snapshot() []Session {
 	for _, s := range h.sessions {
 		c := *s
 		c.CanReply = time.Since(s.bridgeSeen) < bridgeTTL
-		if c.CanReply {
-			c.Subagents = withLive(s.Subagents, s.live)
-		}
+		c.Subagents = h.sessionSubagents(s, c.CanReply)
 		c.Label, c.LabelVia = s.label()
 		c.Pull = h.pullOn(s, pulls)
 		c.Backfilling = len(h.backfill[s.ID])

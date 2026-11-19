@@ -4,6 +4,7 @@ An OpenCode plugin that connects the sessions of an OpenCode instance to the loc
 
 - Reports each active top-level session's turns, title, directory, branch, model and reasoning variant, token usage, estimated cost, and context use. Existing message usage is read when the session is first observed; repeated message updates do not count twice. Context capacity becomes available when OpenCode makes a model request.
 - Shows retries and failures, and marks compactions in the timeline.
+- Shows nested subagents with their task, live status, current tool or wait, timing, model, reasoning variant, tools, token usage and cost. Task prompts and returned reports remain available after the session closes or Slorp restarts.
 - Fills in earlier history on request: the latest forty exchanges and compaction markers from the local OpenCode record, with summaries written by Slorp's local model. Replies are paired with their original prompts; internal summaries, reasoning, tool output, automatic replay turns, and reverted content are excluded.
 - Delivers replies written in Slorp as your own prompts, preserving the selected agent, provider, model and reasoning variant.
 - Offers permission prompts and structured questions, including subagents', in Slorp as well as OpenCode. Questions support single and multiple choices, custom text when allowed, and dismissal. Whichever you answer first decides it. Permissions allow one call or reject it; they never allow "always". Concurrent requests under one top-level session are presented one at a time.
@@ -11,7 +12,17 @@ An OpenCode plugin that connects the sessions of an OpenCode instance to the loc
 
 OpenCode's session list includes saved conversations, rather than a roster of open sessions, so the plugin is Slorp's view of what is live. In the local terminal, a conversation appears as soon as you open or resume it, even while idle. Opening it preserves the original exchange timestamps. Conversations observed by an instance remain listed until its bridge stops reporting; they leave about 30 seconds later. Unopened saved conversations are not listed.
 
-The terminal companion announces the selected session to the server bridge over an in-process channel. This supports the normal local `opencode` terminal; `opencode attach` uses a separate server process and currently still needs activity for discovery. Usage counts the top-level conversation; child-session usage and reports, and starting sessions from Slorp are still to come. Provider account usage limits are not reported.
+The terminal companion announces the selected session to the server bridge over an in-process channel. This supports the normal local `opencode` terminal; `opencode attach` uses a separate server process and currently still needs activity for discovery. Session usage includes descendants once; each subagent's usage counts only its own work. Starting sessions from Slorp and provider account usage limits are not yet supported.
+
+## Subagents and reports
+
+Opening a session discovers its existing child sessions recursively. New child activity updates the same subagent view used for Claude Code. Children remain under their root conversation, with nested parent relationships; they do not become separate session cards.
+
+The report view keeps the original task prompt and the latest returned result. Until a result is handed back, it can show the child's latest assistant text. Background launch acknowledgements are not final reports, and an idle child is not assumed to have completed its task. Resuming a child reuses its row and cumulative usage while clearing the previous result for the new run. If OpenCode truncates a returned foreground result, Slorp preserves that returned text and its truncation notice.
+
+Slorp retains up to 200 child records per root, with task prompts and reports limited to 60,000 characters each. Retained records survive bridge disconnection, archive retirement and restarts, including sessions without local-model summaries. Reports are fetched when expanded. Failed writes are retried, and a Slorp restart causes the bridge to resend records. Children that Slorp has never observed require opening their root in OpenCode before their records can be retained.
+
+Plugin 0.3.0 adds subagent activity and retained reports. Update the plugin in Settings and restart OpenCode to load it.
 
 ## Earlier history
 
@@ -72,6 +83,7 @@ python3 integrations/opencode/smoke.py
 python3 integrations/opencode/history-smoke.py
 python3 integrations/opencode/history-smoke.py --overflow
 python3 integrations/opencode/history-smoke.py --overflow --replay-last
+python3 integrations/opencode/subagents-smoke.py
 ```
 
-Run these from the repository root. The first builds a standalone Slorp executable, installs the bundled plugin into isolated configuration, opens two idle conversations in pseudoterminals, and checks discovery, restart recovery and retirement. The history tests import synthetic native-format transcripts into an isolated OpenCode database, export them with the real CLI, and backfill twice through Slorp's HTTP API. They cover ordinary continuation and overflow replay, including a large export. None makes model calls or uses your OpenCode or Slorp data.
+Run these from the repository root. The first builds a standalone Slorp executable, installs the bundled plugin into isolated configuration, opens two idle conversations in pseudoterminals, and checks discovery, restart recovery and retirement. The history tests import synthetic native-format transcripts into an isolated OpenCode database, export them with the real CLI, and backfill twice through Slorp's HTTP API. They cover ordinary continuation and overflow replay, including a large export. The subagent test imports a nested task tree and uses native OpenCode API updates to verify live completion, background results, usage, restart recovery and archived reports without OpenCode running. None makes model calls or uses your OpenCode or Slorp data.

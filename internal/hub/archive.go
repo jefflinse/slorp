@@ -28,8 +28,8 @@ type Archived struct {
 	// Moments counts its timeline, which only Archive itself carries.
 	Moments  int      `json:"moments"`
 	Timeline []Moment `json:"timeline,omitempty"`
-	// Subagents are the agents it started, which its agent's own record is
-	// read for when one closed session is asked after.
+	// Subagents are the retained or source-record agents it started, included
+	// only when one closed session is asked after.
 	Subagents []Subagent `json:"subagents,omitempty"`
 	// Used and CostUSD are what it had taken when it closed, zero for a
 	// session stored before that was kept.
@@ -115,6 +115,7 @@ func (h *Hub) Archive(id string) (Archived, bool) {
 	}
 	a := h.archived(id, d)
 	a.Timeline = append([]Moment{}, d.Timeline...)
+	a.Subagents = h.mergeSubagents(id, d.Agent, nil, false)
 	return a, true
 }
 
@@ -141,8 +142,7 @@ func (h *Hub) archived(id string, d sessionDoc) Archived {
 	return a
 }
 
-// leave stores a session as it goes and files it in the archive, unless
-// nothing was ever said in it or about it.
+// leave stores a session as it goes and archives it if it has work to retain.
 func (h *Hub) leave(s *Session) {
 	delete(h.backfill, s.ID)
 	d := h.doc(s)
@@ -152,14 +152,23 @@ func (h *Hub) leave(s *Session) {
 
 func (h *Hub) shelve(id string, d sessionDoc) {
 	h.warn(h.cache.Put("session", id, d))
-	if d.worthKeeping() {
+	if h.worthKeeping(id, d) {
 		h.archive[id] = d
 		h.last = ""
 	}
 }
 
-// worthKeeping reports whether anything was said in the session or about it.
-func (d sessionDoc) worthKeeping() bool { return d.Insight != nil || len(d.Timeline) > 0 }
+func (h *Hub) worthKeeping(id string, d sessionDoc) bool {
+	if d.Insight != nil || len(d.Timeline) > 0 {
+		return true
+	}
+	for _, r := range h.retained[id] {
+		if r.Agent == d.Agent {
+			return true
+		}
+	}
+	return false
+}
 
 // sweep archives the sessions of an agent that were open when Slorp last
 // stopped and have not been seen since, as of the last that is known of

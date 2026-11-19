@@ -2001,7 +2001,10 @@ const subQuiet = a => a.activeAt ? minsSince(a.activeAt) : 0;
 const SUB_SAID = { running: ['running', 'running'], waiting: ['waiting', 'waiting'], pending: ['idle', 'yet to start'], idle: ['idle', 'idle'], completed: ['done', 'finished'], failed: ['error', 'failed'], killed: ['error', 'stopped'] };
 const subRunning = a => a.status ? ['running', 'waiting', 'pending'].includes(a.status) : !a.done && subQuiet(a) < SUB_QUIET;
 /* How a subagent stands, as a dot and a word: as its session says, else as its record suggests. One in a closed session that never finished did not finish. */
-const subStatus = (a, closed) => SUB_SAID[a.status] || (a.done ? ['done', 'finished'] : closed ? ['idle', 'did not finish'] : subRunning(a) ? ['running', 'running'] : ['idle', `no word for ${span(subQuiet(a))}`]);
+function subStatus(a, closed) {
+  if (closed && !['completed', 'failed', 'killed'].includes(a.status)) return a.done ? ['done', 'finished'] : ['idle', 'did not finish'];
+  return SUB_SAID[a.status] || (a.done ? ['done', 'finished'] : subRunning(a) ? ['running', 'running'] : ['idle', `no word for ${span(subQuiet(a))}`]);
+}
 /* A subagent's latest token readings as a line. */
 function sparkline(v) {
   if (!v || v.length < 2) return '';
@@ -2018,13 +2021,25 @@ function subChip(s) {
 
 /* What each subagent was asked and reported, fetched when its lane is opened and again as it gets further. */
 const subDocs = {}, subAsked = {};
-function fetchSub(sessionId, a) {
-  const key = `${sessionId}/${a.id}`, had = subDocs[key];
-  if (subAsked[key] || (had && (had.at === a.activeAt || Date.now() - had.fetched < 15000))) return;
-  subAsked[key] = true;
-  fetch(`/api/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(a.id)}`).then(r => r.ok ? r.json() : { missing: true })
-    .then(doc => { subDocs[key] = { ...doc, at: a.activeAt, fetched: Date.now() }; }).catch(() => { subDocs[key] = { ...(had || { failed: true }), fetched: Date.now() }; })
-    .finally(() => { delete subAsked[key]; render(); });
+const subVersion = (a, closed) => JSON.stringify([a.reportRevision || 0, a.activeAt || '', a.status || '', !!a.done, !!closed]);
+function fetchSub(sessionId, a, closed) {
+  const key = `${sessionId}/${a.id}`, version = subVersion(a, closed);
+  if (subAsked[key]?.version === version || subDocs[key]?.version === version) return;
+  const request = { version };
+  subAsked[key] = request;
+  fetch(`/api/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(a.id)}`, { cache: 'no-store' }).then(r => {
+    if (r.status === 404) return { missing: true };
+    if (!r.ok) throw new Error(`Report request failed: ${r.status}`);
+    return r.json();
+  }).then(doc => {
+    if (subAsked[key] === request) subDocs[key] = { ...doc, version };
+  }).catch(() => {
+    if (subAsked[key] === request) subDocs[key] = { failed: true, version };
+  }).finally(() => {
+    if (subAsked[key] !== request) return;
+    delete subAsked[key];
+    render();
+  });
 }
 
 /* The subagents in the runs they were started in: those whose times overlap, or nearly, share a run and its time scale. */
@@ -2046,20 +2061,21 @@ function subsBody(sessionId, list, closed, used) {
   const runs = subRuns(list, closed).reverse().map(run => {
     const began = new Date(run.from), width = Math.max(1, run.to - run.from);
     const lanes = run.spans.map(({ a, from, to }) => {
-      const [dot, word] = subStatus(a, closed), key = `sub:${sessionId}/${a.id}`, open = state.expanded[key], doc = subDocs[`${sessionId}/${a.id}`];
-      if (open) fetchSub(sessionId, a);
+      const [dot, word] = subStatus(a, closed), cacheKey = `${sessionId}/${a.id}`, key = `sub:${cacheKey}`, open = state.expanded[key];
+      const cached = subDocs[cacheKey], doc = cached?.version === subVersion(a, closed) ? cached : null;
+      if (open) fetchSub(sessionId, a, closed);
       const parent = a.parentId && list.find(x => x.id === a.parentId);
       const about = [a.type, a.model && modelName(a.model), a.effort, a.tools || a.startedAt ? plural(a.tools || 0, 'tool call') : '', a.background ? 'in the background' : '', a.costUsd ? `≈${money(a.costUsd)}` : '',
         parent ? `started by ${clip(parent.description || parent.type || 'another subagent', 40)}` : ''].filter(Boolean).map(esc).join(' · ');
       const live = subRunning(a) && !closed;
       const said = !open ? '' : !doc ? '<div class="subdoc"><div class="none">Fetching what it was asked and reported…</div></div>'
-        : doc.missing ? '<div class="subdoc"><div class="none">Claude Code no longer has this subagent\'s record.</div></div>'
-        : doc.failed ? '<div class="subdoc"><div class="none">Could not reach the Slorp service for what it was asked and reported.</div></div>'
+        : doc.missing || doc.failed ? `<div class="subdoc"><div class="none">${doc.missing ? 'No record is available for this subagent.' : 'Could not load what this subagent was asked and reported. Try again.'}</div>
+            <button class="link" data-act="subRetry" data-id="${esc(cacheKey)}">Retry loading report</button></div>`
         : `<div class="subdoc">${doc.prompt ? `<div class="said ${state.expanded['said:' + key] ? 'open' : ''}"><div class="label">What it was asked</div><div class="tx">${esc(doc.prompt)}</div>
-            <button class="link" data-act="expand" data-id="said:${key}" hidden>${state.expanded['said:' + key] ? 'Show less' : 'Show all of it'}</button></div>` : ''}
+            <button class="link" data-act="expand" data-id="said:${esc(key)}" hidden>${state.expanded['said:' + key] ? 'Show less' : 'Show all of it'}</button></div>` : ''}
           <div class="label" style="margin-bottom:6px">${doc.handed ? 'What it reported' : a.done || closed ? 'The last thing it said' : 'The last thing it has said'}</div>
           ${doc.report ? md(doc.report) : '<div class="none">Nothing yet.</div>'}</div>`;
-      return `<button class="lane ${open ? 'open' : ''}" data-act="expand" data-id="${key}" style="${a.depth > 1 ? `padding-left:${(a.depth - 1) * 16}px` : ''}" aria-expanded="${!!open}">
+      return `<button class="lane ${open ? 'open' : ''}" data-act="expand" data-id="${esc(key)}" style="${a.depth > 1 ? `padding-left:${(a.depth - 1) * 16}px` : ''}" aria-expanded="${!!open}">
           <span class="what"><span class="t">${esc(a.description || a.type || a.id)}</span>${live && a.doing ? `<span class="doing" title="What it says it is doing">${esc(a.doing)}</span>` : ''}<span class="m">${about}</span></span>
           <span class="track" title="${esc(`${new Date(from).toLocaleTimeString()} to ${subRunning(a) && !closed ? 'now' : new Date(to).toLocaleTimeString()}`)}"><i class="${dot}" style="left:${(100 * (from - run.from) / width).toFixed(2)}%;width:${(100 * (to - from) / width).toFixed(2)}%"></i></span>
           <span class="num"><span>${lasted(to - from)}</span><span>${tokens(newTokens(a.used) || (a.samples || []).at(-1) || 0)}</span></span>
@@ -3080,6 +3096,7 @@ function render() {
 }
 
 const actions = {
+  subRetry: d => { delete subDocs[d.id]; },
   view: d => visit(d.view),
   select: d => { state.sel = d.id; },
   group: d => { state.groupBy = d.by; },

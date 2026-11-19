@@ -602,7 +602,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			return
 		}
 		if d := delegates[a.Agent]; d != nil {
-			a.Subagents = d.Subagents(a.ID)
+			a.Subagents = archiveSubagents(d.Subagents(a.ID), a.Subagents)
 		}
 		writeJSON(w, http.StatusOK, a)
 	})
@@ -610,10 +610,17 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 	// What one subagent of a session, open or closed, was asked and reported.
 	mux.HandleFunc("GET /api/sessions/{id}/subagents/{sub}", func(w http.ResponseWriter, r *http.Request) {
 		id, agent := r.PathValue("id"), ""
-		if at := slices.IndexFunc(h.Sessions(), func(s hub.Session) bool { return s.ID == id }); at >= 0 {
-			agent = h.Sessions()[at].Agent
+		sessions := h.Sessions()
+		if at := slices.IndexFunc(sessions, func(s hub.Session) bool { return s.ID == id }); at >= 0 {
+			agent = sessions[at].Agent
 		} else if a, ok := h.Archive(id); ok {
 			agent = a.Agent
+		}
+		if agent != "" {
+			if report, ok := h.RetainedSubagentReport(agent, id, r.PathValue("sub")); ok {
+				writeJSON(w, http.StatusOK, report)
+				return
+			}
 		}
 		d := delegates[agent]
 		if d == nil {
@@ -740,6 +747,8 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		feeds.Check()
 		w.WriteHeader(http.StatusNoContent)
 	})
+
+	mux.HandleFunc("POST /api/bridge/subagent", subagentHandler(h))
 
 	mux.HandleFunc("POST /api/bridge/poll", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
