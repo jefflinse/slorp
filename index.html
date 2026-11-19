@@ -1718,6 +1718,8 @@ function mockSessions() {
    service's session list; everything outside Sessions is still mock data. */
 
 let live = null, liveItems = [], liveEfforts = [], summarizer = {}, settings = {}, isOffline = false;
+let capabilities = {};
+const historyReading = new Set();
 let knowledge = { watch: [], questions: [], context: [], routing: [], roles: [] }, integrations = [], lookups = [], feeds = {}, pulls = [], limits = [], archive = [], plugins = {}, archiveDocs = {};
 /* Fetches a closed session's timeline, once per time it closes. */
 const archiveAsked = {};
@@ -1752,6 +1754,7 @@ async function refresh(force) {
     summarizer = data.summarizer || {};
     if (summarizer.model) delete state.modelNoticeOff;
     settings = data.settings || {};
+    capabilities = data.capabilities || {};
     knowledge = { roles: [], ...(data.knowledge || knowledge) };
     integrations = data.integrations || [];
     lookups = data.lookups || [];
@@ -2130,9 +2133,10 @@ const compactedLine = c => `Context compacted${c.auto ? ' automatically' : ''}${
 function timeline(s, open) {
   const moments = (s.timeline || []).slice().reverse();
   /* Only an open session whose agent keeps a transcript can have its earlier history read, and only when asked. */
-  const fill = !(open && s.agent === 'claude') ? ''
+  const fill = !(open && capabilities[s.agent]?.history) ? ''
+    : historyReading.has(s.id) ? '<span class="none">Reading earlier history…</span>'
     : s.backfilling ? `<span class="none">${spark}Filling in ${plural(s.backfilling, 'earlier exchange')}…</span>`
-    : modelless() ? `<button class="link off" data-act="noop" title="${NO_MODEL} to say how earlier exchanges came out.">Fill in earlier history</button>`
+    : modelless() ? `<button class="link off" disabled title="${NO_MODEL} to say how earlier exchanges came out.">Fill in earlier history</button>`
     : `<button class="link" data-act="backfill" data-id="${s.id}" title="Reads this session's transcript and has the local model say how up to forty earlier exchanges came out. It happens only when you ask.">Fill in earlier history</button>`;
   if (!moments.length && !fill) return '';
   return `<div class="label tlhead"><span>Timeline</span>${fill}</div>${moments.length ? (modelless() && moments.some(m => !m.line) ? `<div class="none">${NO_MODEL}, so new entries are only what you said.</div>` : '') : '<div class="none">Nothing has been said in it since Slorp began watching.</div>'}<ol class="tl">${moments.map(m => `<li class="${m.compacted ? 'mark' : ''}"><span class="when" title="${esc(new Date(m.at).toLocaleString())}">${minsSince(m.at) < 1 ? 'now' : span(minsSince(m.at))}</span>
@@ -3193,10 +3197,16 @@ const actions = {
   pullOpen: d => { state.pullSel = d.id; go('pulls'); },
   pullTab: d => { state.pullTab = d.t; },
   backfill: d => {
+    if (historyReading.has(d.id)) return false;
+    historyReading.add(d.id);
+    render();
     fetch(`/api/sessions/${encodeURIComponent(d.id)}/backfill`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-      .then(res => res.ok ? res.json().then(r => toast(r.queued ? `Read ${plural(r.exchanges, 'exchange')}; the local model will fill in ${num(r.queued)}` : `Read ${plural(r.exchanges, 'exchange')}; nothing was left to fill in`))
-        : res.text().then(why => toast(`Could not fill it in: ${why.trim()}`)))
-      .then(() => refresh(true)).catch(() => toast('Could not reach the Slorp service'));
+      .then(async res => {
+        if (!res.ok) throw new Error((await res.text()).trim() || res.status);
+        const r = await res.json();
+        toast(r.queued ? `Read ${plural(r.exchanges, 'exchange')}; the local model will fill in ${num(r.queued)}` : `Read ${plural(r.exchanges, 'exchange')}; nothing was left to fill in`);
+      }).catch(err => toast(err instanceof TypeError ? 'Could not reach the Slorp service' : `Could not fill it in: ${err.message}`))
+      .finally(() => { historyReading.delete(d.id); refresh(true); });
     return false;
   },
   copyText: d => {

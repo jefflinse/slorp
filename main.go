@@ -127,7 +127,13 @@ func main() {
 	})
 	go poller.Run(ctx)
 
-	srv := &http.Server{Addr: *addr, Handler: server.New(h, k, tools, poller, map[string]server.History{claude.Agent: transcripts.Exchanges}, map[string]server.Launcher{claude.Agent: transcripts}, map[string]server.PluginManager{claude.Agent: transcripts, opencode.Agent: oc}, map[string]server.Delegates{claude.Agent: transcripts}, summarizer, server.Page(page, *ui))}
+	history := map[string]server.History{
+		claude.Agent: func(_ context.Context, id string, limit int) ([]hub.Exchange, error) {
+			return transcripts.Exchanges(id, limit)
+		},
+		opencode.Agent: oc.Exchanges,
+	}
+	srv := &http.Server{Addr: *addr, Handler: server.New(h, k, tools, poller, history, map[string]server.Launcher{claude.Agent: transcripts}, map[string]server.PluginManager{claude.Agent: transcripts, opencode.Agent: oc}, map[string]server.Delegates{claude.Agent: transcripts}, summarizer, server.Page(page, *ui))}
 	go func() {
 		<-ctx.Done()
 		srv.Close()

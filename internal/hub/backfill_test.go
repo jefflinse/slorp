@@ -139,3 +139,87 @@ func TestBackfillTakesTheLatestAndAFewAtATime(t *testing.T) {
 		t.Error("a session that has gone is still being backfilled")
 	}
 }
+
+func TestBackfillKeepsRepeatedPromptsAndCompactionIdentity(t *testing.T) {
+	h, k, st := newHub(t)
+	at := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+	c := &Compaction{ID: "prt_compact", At: at.Add(time.Minute), Auto: true}
+	h.SetRoster(agent, []Session{{ID: "s", Agent: agent, Status: Idle, LastPrompt: "again", PromptAt: at.Add(time.Second), Compacted: c}})
+	h.sessions["s"].Timeline = []Moment{
+		{At: at.Add(time.Second), Prompt: "again", Line: "Second answer", Summary: "Only the second exchange was observed."},
+		{At: c.At, Compacted: c},
+	}
+	recorded := *c
+	recorded.At = c.At.Add(-time.Millisecond)
+	xs := []Exchange{
+		{At: at, Prompt: "again", Reply: "First answer"},
+		{At: at.Add(time.Second), Prompt: "again", Reply: "Second answer"},
+		{At: recorded.At, Compacted: &recorded},
+	}
+	for range 2 {
+		h.Backfill("s", xs)
+		got := session(t, h, "s").Timeline
+		if len(got) != 3 || got[0].Line != "" || got[1].Line != "Second answer" || got[2].Compacted.ID != c.ID {
+			t.Fatalf("backfill duplicated or misattributed history: %+v", got)
+		}
+	}
+	h = New(k, st)
+	h.SetRoster(agent, []Session{{ID: "s", Agent: agent, Status: Idle}})
+	h.Backfill("s", xs)
+	got := session(t, h, "s").Timeline
+	if len(got) != 3 || got[0].Line != "" || got[1].Line != "Second answer" {
+		t.Fatalf("restart collapsed repeated prompts: %+v", got)
+	}
+}
+
+func TestBackfillMigratesALegacyCompactionAndKeepsItsMeasurements(t *testing.T) {
+	h, k, st := newHub(t)
+	at := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+	old := &Compaction{At: at.Add(time.Millisecond), Auto: true, Before: 1234, After: 100}
+	report := func(h *Hub) { h.SetRoster(agent, []Session{{ID: "s", Agent: agent, Status: Idle, Compacted: old}}) }
+	report(h)
+	record := []Exchange{{At: at, Compacted: &Compaction{ID: "prt_compact", At: at, Auto: true}}}
+	check := func(h *Hub) {
+		t.Helper()
+		got := session(t, h, "s").Timeline
+		if len(got) != 1 || got[0].Compacted.ID != "prt_compact" || got[0].Compacted.Before != 1234 || got[0].Compacted.After != 100 || !got[0].At.Equal(at) {
+			t.Fatalf("legacy marker was duplicated or lost readings: %+v", got)
+		}
+	}
+	h.Backfill("s", record)
+	report(h)
+	check(h)
+	h.Backfill("s", record)
+	check(h)
+	h = New(k, st)
+	report(h)
+	check(h)
+}
+
+func TestBackfillReconcilesALiveReplayAndItsLaterSnapshots(t *testing.T) {
+	h, k, st := newHub(t)
+	at := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+	replay := PromptAlias{At: at.Add(time.Minute), Prompt: "Original prompt\n\n[Attached image/png: image.png]"}
+	oldBridge := func(h *Hub) {
+		h.SetRoster(agent, []Session{{ID: "s", Agent: agent, Status: Idle, LastPrompt: replay.Prompt, PromptAt: replay.At}})
+	}
+	oldBridge(h)
+	xs := []Exchange{{At: at, Prompt: "Original prompt", Reply: "Done", Aliases: []PromptAlias{replay}}}
+	check := func(h *Hub) {
+		t.Helper()
+		got := session(t, h, "s").Timeline
+		if len(got) != 1 || !got[0].At.Equal(at) || got[0].Prompt != "Original prompt" || len(got[0].Aliases) != 1 {
+			t.Fatalf("replay duplicated original: %+v", got)
+		}
+	}
+	for range 2 {
+		h.Backfill("s", xs)
+		oldBridge(h)
+		check(h)
+	}
+	h = New(k, st)
+	oldBridge(h)
+	check(h)
+	h.Backfill("s", xs)
+	check(h)
+}

@@ -79,7 +79,11 @@ type Feeds interface {
 
 // History reads what was said in a session from its agent's own record,
 // oldest first and at most limit of it.
-type History func(sessionID string, limit int) ([]hub.Exchange, error)
+type History func(ctx context.Context, sessionID string, limit int) ([]hub.Exchange, error)
+
+type agentCapabilities struct {
+	History bool `json:"history"`
+}
 
 // Launcher starts, reopens and stops one agent's sessions in the background.
 type Launcher interface {
@@ -179,6 +183,10 @@ func Page(built []byte, path string) http.Handler {
 func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history map[string]History, launchers map[string]Launcher, plugins map[string]PluginManager, delegates map[string]Delegates, prober Prober, page http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	epoch := strconv.FormatInt(time.Now().UnixNano(), 36)
+	capabilities := map[string]agentCapabilities{}
+	for agent, read := range history {
+		capabilities[agent] = agentCapabilities{History: read != nil}
+	}
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -188,8 +196,9 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 	mux.HandleFunc("GET /api/sessions", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, struct {
 			hub.State
-			Integrations []integrations.Status `json:"integrations"`
-		}{h.State(), m.Status(r.Context())})
+			Integrations []integrations.Status        `json:"integrations"`
+			Capabilities map[string]agentCapabilities `json:"capabilities"`
+		}{h.State(), m.Status(r.Context()), capabilities})
 	})
 
 	mux.HandleFunc("GET /api/events", func(w http.ResponseWriter, r *http.Request) {
@@ -547,22 +556,31 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 	// timeline to be filled in from the session's own record.
 	mux.HandleFunc("POST /api/sessions/{id}/backfill", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		at := slices.IndexFunc(h.Sessions(), func(s hub.Session) bool { return s.ID == id })
+		sessions := h.Sessions()
+		at := slices.IndexFunc(sessions, func(s hub.Session) bool { return s.ID == id })
 		if at < 0 {
 			http.Error(w, "no such session", http.StatusNotFound)
 			return
 		}
-		read := history[h.Sessions()[at].Agent]
+		read := history[sessions[at].Agent]
 		if read == nil {
 			http.Error(w, "this agent keeps no record Slorp can read", http.StatusBadRequest)
 			return
 		}
-		exchanges, err := read(id, hub.BackfillLimit)
+		exchanges, err := read(r.Context(), id, hub.BackfillLimit)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		queued, _ := h.Backfill(id, exchanges)
+		if err := r.Context().Err(); err != nil {
+			http.Error(w, err.Error(), http.StatusRequestTimeout)
+			return
+		}
+		queued, ok := h.Backfill(id, exchanges)
+		if !ok {
+			http.Error(w, "the session closed while its history was being read", http.StatusConflict)
+			return
+		}
 		writeJSON(w, http.StatusAccepted, map[string]int{"exchanges": len(exchanges), "queued": queued})
 	})
 

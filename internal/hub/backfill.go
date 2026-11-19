@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"cmp"
 	"maps"
 	"slices"
 	"strings"
@@ -23,6 +24,7 @@ type Exchange struct {
 	Prompt    string
 	Reply     string
 	Compacted *Compaction
+	Aliases   []PromptAlias
 }
 
 // Unfilled is some of a session's earlier exchanges, waiting for the model
@@ -58,18 +60,76 @@ func (h *Hub) Backfill(sessionID string, exchanges []Exchange) (queued int, ok b
 	var queue []Exchange
 	for _, x := range exchanges {
 		if c := x.Compacted; c != nil {
-			had = slices.DeleteFunc(had, func(old Moment) bool { return old.Compacted != nil && old.At.Equal(c.At) })
-			timeline = append(timeline, Moment{At: c.At, Compacted: c})
+			i := slices.IndexFunc(had, func(old Moment) bool { return sameCompaction(old.Compacted, c) })
+			if i < 0 {
+				matches := 0
+				for n, old := range had {
+					if legacyCompactionNear(old.Compacted, c) {
+						i = n
+						matches++
+					}
+				}
+				if matches != 1 {
+					i = -1
+				}
+				if i >= 0 && slices.ContainsFunc(exchanges, func(other Exchange) bool {
+					return other.Compacted != c && legacyCompactionNear(had[i].Compacted, other.Compacted)
+				}) {
+					i = -1
+				}
+			}
+			merged := *c
+			if i >= 0 {
+				old := had[i].Compacted
+				merged.ID = cmp.Or(merged.ID, old.ID)
+				merged.Before, merged.After = cmp.Or(merged.Before, old.Before), cmp.Or(merged.After, old.After)
+				merged.ObservedAt = old.ObservedAt
+				if old.ID == "" && merged.ID != "" && !old.At.Equal(c.At) {
+					merged.ObservedAt = old.At
+				}
+				had = slices.Delete(had, i, i+1)
+			}
+			timeline = append(timeline, Moment{At: merged.At, Compacted: &merged})
 			continue
 		}
-		m := Moment{At: x.At, Prompt: momentPrompt(x.Prompt)}
+		m := Moment{At: x.At, Prompt: momentPrompt(x.Prompt), Recorded: true}
+		for _, alias := range x.Aliases {
+			m.Aliases = append(m.Aliases, PromptAlias{At: alias.At, Prompt: momentPrompt(alias.Prompt)})
+		}
 		if m.Prompt == "" {
 			continue
 		}
-		if i := slices.IndexFunc(had, func(old Moment) bool { return old.Compacted == nil && samePrompt(old.Prompt, m.Prompt) }); i >= 0 {
+		i := slices.IndexFunc(had, func(old Moment) bool {
+			return old.Compacted == nil && old.At.Equal(m.At) && samePrompt(old.Prompt, m.Prompt)
+		})
+		if i < 0 {
+			i = slices.IndexFunc(had, func(old Moment) bool {
+				if old.Compacted != nil || !samePrompt(old.Prompt, m.Prompt) || old.At.Sub(m.At).Abs() > 5*time.Second {
+					return false
+				}
+				return !slices.ContainsFunc(exchanges, func(other Exchange) bool {
+					return other.Compacted == nil && other.At.Equal(old.At) && samePrompt(momentPrompt(other.Prompt), old.Prompt)
+				})
+			})
+		}
+		if i >= 0 {
 			m.Line, m.Summary = had[i].Line, had[i].Summary
+			for _, alias := range had[i].Aliases {
+				if !aliasesPrompt(m.Aliases, alias.At, alias.Prompt) {
+					m.Aliases = append(m.Aliases, alias)
+				}
+			}
 			had = slices.Delete(had, i, i+1)
 		}
+		had = slices.DeleteFunc(had, func(old Moment) bool {
+			if old.Compacted != nil || !aliasesPrompt(m.Aliases, old.At, old.Prompt) {
+				return false
+			}
+			if m.Line == "" {
+				m.Line, m.Summary = old.Line, old.Summary
+			}
+			return true
+		})
 		if m.Line == "" && x.Reply != "" {
 			queue = append(queue, x)
 		}
@@ -88,6 +148,10 @@ func (h *Hub) Backfill(sessionID string, exchanges []Exchange) (queued int, ok b
 	h.last = ""
 	h.changed()
 	return len(queue), true
+}
+
+func aliasesPrompt(aliases []PromptAlias, at time.Time, prompt string) bool {
+	return slices.ContainsFunc(aliases, func(a PromptAlias) bool { return a.At.Equal(at) && samePrompt(a.Prompt, prompt) })
 }
 
 // Unfilled returns the next few exchanges of each session being backfilled.

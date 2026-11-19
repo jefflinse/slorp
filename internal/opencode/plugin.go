@@ -243,15 +243,7 @@ func (a *Adapter) CheckPlugin() {
 func (a *Adapter) install(ctx context.Context, path string) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, a.Bin, "plugin", path, "--global")
-	cmd.Dir = a.Home
-	cmd.Env = os.Environ()
-	for key, value := range map[string]string{"HOME": a.Home, "XDG_CONFIG_HOME": filepath.Dir(a.configDirs()[0]), "OPENCODE_CONFIG_DIR": a.ExtraConfigDir, "OPENCODE_CONFIG": a.ConfigFile} {
-		cmd.Env = slices.DeleteFunc(cmd.Env, func(s string) bool { return strings.HasPrefix(s, key+"=") })
-		if value != "" {
-			cmd.Env = append(cmd.Env, key+"="+value)
-		}
-	}
+	cmd := a.command(ctx, "plugin", path, "--global")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("OpenCode plugin installation failed: %w: %s", err, strings.TrimSpace(string(out)))
@@ -264,6 +256,19 @@ func (a *Adapter) install(ctx context.Context, path string) error {
 		return errors.New("OpenCode did not register both Slorp plugin entry points")
 	}
 	return nil
+}
+
+func (a *Adapter) command(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, a.Bin, args...)
+	cmd.Dir = a.Home
+	cmd.Env = os.Environ()
+	for key, value := range map[string]string{"HOME": a.Home, "XDG_CONFIG_HOME": filepath.Dir(a.configDirs()[0]), "OPENCODE_CONFIG_DIR": a.ExtraConfigDir, "OPENCODE_CONFIG": a.ConfigFile} {
+		cmd.Env = slices.DeleteFunc(cmd.Env, func(s string) bool { return strings.HasPrefix(s, key+"=") })
+		if value != "" {
+			cmd.Env = append(cmd.Env, key+"="+value)
+		}
+	}
+	return cmd
 }
 
 func (a *Adapter) writeBundle() error {

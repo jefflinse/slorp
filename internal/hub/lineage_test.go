@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -273,7 +274,7 @@ func TestJoin(t *testing.T) {
 	cur = append(cur, carried, Moment{At: at.Add(time.Minute), Prompt: "early"}, Moment{At: at.Add(time.Hour * 99), Prompt: "latest"})
 
 	got := join(old, cur)
-	if len(got) != timelineLimit || got[len(got)-1].Prompt != "latest" || got[len(got)-2] != carried {
+	if len(got) != timelineLimit || got[len(got)-1].Prompt != "latest" || !reflect.DeepEqual(got[len(got)-2], carried) {
 		t.Errorf("%d moments ending %+v; want the latest %d, with the moment both held kept once", len(got), got[max(0, len(got)-2):], timelineLimit)
 	}
 	if !slices.IsSortedFunc(got, func(a, b Moment) int { return a.At.Compare(b.At) }) || got[0].Prompt != "old 1" {

@@ -97,6 +97,10 @@ func (a *asked) Check()  { a.checks++ }
 func (a *asked) Rescan() { a.rescans++ }
 
 func newFixture(t *testing.T, extraPlugins ...map[string]PluginManager) *fixture {
+	return fixtureWithHistory(t, nil, extraPlugins...)
+}
+
+func fixtureWithHistory(t *testing.T, histories map[string]History, extraPlugins ...map[string]PluginManager) *fixture {
 	t.Helper()
 	st := testdb.Open(t)
 	k := testdb.KB(t, st)
@@ -118,7 +122,11 @@ func newFixture(t *testing.T, extraPlugins ...map[string]PluginManager) *fixture
 			plugins[agent] = plugin
 		}
 	}
-	srv := httptest.NewServer(New(h, k, tools, feeds, map[string]History{"claude": rec.read}, map[string]Launcher{"claude": launch}, plugins, map[string]Delegates{"claude": rec}, probe, Page([]byte("<title>slorp</title>"), "")))
+	readers := map[string]History{"claude": rec.read}
+	for agent, reader := range histories {
+		readers[agent] = reader
+	}
+	srv := httptest.NewServer(New(h, k, tools, feeds, readers, map[string]Launcher{"claude": launch}, plugins, map[string]Delegates{"claude": rec}, probe, Page([]byte("<title>slorp</title>"), "")))
 	t.Cleanup(srv.Close)
 	return &fixture{t, srv, h, k, feeds, probes, rec, launch, probe}
 }
@@ -140,7 +148,7 @@ func (r *record) Report(sessionID, id string) (hub.SubagentReport, bool) {
 	return report, ok
 }
 
-func (r *record) read(sessionID string, limit int) ([]hub.Exchange, error) {
+func (r *record) read(_ context.Context, sessionID string, limit int) ([]hub.Exchange, error) {
 	r.asked = append(r.asked, sessionID+" "+strconv.Itoa(limit))
 	return r.exchanges, r.err
 }

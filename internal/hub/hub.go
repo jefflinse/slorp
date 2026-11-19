@@ -168,6 +168,9 @@ type Tokens struct {
 type Moment struct {
 	At     time.Time `json:"at"`
 	Prompt string    `json:"prompt"`
+	// Recorded marks a prompt whose timestamp was read from its transcript.
+	Recorded bool          `json:"recorded,omitempty"`
+	Aliases  []PromptAlias `json:"aliases,omitempty"`
 	// Line is empty when the model never described the exchange, and so
 	// is Summary, its fuller account of where things stood.
 	Line    string `json:"line,omitempty"`
@@ -177,10 +180,19 @@ type Moment struct {
 	Compacted *Compaction `json:"compacted,omitempty"`
 }
 
+// PromptAlias identifies a harness-generated replay of an original user prompt.
+type PromptAlias struct {
+	At     time.Time `json:"at"`
+	Prompt string    `json:"prompt"`
+}
+
 // Compaction is one time a session's agent replaced the conversation so far
 // with a summary of it, to make room in its context.
 type Compaction struct {
+	ID string    `json:"id,omitempty"`
 	At time.Time `json:"at"`
+	// ObservedAt identifies a legacy live marker reconciled with this record.
+	ObservedAt time.Time `json:"observedAt,omitzero"`
 	// Auto is true when the agent did it for want of room, and false when
 	// the user asked.
 	Auto bool `json:"auto,omitempty"`
@@ -188,6 +200,20 @@ type Compaction struct {
 	// compaction, zero when its agent did not say.
 	Before int `json:"before,omitempty"`
 	After  int `json:"after,omitempty"`
+}
+
+func sameCompaction(a, b *Compaction) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	if a.ID != "" && b.ID != "" {
+		return a.ID == b.ID
+	}
+	return a.At.Equal(b.At) || !a.ObservedAt.IsZero() && a.ObservedAt.Equal(b.At) || !b.ObservedAt.IsZero() && b.ObservedAt.Equal(a.At)
+}
+
+func legacyCompactionNear(a, b *Compaction) bool {
+	return a != nil && b != nil && (a.ID == "") != (b.ID == "") && a.At.Sub(b.At).Abs() <= 5*time.Second
 }
 
 const (
@@ -1681,13 +1707,16 @@ func texts(facts []kb.Fact) []string {
 // an untimed repeat of a recent moment.
 func (h *Hub) track(s *Session, now time.Time) {
 	var fresh []Moment
-	if c := s.Compacted; c != nil {
+	if c := s.Compacted; c != nil && !slices.ContainsFunc(s.Timeline, func(m Moment) bool { return sameCompaction(m.Compacted, c) }) {
 		fresh = append(fresh, Moment{At: c.At, Compacted: c})
 	}
 	n := len(s.Timeline)
 	if prompt := momentPrompt(s.LastPrompt); prompt != "" {
-		same := func(m Moment) bool { return m.Compacted == nil && samePrompt(m.Prompt, prompt) }
 		at := s.PromptAt
+		if i := slices.IndexFunc(s.Timeline, func(m Moment) bool { return aliasesPrompt(m.Aliases, at, prompt) }); i >= 0 {
+			at, prompt = s.Timeline[i].At, s.Timeline[i].Prompt
+		}
+		same := func(m Moment) bool { return m.Compacted == nil && samePrompt(m.Prompt, prompt) }
 		if at.IsZero() && !slices.ContainsFunc(s.Timeline[max(0, n-untimedLookback):], same) {
 			at = now
 		}
@@ -1735,15 +1764,21 @@ func tidy(timeline []Moment) []Moment {
 	var out []Moment
 	for _, m := range timeline {
 		n := len(out)
-		if n > 0 && m.Compacted != nil && out[n-1].Compacted != nil && m.At.Equal(out[n-1].At) {
+		if n > 0 && sameCompaction(m.Compacted, out[n-1].Compacted) {
 			continue
 		}
-		if n == 0 || m.Compacted != nil || out[n-1].Compacted != nil || !samePrompt(out[n-1].Prompt, m.Prompt) {
+		if n == 0 || m.Compacted != nil || out[n-1].Compacted != nil || (m.Recorded || out[n-1].Recorded) && !m.At.Equal(out[n-1].At) || !samePrompt(out[n-1].Prompt, m.Prompt) {
 			out = append(out, m)
 			continue
 		}
 		if strings.HasSuffix(out[n-1].Prompt, "…") {
 			out[n-1].Prompt = m.Prompt
+		}
+		out[n-1].Recorded = out[n-1].Recorded || m.Recorded
+		for _, alias := range m.Aliases {
+			if !aliasesPrompt(out[n-1].Aliases, alias.At, alias.Prompt) {
+				out[n-1].Aliases = append(out[n-1].Aliases, alias)
+			}
 		}
 		if m.Line != "" {
 			out[n-1].Line, out[n-1].Summary = m.Line, m.Summary

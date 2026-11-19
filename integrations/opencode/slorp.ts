@@ -1,8 +1,9 @@
 import type { Plugin } from '@opencode-ai/plugin'
 import { BroadcastChannel } from 'node:worker_threads'
+import { isDeepStrictEqual } from 'node:util'
 
 const AGENT = 'opencode'
-const VERSION = '0.2.0'
+const VERSION = '0.2.1'
 const DEFAULT_URL = 'http://127.0.0.1:4747'
 const POLL_MS = 2000
 const REQUEST_MS = 5000
@@ -40,6 +41,8 @@ type Message = {
   tokens?: Usage
   cost?: number
   summary?: boolean
+  parentID?: string
+  error?: unknown
 }
 
 /** What is known of one session; for a top-level one, enough to tell Slorp again. */
@@ -63,8 +66,8 @@ type Known = {
   contextWindow?: number
   contextTokens?: number
   measuredAt?: number
-  compacted?: { at: string; auto?: boolean; before?: number }
-  compacting?: { auto: boolean; before: number }
+  compacted?: { id?: string; at: string; auto?: boolean; before?: number }
+  compacting?: { id?: string; auto: boolean; before: number }
   usage?: Map<string, { tokens: Usage; cost: number }>
   hydrated?: boolean
   hydrating?: Promise<void>
@@ -86,13 +89,49 @@ type Ask = {
   deadline: number
 }
 
-type Part = { type: string; text?: string; synthetic?: boolean }
+type Part = { type: string; text?: string; synthetic?: boolean; ignored?: boolean; [key: string]: unknown }
+type TranscriptMessage = { info: Message; parts: Part[] }
 
 function textOf(parts: readonly Part[]) {
   return parts
-    .filter(p => p.type === 'text' && !p.synthetic && p.text?.trim())
+    .filter(p => p.type === 'text' && !p.synthetic && !p.ignored && p.text?.trim())
     .map(p => p.text!.trim())
     .join('\n\n')
+}
+
+function sameReplayParts(original: Part[], copied: Part[]) {
+  if (!original.length || original.length !== copied.length) return false
+  const content = ({ id, messageID, sessionID, ...part }: Part) => part
+  return original.every((part, i) => {
+    const next = copied[i]!
+    const expected = part.type === 'file' && next.type === 'text'
+      ? { type: 'text', text: `[Attached ${part.mime}: ${part.filename ?? 'file'}]` }
+      : content(part)
+    return isDeepStrictEqual(expected, content(next))
+  })
+}
+
+/** Maps native overflow replays to the original user turn during hydration. */
+function replayOrigins(messages: TranscriptMessage[]) {
+  const origins = new Map<string, TranscriptMessage>()
+  const compactions = new Map<string, TranscriptMessage>()
+  let previous: TranscriptMessage | undefined, pending: TranscriptMessage | undefined
+  for (const m of messages) {
+    if (m.info.role === 'user') {
+      const compact = m.parts.find(p => p.type === 'compaction')
+      if (compact) {
+        if (compact.auto && compact.overflow && previous && m.info.id) compactions.set(m.info.id, origins.get(previous.info.id ?? '') ?? previous)
+        pending = undefined
+        continue
+      }
+      if (pending && m.info.id && sameReplayParts(pending.parts, m.parts)) origins.set(m.info.id, pending)
+      pending = undefined
+      previous = m
+    } else {
+      pending = m.info.summary && m.info.time?.completed && !m.info.error ? compactions.get(m.info.parentID ?? '') : undefined
+    }
+  }
+  return origins
 }
 
 /** What a permission prompt asks to do, as the user should read it in Slorp. */
@@ -241,12 +280,15 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
     s.hydrating = (async () => {
       const res = await client.session.messages({ path: { id }, signal: signal() })
       if (res.error) throw res.error
-      for (const m of res.data ?? []) {
+      const messages = [...(res.data ?? [])].sort((a, b) => (a.info.time?.created ?? 0) - (b.info.time?.created ?? 0))
+      const origins = replayOrigins(messages as TranscriptMessage[])
+      for (const m of messages) {
         const info = m.info as Message
         if (!s.usage?.has(info.id ?? '')) measured(s, info)
-        const at = info.time?.created ?? 0
+        const original = origins.get(info.id ?? '') ?? m
+        const at = original.info.time?.created ?? 0
         if (info.role === 'user' && at > (s.promptAt ?? 0)) {
-          const prompt = textOf(m.parts)
+          const prompt = textOf(original.parts)
           if (prompt) {
             s.prompt = prompt
             s.promptAt = at
@@ -558,13 +600,13 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
           case 'message.part.updated': {
             const part = p.part
             const s = sessions.get(part?.sessionID)
-            if (s && part.type === 'compaction') s.compacting = { auto: part.auto, before: s.contextTokens ?? 0 }
+            if (s && part.type === 'compaction') s.compacting = { id: part.id, auto: part.auto, before: s.contextTokens ?? 0 }
             break
           }
           case 'session.compacted': {
             const s = sessions.get(p.sessionID)
             if (!s?.isLive) break
-            s.compacted = { at: new Date().toISOString(), auto: s.compacting?.auto, before: s.compacting?.before }
+            s.compacted = { id: s.compacting?.id, at: new Date().toISOString(), auto: s.compacting?.auto, before: s.compacting?.before }
             s.compacting = undefined
             s.contextTokens = 0
             tell(p.sessionID, s)

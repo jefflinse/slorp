@@ -1020,7 +1020,7 @@ func TestTimeline(t *testing.T) {
 	want := func(h *Hub, when string, moments ...Moment) {
 		t.Helper()
 		got := timeline(h)
-		if !slices.Equal(got, moments) {
+		if !slices.EqualFunc(got, moments, func(a, b Moment) bool { return reflect.DeepEqual(a, b) }) {
 			t.Fatalf("%s:\n got %+v\nwant %+v", when, got, moments)
 		}
 	}

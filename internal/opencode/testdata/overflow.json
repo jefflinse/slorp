@@ -1,0 +1,14 @@
+{
+  "info": {"id":"ses_history","slug":"overflow-fixture","projectID":"global","directory":"/work/history","title":"Overflow replay","version":"1.19.6","time":{"created":1700000000000,"updated":1700000010000}},
+  "messages": [
+    {"info":{"id":"msg_first","sessionID":"ses_history","role":"user","time":{"created":1700000001000}},"parts":[{"type":"text","text":"Inspect the cache"}]},
+    {"info":{"id":"msg_firstanswer","sessionID":"ses_history","role":"assistant","parentID":"msg_first","time":{"created":1700000002000,"completed":1700000002001}},"parts":[{"type":"text","text":"Inspected."}]},
+    {"info":{"id":"msg_original","sessionID":"ses_history","role":"user","time":{"created":1700000003000}},"parts":[{"id":"prt_original","type":"text","text":"Apply the fix"},{"id":"prt_image","type":"file","mime":"image/png","filename":"cache.png","url":"file:///work/history/cache.png"},{"type":"agent","name":"explore"},{"type":"text","text":"Delegate to the mentioned agent.","synthetic":true}]},
+    {"info":{"id":"msg_compact","sessionID":"ses_history","role":"user","time":{"created":1700000004000}},"parts":[{"id":"prt_compact","type":"compaction","auto":true,"overflow":true}]},
+    {"info":{"id":"msg_summary","sessionID":"ses_history","role":"assistant","parentID":"msg_compact","summary":true,"finish":"stop","time":{"created":1700000005000,"completed":1700000016000}},"parts":[{"type":"text","text":"Internal summary."}]},
+    {"info":{"id":"msg_replay","sessionID":"ses_history","role":"user","time":{"created":1700000017000}},"parts":[{"id":"prt_replayed","type":"text","text":"Apply the fix"},{"id":"prt_placeholder","type":"text","text":"[Attached image/png: cache.png]"},{"type":"agent","name":"explore"},{"type":"text","text":"Delegate to the mentioned agent.","synthetic":true}]},
+    {"info":{"id":"msg_answer","sessionID":"ses_history","role":"assistant","parentID":"msg_replay","time":{"created":1700000018000,"completed":1700000018001}},"parts":[{"type":"text","text":"Fixed after compaction."}]},
+    {"info":{"id":"msg_repeat","sessionID":"ses_history","role":"user","time":{"created":1700000019000}},"parts":[{"type":"text","text":"Apply the fix"}]},
+    {"info":{"id":"msg_repeatanswer","sessionID":"ses_history","role":"assistant","parentID":"msg_repeat","time":{"created":1700000020000,"completed":1700000020001}},"parts":[{"type":"text","text":"Handled the genuine repeated request."}]}
+  ]
+}

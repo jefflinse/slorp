@@ -560,7 +560,7 @@ test('failures survive the following idle event, while cancellation is idle', as
 test('compaction clears context and repeats one stable timeline marker', async t => {
   const o = await afterOneTurn(t)
   await o.emit('message.updated', { info: { id: 'msg_1', role: 'assistant', sessionID: SID, tokens: usage() } })
-  await o.emit('message.part.updated', { part: { type: 'compaction', sessionID: SID, auto: true } })
+  await o.emit('message.part.updated', { part: { id: 'prt_compact', type: 'compaction', sessionID: SID, auto: true } })
   await o.emit('session.compacted', { sessionID: SID })
   await o.tick()
   const first = o.w.to('/api/bridge/poll').at(-1).snapshot
@@ -568,6 +568,7 @@ test('compaction clears context and repeats one stable timeline marker', async t
   const second = o.w.to('/api/bridge/poll').at(-1).snapshot
   assert.equal(first.contextTokens, 0)
   assert.equal(first.compacted.auto, true)
+  assert.equal(first.compacted.id, 'prt_compact')
   assert.equal(first.compacted.before, 200)
   assert.deepEqual(first.compacted, second.compacted)
 })
@@ -815,4 +816,16 @@ test('bridge version and managed revision identify the loaded installation', asy
   const poll = o.w.to('/api/bridge/poll')[0]
   assert.equal(poll.pluginVersion, manifest.version)
   assert.equal(poll.pluginRevision, 'managed-build')
+})
+
+test('reopening after an overflow replay hydrates the original prompt and timestamp', async t => {
+  const o = await world(t)
+  const doc = JSON.parse(await readFile(new URL('../../internal/opencode/testdata/overflow.json', import.meta.url), 'utf8'))
+  o.w.infos[SID] = { ...doc.info, id: SID, directory: '/work/proj' }
+  o.w.messages[SID] = doc.messages.filter((m: Message) => !['msg_repeat', 'msg_repeatanswer'].includes(m.info.id)).map((m: Message) => ({ ...m, info: { ...m.info, sessionID: SID } }))
+  await o.open(SID)
+  const s = o.w.to('/api/bridge/poll').at(-1).snapshot
+  assert.equal(s.lastPrompt, 'Apply the fix')
+  assert.equal(s.promptAt, 1700000003000)
+  assert.equal(s.lastReply, 'Fixed after compaction.')
 })
