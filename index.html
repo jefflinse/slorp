@@ -415,6 +415,17 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
 .eedit .sw.on { box-shadow: 0 0 0 2px var(--raised), 0 0 0 4px var(--ink); }
 .srow input[type="checkbox"] { flex: none; width: 16px; height: 16px; margin: 0; align-self: center; accent-color: var(--accent); }
 .ebig .tabbody .add { padding: 14px 0 0; border-top: 0; }
+/* Sessions that can be dragged onto an effort to file them there */
+.tray { margin-top: 14px; }
+.tray .label { margin-bottom: 2px; }
+.tray .none { padding: 0 0 6px; font-size: 12px; }
+.trow { display: flex; align-items: baseline; gap: 2px; padding: 6px 8px; border-radius: 7px; cursor: grab; }
+.trow:hover { background: var(--sel); }
+.trow button { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.trow button:hover { color: var(--accent); }
+.srow[draggable] { cursor: grab; }
+.trow.dragging, .srow.dragging { opacity: 0.4; }
+.ecard.drop, .ebig.drop { border-color: var(--accent); border-style: solid; box-shadow: 0 0 0 2px var(--accent); }
 .shelf { margin-top: 34px; }
 .shelf .ghead { padding: 0 0 10px; }
 .shelf .ghead .name { flex: none; }
@@ -1006,8 +1017,8 @@ function rawBlock(lines) {
   return `<div class="rawblock">${lines.map(([who, tx]) => `<div class="ln"><span class="who">${esc(who)}</span><span class="tx">${esc(tx)}</span></div>`).join('')}</div>`;
 }
 
-function sessionRow(s) {
-  return `<div class="srow"><span class="dot ${s.status}" title="${STATUS[s.status]}"></span>
+function sessionRow(s, from) {
+  return `<div class="srow" ${from ? dragsFrom(s.id, from) : ''}><span class="dot ${s.status}" title="${STATUS[s.status]}"></span>
     <div class="body"><div>${title(s, 'ttl')}</div>${state.fluent ? `<div class="sub">${esc(s.doing)}</div>` : ''}</div>
     <span class="side">${kindBadge(s.kind)} · ${STATUS[s.status]}</span></div>`;
 }
@@ -1095,7 +1106,7 @@ function effortDetail(e) {
     <div class="sec"><div class="label"><span>Needs you (${needs.length})</span></div>
       ${needs.length ? `<div style="margin:0 -18px">${needs.map(i => rowHtml(i, 'openItem')).join('')}</div>` : '<div class="none">Nothing. This effort is moving without you.</div>'}</div>
     ${effortTabs([
-      ['sessions', 'Sessions', sess.length, sess.length ? `<div class="rows plain">${sess.map(sessionRow).join('')}</div>` : '<div class="none">Nothing running.</div>'],
+      ['sessions', 'Sessions', sess.length, sess.length ? `<div class="rows plain">${sess.map(s => sessionRow(s, e.id)).join('')}</div>` : '<div class="none">Nothing running.</div>'],
       effortPulls(e),
       effortQuestions(e, qs),
       effortDays(e, pastOf(e).days),
@@ -1370,7 +1381,7 @@ function effortDetailLive(e) {
       ${needs.length ? `<div style="margin:0 -18px">${needs.map(i => rowHtml(i, 'openItem')).join('')}</div>` : '<div class="none">Nothing. This is moving without you, or not moving at all.</div>'}</div>
     ${effortTabs([
       ['sessions', 'Sessions', sess.length, `${starting === e.id ? startForm(e) : ''}
-        ${sess.length ? `<div class="rows plain">${sess.map(x => `<div class="srow"><span class="dot ${statusOf(x)[0]}"></span>
+        ${sess.length ? `<div class="rows plain">${sess.map(x => `<div class="srow" ${dragsFrom(x.id, e.id)}><span class="dot ${statusOf(x)[0]}"></span>
           <div class="body"><div class="ttl"><button data-act="openSession" data-id="${x.id}" title="Open this session">${esc(clip(x.label, 90))}</button></div>
             ${x.insight?.title ? `<div class="sub">${esc(clip(x.insight.title, 90))}</div>` : ''}
             <div class="sub">${statusOf(x)[1]} · <span class="mono">${esc(shortPath(x.cwd))}</span>${x.effortVia ? ` · ${VIA[x.effortVia]}` : ''}</div></div>
@@ -1494,6 +1505,23 @@ const newEffortMini = () => adding ? `<form class="ecard mini new" data-form="ef
       <input name="about" data-keep="effort-about" placeholder="One line on what it covers" aria-label="What it covers">
       <span class="send"><button type="button" class="btn" data-act="effortAddCancel">Cancel</button><button class="btn go">Add</button></span>
     </form>` : '<button class="ecard mini new" data-act="effortAdd">+ New effort</button>';
+/* What makes a session's row one that can be dragged onto an effort, from the effort it is filed under. */
+const dragsFrom = (id, from) => `draggable="true" data-session="${esc(id)}" data-from="${from}" title="Drag onto an effort to file it there"`;
+/* The open sessions filed under no effort, beneath the column, each to be dragged onto the effort it belongs to. */
+function unsortedTray() {
+  const list = live ? live.filter(s => !s.effort).map(s => [s.id, statusOf(s), s.label]) : SESSIONS.filter(s => sessEffort(s) === 'unsorted').map(s => [s.id, [s.status, STATUS[s.status]], s.title || s.name]);
+  if (!list.length || state.effortSel === 'unsorted') return '';
+  return `<div class="tray"><div class="label">Unsorted sessions</div><div class="none">Drag one onto an effort to file it there.</div>
+    ${list.map(([id, [dot, word], label]) => `<div class="trow" ${dragsFrom(id, 'unsorted')}><span class="dot ${dot}" title="${word}"></span>${live ? `<button data-act="openSession" data-id="${esc(id)}">${esc(clip(label, 60))}</button>` : `<span>${esc(clip(label, 60))}</span>`}</div>`).join('')}</div>`;
+}
+/* Files a session under an effort, or under none when given Unsorted, as the menu on a session does. */
+function fileSession(id, to) {
+  if (live) { changes.liveMove({ id }, { value: to }); return; }
+  const prev = state.sessMoved[id];
+  state.sessMoved[id] = to;
+  toast(to === 'unsorted' ? 'Left unsorted' : `Filed under ${effortById(to).name}`, () => { if (prev) state.sessMoved[id] = prev; else delete state.sessMoved[id]; });
+}
+
 /* The efforts the user has shelved, under the board: shut until asked for, unless something in one needs the user. */
 function shelf() {
   const list = live ? liveEfforts.filter(e => e.shelved) : [];
@@ -1512,10 +1540,13 @@ function viewEfforts() {
     <div class="board">${cardEfforts().map(e => effortCard(e)).join('')}${live ? newEffortCard() : ''}</div>
     ${shelf()}
   </div></div>`;
+  /* The column always has Unsorted, so that a session can be dragged out of an effort, and the open effort, shelved or not. */
   const e = effortById(state.effortSel), all = cardEfforts();
+  if (live && !all.includes(LIVE_UNSORTED)) all.push(LIVE_UNSORTED);
+  if (!all.some(x => x.id === e.id)) all.push(e);
   return `<div class="split efx">
     <section class="pane estack" data-scroll="eff-stack"><button class="back" data-act="effortBoard" title="Back to the board (Esc)">‹ All efforts</button>
-      ${(all.some(x => x.id === e.id) ? all : all.concat(e)).map(x => effortCard(x, true, x.id === e.id)).join('')}${live ? newEffortMini() : ''}</section>
+      ${all.map(x => effortCard(x, true, x.id === e.id)).join('')}${live ? newEffortMini() : ''}${unsortedTray()}</section>
     <section class="pane detail" data-scroll="eff-${e.id}"><div class="ebig ${e.id === 'unsorted' ? 'loose' : ''}">${live ? effortDetailLive(e) : effortDetail(e)}</div></section>
   </div>`;
 }
@@ -1536,7 +1567,28 @@ function moveEffort(id, before) {
    dragged is the card while it is held, dropped whether it was let go on the page, and settling when the
    others will have finished moving aside. */
 let dragged = null, dropped = false, settling = 0;
+/* Dragging a session's row onto an effort files it there: onto a card in the column, or onto the large card
+   for the effort that is open. filing is the row while it is held, and dropOn the effort it is over, if
+   that is not the one it is already filed under. */
+let filing = null, dropOn = null;
+const dropTarget = el => {
+  const on = el?.closest?.('.estack .ecard[data-id], .ebig'), to = on && (on.matches('.ebig') ? state.effortSel : on.dataset.id);
+  return to && to !== filing.dataset.from ? on : null;
+};
+function overEffort(on) {
+  if (on === dropOn) return;
+  dropOn?.classList.remove('drop');
+  (dropOn = on)?.classList.add('drop');
+}
 document.addEventListener('dragstart', e => {
+  const row = e.target.closest?.('[data-session][draggable]');
+  if (row) {
+    filing = row;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', row.dataset.session);
+    requestAnimationFrame(() => row.classList.add('dragging'));
+    return;
+  }
   const card = e.target.closest?.('.ecard[draggable]');
   if (!card) return;
   dragged = card; dropped = false;
@@ -1545,6 +1597,11 @@ document.addEventListener('dragstart', e => {
   requestAnimationFrame(() => card.classList.add('dragging'));
 });
 document.addEventListener('dragover', e => {
+  if (filing) {
+    overEffort(dropTarget(e.target));
+    if (dropOn) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }
+    return;
+  }
   if (!dragged) return;
   e.preventDefault();
   e.dataTransfer.dropEffect = 'move';
@@ -1559,8 +1616,12 @@ document.addEventListener('dragover', e => {
   }
   settling = performance.now() + 180;
 });
-document.addEventListener('drop', e => { if (dragged) { e.preventDefault(); dropped = true; } });
+document.addEventListener('drop', e => {
+  if (filing && dropOn) { e.preventDefault(); fileSession(filing.dataset.session, dropOn.matches('.ebig') ? state.effortSel : dropOn.dataset.id); }
+  if (dragged) { e.preventDefault(); dropped = true; }
+});
 document.addEventListener('dragend', () => {
+  if (filing) { filing = dropOn = null; save(); render(); return; }
   if (!dragged) return;
   const id = dragged.dataset.id, next = dragged.nextElementSibling;
   dragged = null;
@@ -2883,7 +2944,7 @@ function viewSettings() {
 const RENDER = { attention: viewAttention, efforts: viewEfforts, sessions: viewSessions, pulls: viewPulls, journal: viewJournal, knowledge: viewKnowledge, settings: viewSettings };
 
 function render() {
-  if (dragged) return;  // a card is held: the page is drawn again when it is let go
+  if (dragged || filing) return;  // a card or a session's row is held: the page is drawn again when it is let go
   if (morph) {
     morph = false;
     if (document.startViewTransition && !matchMedia('(prefers-reduced-motion: reduce)').matches) { document.startViewTransition(render); return; }
