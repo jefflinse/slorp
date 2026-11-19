@@ -868,6 +868,39 @@ func TestEffortsOverHTTP(t *testing.T) {
 	if code := f.post("/api/efforts/docs/move", `{"before":"nope"}`); code != 400 {
 		t.Errorf("moving ahead of an unknown effort = %d, want 400", code)
 	}
+	if code := f.post("/api/efforts/docs", `{"name":"Docs site","shelved":true}`); code != 204 {
+		t.Fatalf("edit = %d", code)
+	}
+	if e := f.state().Efforts[0]; e.ID != "docs" || e.Name != "Docs site" || e.About != "" || !e.Shelved {
+		t.Errorf("after an edit the effort is %+v", e)
+	}
+	if code := f.post("/api/efforts/docs", `{"about":"The site","shelved":false}`); code != 204 {
+		t.Fatalf("edit = %d", code)
+	}
+	if e := f.state().Efforts[0]; e.Name != "Docs site" || e.About != "The site" || e.Shelved {
+		t.Errorf("after a second edit the effort is %+v", e)
+	}
+	if code := f.post("/api/efforts/docs", `{"name":" "}`); code != 400 {
+		t.Errorf("a blank name = %d, want 400", code)
+	}
+	if code := f.post("/api/efforts/nope", `{}`); code != 400 {
+		t.Errorf("editing an unknown effort = %d, want 400", code)
+	}
+	if code, body := f.do("GET", "/api/efforts/"+id+"/past", "", nil); code != 200 || !strings.Contains(body, `"days":[]`) || !strings.Contains(body, `"closed":[]`) {
+		t.Errorf("past = %d %s", code, body)
+	}
+	if code, _ := f.do("GET", "/api/efforts/nope/past", "", nil); code != 404 {
+		t.Errorf("the past of an unknown effort = %d, want 404", code)
+	}
+	if code, _ := f.do("DELETE", "/api/efforts/"+id+"/dirs", `{"dir":"/work/a"}`, nil); code != 204 {
+		t.Fatalf("remove dir = %d", code)
+	}
+	if e := f.state().Efforts[1]; len(e.Dirs) != 0 {
+		t.Errorf("after removing its directory the effort has %v", e.Dirs)
+	}
+	if code, _ := f.do("DELETE", "/api/efforts/"+id+"/dirs", `{"dir":"/work/a"}`, nil); code != 400 {
+		t.Errorf("removing it again = %d, want 400", code)
+	}
 	if code, _ := f.do("DELETE", "/api/efforts/docs", "", nil); code != 204 {
 		t.Fatalf("delete = %d", code)
 	}

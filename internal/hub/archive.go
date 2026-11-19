@@ -2,6 +2,7 @@ package hub
 
 import (
 	"cmp"
+	"maps"
 	"slices"
 	"time"
 )
@@ -29,6 +30,67 @@ type Archived struct {
 	// Subagents are the agents it started, which its agent's own record is
 	// read for when one closed session is asked after.
 	Subagents []Subagent `json:"subagents,omitempty"`
+	// Used and CostUSD are what it had taken when it closed, zero for a
+	// session stored before that was kept.
+	Used    Tokens  `json:"used,omitzero"`
+	CostUSD float64 `json:"costUsd,omitempty"`
+}
+
+// Past is what an effort has behind it.
+type Past struct {
+	// Days are the days of the journal the effort moved on, the latest
+	// first, each as the journal has it.
+	Days []PastDay `json:"days"`
+	// Closed are the sessions filed under it that have closed, the latest
+	// to close first and without their timelines, of which there are
+	// ClosedCount in all.
+	Closed      []Archived `json:"closed"`
+	ClosedCount int        `json:"closedCount"`
+	// Used and CostUSD are what all its closed sessions took between them.
+	Used    Tokens  `json:"used"`
+	CostUSD float64 `json:"costUsd"`
+}
+
+// PastDay is an effort's part of one day of the journal.
+type PastDay struct {
+	Day string `json:"day"`
+	WrapupEffort
+}
+
+// pastDays and pastClosed are how much of an effort's past is given.
+const pastDays, pastClosed = 14, 50
+
+// Past returns what the effort has behind it, and false when there is no
+// such effort.
+func (h *Hub) Past(effortID string) (Past, bool) {
+	if !h.kb.Has(effortID) {
+		return Past{}, false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	p := Past{Days: []PastDay{}, Closed: []Archived{}}
+	for _, day := range slices.Backward(slices.Sorted(maps.Keys(h.wrapups))) {
+		if len(p.Days) == pastDays {
+			break
+		}
+		for _, e := range h.wrapups[day].Efforts {
+			if e.ID == effortID {
+				p.Days = append(p.Days, PastDay{Day: day, WrapupEffort: e})
+			}
+		}
+	}
+	for id, d := range h.archive {
+		if d.Effort != effortID {
+			continue
+		}
+		p.Closed = append(p.Closed, h.archived(id, d))
+		p.Used.In, p.Used.CacheWrite, p.Used.CacheRead, p.Used.Out = p.Used.In+d.Used.In, p.Used.CacheWrite+d.Used.CacheWrite, p.Used.CacheRead+d.Used.CacheRead, p.Used.Out+d.Used.Out
+		p.CostUSD += d.CostUSD
+	}
+	slices.SortFunc(p.Closed, func(a, b Archived) int { return cmp.Or(b.EndedAt.Compare(a.EndedAt), cmp.Compare(a.ID, b.ID)) })
+	p.ClosedCount = len(p.Closed)
+	p.Closed = p.Closed[:min(len(p.Closed), pastClosed)]
+	return p, true
 }
 
 // Archive returns one closed session with its timeline.
@@ -57,7 +119,7 @@ func (h *Hub) archives() []Archived {
 
 func (h *Hub) archived(id string, d sessionDoc) Archived {
 	a := Archived{ID: id, Agent: d.Agent, Label: cmp.Or(d.Label, id[:min(8, len(id))]), Cwd: d.Cwd, Branch: d.Branch,
-		StartedAt: d.StartedAt, EndedAt: d.Ended, Moments: len(d.Timeline)}
+		StartedAt: d.StartedAt, EndedAt: d.Ended, Moments: len(d.Timeline), Used: d.Used, CostUSD: d.CostUSD}
 	if h.kb.Has(d.Effort) {
 		a.Effort = d.Effort
 	}

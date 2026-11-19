@@ -125,3 +125,56 @@ func TestRetiredSessionsAreArchived(t *testing.T) {
 		t.Errorf("archive = %+v, want the session whose bridge went quiet", got)
 	}
 }
+
+func TestPast(t *testing.T) {
+	h, k, st := newHub(t)
+	a, err := k.Create("A", "")
+	must(t, err)
+	b, err := k.Create("B", "")
+	must(t, err)
+	must(t, k.AddDir(a.ID, "/work/a"))
+	must(t, k.AddDir(b.ID, "/work/b"))
+	closing := func(id, cwd string, used Tokens, cost float64) {
+		t.Helper()
+		open := append(h.Sessions(), Session{ID: id, Agent: agent, Status: Idle, Cwd: cwd, LastPrompt: "go", PromptAt: time.Now(), Used: used, CostUSD: cost})
+		h.SetRoster(agent, open)
+		h.SetRoster(agent, open[:len(open)-1])
+	}
+	closing("a1", "/work/a", Tokens{In: 100, CacheWrite: 10, CacheRead: 1000, Out: 20}, 1.25)
+	closing("b1", "/work/b", Tokens{In: 7, Out: 7}, 9)
+	closing("a2", "/work/a", Tokens{In: 1, CacheWrite: 2, CacheRead: 3, Out: 4}, 0.5)
+	h.wrapups["2026-11-16"] = Wrapup{Day: "2026-11-16", State: WrapupReady, Efforts: []WrapupEffort{{ID: a.ID, Name: "A", Summary: "Began."}}}
+	h.wrapups["2026-11-17"] = Wrapup{Day: "2026-11-17", State: WrapupReady, Efforts: []WrapupEffort{{ID: b.ID, Name: "B", Summary: "Elsewhere."}}}
+	h.wrapups["2026-11-18"] = Wrapup{Day: "2026-11-18", State: WrapupReady, Efforts: []WrapupEffort{{ID: b.ID, Name: "B"}, {ID: a.ID, Name: "A", Summary: "Finished.", Points: []WrapupPoint{{Text: "Did it"}}}}}
+
+	check := func(h *Hub) {
+		t.Helper()
+		p, ok := h.Past(a.ID)
+		if !ok {
+			t.Fatal("Past found no such effort")
+		}
+		if len(p.Closed) != 2 || p.ClosedCount != 2 || p.Closed[0].ID != "a2" || p.Closed[1].ID != "a1" || p.Closed[0].Timeline != nil || p.Closed[1].CostUSD != 1.25 {
+			t.Errorf("closed = %+v (%d), want the effort's two closed sessions, the latest first, without their timelines", p.Closed, p.ClosedCount)
+		}
+		if want := (Tokens{In: 101, CacheWrite: 12, CacheRead: 1003, Out: 24}); p.Used != want || p.CostUSD != 1.75 {
+			t.Errorf("used %+v costing %v, want %+v costing 1.75", p.Used, p.CostUSD, want)
+		}
+	}
+	check(h)
+	if p, _ := h.Past(a.ID); len(p.Days) != 2 || p.Days[0].Day != "2026-11-18" || p.Days[0].Summary != "Finished." || len(p.Days[0].Points) != 1 || p.Days[1].Day != "2026-11-16" {
+		t.Errorf("days = %+v, want the effort's part of the two days it moved on, the latest first", p.Days)
+	}
+	check(New(k, st))
+
+	if p, ok := h.Past(b.ID); !ok || p.ClosedCount != 1 || p.CostUSD != 9 || len(p.Days) != 2 {
+		t.Errorf("the other effort's past = %+v", p)
+	}
+	if _, ok := h.Past("nope"); ok {
+		t.Error("Past answered for an effort there is not")
+	}
+	empty, err := k.Create("C", "")
+	must(t, err)
+	if p, ok := h.Past(empty.ID); !ok || p.Days == nil || p.Closed == nil || len(p.Days)+len(p.Closed) != 0 {
+		t.Errorf("an effort with nothing behind it: %+v, %v; want empty lists", p, ok)
+	}
+}

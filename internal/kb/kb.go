@@ -19,6 +19,9 @@ type Effort struct {
 	About string `json:"about"`
 	// Dirs files every session working in or under one of these directories here.
 	Dirs []string `json:"dirs"`
+	// Shelved marks an effort the user has put aside: it keeps everything
+	// filed under it, and the model is no longer offered it.
+	Shelved bool `json:"shelved,omitempty"`
 }
 
 // How a session came to be filed under an effort.
@@ -106,6 +109,54 @@ func (s *Store) Create(name, about string) (Effort, error) {
 	s.f.Efforts = append(s.f.Efforts, e)
 	s.f.Revision++
 	return e, s.save()
+}
+
+// Edit gives an effort another name or description, leaving alone whichever
+// is nil. Its ID stays as it was made.
+func (s *Store) Edit(id string, name, about *string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i := s.index(id)
+	if i < 0 {
+		return errors.New("no such effort")
+	}
+	e := &s.f.Efforts[i]
+	if name != nil {
+		if strings.TrimSpace(*name) == "" {
+			return errors.New("an effort needs a name")
+		}
+		e.Name = strings.TrimSpace(*name)
+	}
+	if about != nil {
+		e.About = strings.TrimSpace(*about)
+	}
+	s.f.Revision++
+	return s.save()
+}
+
+// Shelve puts an effort aside, or brings it back.
+func (s *Store) Shelve(id string, shelved bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i := s.index(id)
+	if i < 0 {
+		return errors.New("no such effort")
+	}
+	if s.f.Efforts[i].Shelved == shelved {
+		return nil
+	}
+	s.f.Efforts[i].Shelved = shelved
+	s.f.Revision++
+	return s.save()
+}
+
+// Active reports whether id is an effort the model may file under: one that
+// exists and is not shelved.
+func (s *Store) Active(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i := s.index(id)
+	return i >= 0 && !s.f.Efforts[i].Shelved
 }
 
 // Move puts an effort just ahead of the effort named by before, or last when
@@ -217,6 +268,22 @@ func (s *Store) AddDir(effortID, dir string) error {
 		s.f.Efforts[j].Dirs = kept
 	}
 	s.f.Efforts[i].Dirs = append(s.f.Efforts[i].Dirs, dir)
+	return s.save()
+}
+
+// RemoveDir stops dir filing sessions under an effort.
+func (s *Store) RemoveDir(effortID, dir string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i := s.index(effortID)
+	if i < 0 {
+		return errors.New("no such effort")
+	}
+	at := slices.Index(s.f.Efforts[i].Dirs, filepath.Clean(dir))
+	if at < 0 {
+		return errors.New("no such directory in that effort")
+	}
+	s.f.Efforts[i].Dirs = slices.Delete(s.f.Efforts[i].Dirs, at, at+1)
 	return s.save()
 }
 

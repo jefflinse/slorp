@@ -253,6 +253,34 @@ func TestGuessStandsUntilReplaced(t *testing.T) {
 	}
 }
 
+func TestShelvedEffortIsNotOfferedToTheModel(t *testing.T) {
+	h, k, _ := newHub(t)
+	a, b := effort(t, k, "A"), effort(t, k, "B")
+	must(t, k.AddDir(b, "/held"))
+	h.SetRoster(agent, []Session{idle("s1", "/w", "done"), idle("s2", "/held", "done")})
+	describe(h, "s1", KindReview)
+	h.SetGuess("s1", h.Unrouted()[0].Key, a)
+
+	must(t, k.Shelve(a, true))
+	h.Touch()
+	if s := session(t, h, "s1"); s.Effort != "" {
+		t.Errorf("a guess still files a session under a shelved effort: %q", s.Effort)
+	}
+	work := h.Unrouted()
+	if len(work) != 1 || len(work[0].Efforts) != 1 || work[0].Efforts[0].ID != b {
+		t.Fatalf("Unrouted = %+v, want the session offered only the effort that is not shelved", work)
+	}
+
+	must(t, k.Shelve(b, true))
+	h.Touch()
+	if s := session(t, h, "s2"); s.Effort != b || s.EffortVia != kb.ViaDir {
+		t.Errorf("a shelved effort's directory no longer files: %q via %q", s.Effort, s.EffortVia)
+	}
+	if work := h.Unrouted(); len(work) != 0 {
+		t.Errorf("with every effort shelved the model is still asked to file: %+v", work)
+	}
+}
+
 func TestUnroutedLeavesFiledSessionsAlone(t *testing.T) {
 	h, k, _ := newHub(t)
 	a := effort(t, k, "A")

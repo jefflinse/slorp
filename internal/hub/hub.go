@@ -609,6 +609,8 @@ type sessionDoc struct {
 	Branch    string    `json:"branch,omitempty"`
 	StartedAt time.Time `json:"startedAt,omitzero"`
 	Ended     time.Time `json:"ended,omitzero"`
+	Used      Tokens    `json:"used,omitzero"`
+	CostUSD   float64   `json:"costUsd,omitempty"`
 }
 
 type ReplyState string
@@ -769,7 +771,7 @@ func (h *Hub) doc(s *Session) sessionDoc {
 	effort, _ := h.filed(s)
 	return sessionDoc{Insight: s.Insight, InsightKey: s.insightKey, Guess: s.guess, GuessKey: s.guessKey, InsightAt: s.insightAt,
 		RoleGuess: s.roleGuess, RoleKey: s.roleKey, Given: s.given, Pinned: s.pinned, Timeline: s.Timeline, Label: label, Effort: effort,
-		Agent: s.Agent, Cwd: s.Cwd, Branch: s.Branch, StartedAt: s.StartedAt}
+		Agent: s.Agent, Cwd: s.Cwd, Branch: s.Branch, StartedAt: s.StartedAt, Used: s.Used, CostUSD: s.CostUSD}
 }
 
 // filed returns the effort a session is filed under and how it came to be,
@@ -779,7 +781,7 @@ func (h *Hub) filed(s *Session) (effort, via string) {
 		return id, via
 	}
 	// A guess made on older content stands until a newer one replaces it.
-	if s.guess != "" && h.kb.Has(s.guess) {
+	if h.kb.Active(s.guess) {
 		return s.guess, ViaGuess
 	}
 	return "", ""
@@ -1361,7 +1363,7 @@ func (h *Hub) routeKey(s *Session) string {
 
 // Unrouted lists described sessions that still need the model to guess an effort.
 func (h *Hub) Unrouted() []Unrouted {
-	efforts := h.kb.Efforts()
+	efforts := slices.DeleteFunc(h.kb.Efforts(), func(e kb.Effort) bool { return e.Shelved })
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	var out []Unrouted

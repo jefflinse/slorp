@@ -398,6 +398,32 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
 .split.efx .pane.detail { padding: 26px 36px 28px 8px; }
 .ebig { min-height: 100%; padding: 26px 32px 40px; border: 1px solid var(--line); border-radius: 14px; background: var(--raised); container-type: inline-size; }
 .ebig.loose { background: transparent; border-style: dashed; }
+.shelf { margin-top: 34px; }
+.shelf .ghead { padding: 0 0 10px; }
+.shelf .ghead .name { flex: none; }
+button.ecard.new { cursor: pointer; color: var(--ink2); font-size: 13px; font-weight: 600; }
+button.ecard.new:hover { border-color: var(--ink3); color: var(--ink); }
+.ecard.mini.new .send { display: flex; justify-content: flex-end; gap: 8px; }
+.eedit { display: flex; flex-direction: column; gap: 8px; max-width: 740px; }
+.eedit input { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); }
+.eedit input.nm { font-size: 20px; font-weight: 600; }
+.eedit .send { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--ink3); font-size: 12px; }
+.eedit .send span:last-child { display: flex; gap: 8px; }
+.shelved { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 16px; padding: 10px 12px 10px 14px; border: 1px dashed var(--ink3); border-radius: 9px; color: var(--ink2); font-size: 13.5px; }
+.ebig .jday { margin-top: 18px; }
+.ebig .jday:first-child { margin-top: 0; }
+.ebig .tabbody .rows > .srow:first-child { padding-top: 2px; border-top: 0; }
+.ebig .tabbody .rows { margin: 0 -18px; }
+.ebig .tabbody .rows.plain { margin: 0; }
+.ebig .tabbody .label { margin: 24px 0 8px; }
+.ebig .jday h3 { font-size: 14.5px; }
+.ebig .jday .prose { font-size: 14.5px; }
+.srow .ttl button:hover { color: var(--accent); }
+.btn.danger { background: var(--err); color: var(--bg); border-color: transparent; font-weight: 600; }
+.modal h2 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -0.01em; }
+.modal ul { margin: 12px 0 0; padding-left: 20px; }
+.modal li { margin: 5px 0; font-size: 14.5px; line-height: 1.5; }
+.modal .mfoot .bar { margin: 0; }
 .epage { display: grid; grid-template-columns: minmax(0, 740px) minmax(240px, 360px); gap: 0 56px; align-items: start; }
 .epage aside { padding-top: 34px; }
 .epage aside .sec:first-child { margin-top: 0; }
@@ -773,7 +799,7 @@ const VIEWS = ['attention', 'efforts', 'sessions', 'pulls', 'journal', 'knowledg
 /* The views the top bar names, in its order; Settings is reached by its own button. Pull requests are named only while GitHub is turned on to list them. */
 const nav = () => VIEWS.filter(v => v !== 'settings' && !(v === 'pulls' && pullsOff()));
 const VIEW_NAMES = { pulls: 'PRs' };
-const fresh = () => ({ view: 'attention', sel: null, effortSel: null, effortOrder: null, kbSel: 'watch', setSel: 'general', groupBy: 'effort', srcFilter: 'all', pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto',
+const fresh = () => ({ view: 'attention', sel: null, effortSel: null, effortOrder: null, kbSel: 'watch', setSel: 'general', groupBy: 'effort', srcFilter: 'all', pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', effortTab: 'sessions', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto',
   handled: {}, moved: {}, sessMoved: {}, extra: [], arrived: {}, collapsed: {}, showHandled: false, variant: {}, rawOpen: {},
   actSel: null, pullSel: null, journalSel: null, pullTab: 'talk', expanded: {}, kb: structuredClone(KB_SEED), seq: 100 });
 let state = fresh();
@@ -1051,11 +1077,13 @@ function effortDetail(e) {
     <div class="sec"><div class="label"><span>${spark}Where this stands</span></div><p class="prose">${esc(e.stands)}</p></div>
     <div class="sec"><div class="label"><span>Needs you (${needs.length})</span></div>
       ${needs.length ? `<div style="margin:0 -18px">${needs.map(i => rowHtml(i, 'openItem')).join('')}</div>` : '<div class="none">Nothing. This effort is moving without you.</div>'}</div>
-    <div class="sec"><div class="label"><span>Sessions and workers (${sess.length})</span></div>
-      ${sess.length ? sess.map(sessionRow).join('') : '<div class="none">Nothing running.</div>'}</div>
+    ${effortTabs([
+      ['sessions', 'Sessions', sess.length, sess.length ? `<div class="rows plain">${sess.map(sessionRow).join('')}</div>` : '<div class="none">Nothing running.</div>'],
+      effortPulls(e),
+      ['questions', 'Open questions', qs.length, qs.length ? `<div class="rows plain">${qs.map(q => `<div class="srow"><div class="body">${esc(q.text)}</div><span class="side">${ago(q.age)}</span></div>`).join('')}</div>` : '<div class="none">None recorded.</div>', manage('questions')],
+      effortDays(e, pastOf(e).days),
+    ])}
   </div><aside>
-    <div class="sec"><div class="label"><span>Open questions (${qs.length})</span><button data-act="kbGo" data-s="questions">Manage ›</button></div>
-      ${qs.length ? qs.map(q => `<div class="srow"><div class="body">${esc(q.text)}</div><span class="side">${ago(q.age)}</span></div>`).join('') : '<div class="none">None recorded.</div>'}</div>
     <div class="sec"><div class="label"><span>Watching</span><button data-act="kbGo" data-s="watch">Manage ›</button></div>
       ${watch.length ? watch.map(w => `<div class="srow"><div class="body"><b>${esc(w.name)}</b><div class="sub">${esc(w.seen)}</div></div><span class="side">${ago(w.seenAge)}</span></div>`).join('') : '<div class="none">No people or channels tied to this effort.</div>'}</div>
     ${e.lately.length ? `<div class="sec"><div class="label"><span>${spark}Lately</span></div><div class="time">${e.lately.map(([a, x]) => `<span class="a">${ago(a)}</span><span class="what">${esc(x)}</span>`).join('')}</div></div>` : ''}
@@ -1069,7 +1097,7 @@ function moveSelect(s) {
   const cur = s.effort || 'unsorted';
   return `<select class="btn" data-change="liveMove" data-id="${s.id}" aria-label="Move to another effort">
     <option value="">Move to…</option>
-    ${liveEfforts.concat(LIVE_UNSORTED).filter(e => e.id !== cur).map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join('')}
+    ${openEfforts().concat(LIVE_UNSORTED).filter(e => e.id !== cur).map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join('')}
     <option value="__new">New effort…</option></select>`;
 }
 
@@ -1217,6 +1245,71 @@ function startForm(e) {
       <span><button type="button" class="btn" data-act="startCancel">Cancel</button><button class="btn go" ${launching ? 'disabled' : ''}>${launching ? 'Starting…' : 'Start'}</button></span></div>
   </form>`;
 }
+/* What an effort has behind it: the days of the journal it moved on, and its closed sessions with what they
+   used. It is fetched when the effort is opened, and again whenever the journal or the closed sessions change. */
+let pasts = {};
+const pastAsked = {};
+function fetchPast(id) {
+  const stamp = JSON.stringify([journal.map(d => [d.day, d.at]), archive.length, archive[0]?.id, archive[0]?.endedAt]);
+  if (pastAsked[id] === stamp) return;
+  pastAsked[id] = stamp;
+  fetch(`/api/efforts/${encodeURIComponent(id)}/past`).then(r => r.ok ? r.json() : null).then(p => { if (p) { pasts[id] = p; render(); } }).catch(() => { delete pastAsked[id]; });
+}
+const pastOf = e => live ? pasts[e.id] : { days: MOCK_JOURNAL.flatMap(w => w.efforts.filter(x => x.id === e.id).map(x => ({ ...x, day: w.day }))), closed: [], closedCount: 0 };
+
+/* The parts of an effort's card that take turns beneath what needs the user, each behind a tab: its key, its
+   name, how many things it holds, what it shows, and what can be done from it. The tab last chosen is the
+   one open, wherever there is such a part. */
+function effortTabs(parts) {
+  parts = parts.filter(Boolean);
+  const on = parts.find(([key]) => key === state.effortTab) || parts[0];
+  return `<div class="tabs" role="tablist">${parts.map(([key, name, n]) => `<button class="label ${on[0] === key ? 'on' : ''}" role="tab" aria-selected="${on[0] === key}" data-act="effortTab" data-t="${key}">${name}${n === '' ? '' : `<span class="n">${n}</span>`}</button>`).join('')}
+      ${on[4] ? `<span class="tools">${on[4]}</span>` : ''}</div>
+    <div class="tabbody" role="tabpanel">${on[3]}</div>`;
+}
+const manage = sec => `<button class="btn" data-act="kbGo" data-s="${sec}">Manage</button>`;
+/* The pull requests filed under an effort, each a way to its page. There is no such part while there is nowhere for them to come from. */
+function effortPulls(e) {
+  if (pullsOff()) return null;
+  const list = allPulls().filter(p => (p.effort || 'unsorted') === e.id);
+  return ['pulls', 'PRs', list.length, list.length ? `<div class="rows">${list.map(p => pullRow(p, 'pullOpen')).join('')}</div>` : '<div class="none">No open pull requests are filed here.</div>'];
+}
+/* The days an effort moved on as the journal has them, the latest first: the last two in full, and the rest
+   behind a button. days is undefined until they have been fetched. */
+function effortDays(e, days) {
+  if (!days) return ['journal', 'Journal', '', '<div class="none">Looking through the journal…</div>'];
+  const shown = state.expanded['days:' + e.id] ? days : days.slice(0, 2), more = days.length - shown.length;
+  return ['journal', 'Journal', days.length, days.length ? `<div class="jr">
+      ${shown.map(d => `<div class="jday"><h3><button data-act="journalOpen" data-id="${esc(d.day)}">${esc(dayName(d.day))} ›</button></h3>${journalPart(d)}</div>`).join('')}
+      ${more > 0 ? `<button class="link" style="margin-top:14px;font-size:12.5px" data-act="expand" data-id="days:${e.id}">Show ${num(more)} earlier day${more === 1 ? '' : 's'}</button>` : ''}</div>`
+    : `<div class="none">The journal has nothing on this effort yet. A day is written when you wrap it up${modelless() ? ', which needs a local model' : ', or the day after'}.</div>`];
+}
+/* The sessions filed under an effort that have closed, the latest first: a few of them, and the rest behind
+   a button. One still listed under Sessions leads there. */
+function effortClosed(e, past) {
+  if (!past || !past.closedCount) return '';
+  const shown = state.expanded['closed:' + e.id] ? past.closed : past.closed.slice(0, 4), more = past.closed.length - shown.length;
+  return `<div class="label">Closed (${past.closedCount})</div>
+      <div class="rows">${shown.map(a => closedRow(a, archive.some(x => x.id === a.id) ? 'journalSession' : '')).join('')}</div>
+      ${more > 0 ? `<button class="link" style="margin-top:8px;font-size:12.5px" data-act="expand" data-id="closed:${e.id}">Show ${num(more)} more</button>`
+        : past.closedCount > past.closed.length ? `<div class="none">The latest ${num(past.closed.length)} are listed.</div>` : ''}`;
+}
+/* What an effort's sessions have used between them, open and closed. */
+function effortUsage(sess, past) {
+  const of = u => (u?.in || 0) + (u?.cacheWrite || 0) + (u?.out || 0);
+  const open = [sess.reduce((n, s) => n + of(s.used), 0), sess.reduce((n, s) => n + (s.costUsd || 0), 0)], closed = [of(past?.used), past?.costUsd || 0];
+  if (!open[0] && !closed[0]) return '';
+  const said = ([n, usd]) => n ? `${usd ? `≈${money(usd)} · ` : ''}${tokens(n)} tokens` : 'nothing recorded';
+  const about = 'New tokens sent and written by the model, in the sessions and their subagents. What was read back from the cache is left out.';
+  return `<div class="sec"><div class="label"><span title="${about}">What it has used</span></div>
+      <dl class="facts"><dt>In all</dt><dd><b>${said([open[0] + closed[0], open[1] + closed[1]])}</b></dd>
+        <dt>${plural(sess.length, 'open session')}</dt><dd>${said(open)}</dd>
+        ${past?.closedCount ? `<dt>${plural(past.closedCount, 'closed session')}</dt><dd>${said(closed)}</dd>` : ''}</dl>
+      <div class="none" style="margin-top:8px">The cost is each agent's own estimate at list prices; inside a subscription it is not a charge. A session that closed before Slorp kept what it used counts for nothing.</div></div>`;
+}
+
+/* The effort whose name and description are being edited, and whether its box still wants the cursor. */
+let editing = null, editFocus = false;
 function effortDetailLive(e) {
   const sess = live.filter(s => (s.effort || 'unsorted') === e.id);
   const needs = activeItems().filter(i => i.effort === e.id).sort(byUrgency);
@@ -1225,34 +1318,74 @@ function effortDetailLive(e) {
     : !sess.length ? 'No open sessions are filed here right now.'
     : e.stands || (modelless() ? `${NO_MODEL} to write this.` : 'Not written yet.');
   const qs = knowledge.questions.filter(q => q.effort === e.id), watch = knowledge.watch.filter(w => w.efforts.includes(e.id));
+  if (real) fetchPast(e.id);
+  const past = real ? pasts[e.id] : null;
+  const menu = real ? actsMenu(e.id, 'Rename, shelve or delete', `<button data-act="effortEdit" data-id="${e.id}">Rename or describe</button>
+      <button data-act="effortShelve" data-id="${e.id}" data-to="${e.shelved ? 0 : 1}">${e.shelved ? 'Bring it back' : 'Shelve it'}</button>
+      <button data-act="effortDelete" data-id="${e.id}">Delete…</button>`) : '';
+  const head = editing === e.id ? `<form class="eedit" data-form="effortEdit" data-id="${e.id}">
+      <input class="nm" name="name" data-keep="eedit-name-${e.id}" value="${esc(e.name)}" maxlength="80" required aria-label="Name of the effort">
+      <input name="about" data-keep="eedit-about-${e.id}" value="${esc(e.about || '')}" maxlength="300" placeholder="One line on what it covers" aria-label="What it covers">
+      <div class="send"><span>The description is what the model reads when it files sessions.</span>
+        <span><button type="button" class="btn" data-act="effortEditCancel">Cancel</button><button class="btn go">Save</button></span></div></form>`
+    : `<div class="titled"><h1>${esc(e.name)}${real ? `<button class="pen" data-act="effortEdit" data-id="${e.id}" title="Rename or describe this effort" aria-label="Rename or describe this effort">✎</button>` : ''}</h1>${menu}</div>
+    ${e.about ? `<p class="lede" style="margin-bottom:0">${esc(e.about)}</p>` : real ? `<p class="lede" style="margin-bottom:0"><button class="link" data-act="effortEdit" data-id="${e.id}">Say what it covers</button>, so the model knows what to file here.</p>` : ''}`;
   return `<div class="epage"><div>
     <div class="crumb"><span class="mono">${esc(e.raw)}</span></div>
-    <h1>${esc(e.name)}</h1>
-    ${e.about ? `<p class="lede" style="margin-bottom:0">${esc(e.about)}</p>` : ''}
+    ${head}
+    ${e.shelved ? `<div class="shelved"><span>Shelved. It is off the board and the model files nothing new here. Everything filed under it is kept.</span><button class="btn" data-act="effortShelve" data-id="${e.id}" data-to="0">Bring it back</button></div>` : ''}
     <div class="sec"><div class="label"><span>${real && e.stands && sess.length ? spark : ''}Where this stands</span></div><p class="prose">${esc(stands)}</p></div>
     <div class="sec"><div class="label"><span>Needs you (${needs.length})</span></div>
       ${needs.length ? `<div style="margin:0 -18px">${needs.map(i => rowHtml(i, 'openItem')).join('')}</div>` : '<div class="none">Nothing. This is moving without you, or not moving at all.</div>'}</div>
-    <div class="sec"><div class="label"><span>Sessions (${sess.length})</span>${starting === e.id ? '' : `<button data-act="startOpen" data-id="${e.id}">Start one ›</button>`}</div>
-      ${starting === e.id ? startForm(e) : ''}
-      ${sess.length ? sess.map(x => `<div class="srow"><span class="dot ${statusOf(x)[0]}"></span>
-        <div class="body"><div class="ttl">${esc(clip(x.label, 90))}</div>
-          ${x.insight?.title ? `<div class="sub">${esc(clip(x.insight.title, 90))}</div>` : ''}
-          <div class="sub">${statusOf(x)[1]} · <span class="mono">${esc(shortPath(x.cwd))}</span>${x.effortVia ? ` · ${VIA[x.effortVia]}` : ''}</div></div>
-        ${roleChip(x)}${moveSelect(x)}</div>`).join('') : '<div class="none">None.</div>'}</div>
+    ${effortTabs([
+      ['sessions', 'Sessions', sess.length, `${starting === e.id ? startForm(e) : ''}
+        ${sess.length ? `<div class="rows plain">${sess.map(x => `<div class="srow"><span class="dot ${statusOf(x)[0]}"></span>
+          <div class="body"><div class="ttl"><button data-act="openSession" data-id="${x.id}" title="Open this session">${esc(clip(x.label, 90))}</button></div>
+            ${x.insight?.title ? `<div class="sub">${esc(clip(x.insight.title, 90))}</div>` : ''}
+            <div class="sub">${statusOf(x)[1]} · <span class="mono">${esc(shortPath(x.cwd))}</span>${x.effortVia ? ` · ${VIA[x.effortVia]}` : ''}</div></div>
+          ${roleChip(x)}${moveSelect(x)}</div>`).join('')}</div>` : '<div class="none">None are open.</div>'}
+        ${effortClosed(e, past)}`, starting === e.id ? '' : `<button class="btn" data-act="startOpen" data-id="${e.id}">Start one</button>`],
+      effortPulls(e),
+      real && ['questions', 'Open questions', qs.length, qs.length ? `<div class="rows plain">${qs.map(q => `<div class="srow"><div class="body">${esc(q.text)}</div><span class="side">${ago(minsSince(q.at))}</span></div>`).join('')}</div>` : '<div class="none">None recorded.</div>', manage('questions')],
+      real && effortDays(e, past?.days),
+    ])}
   </div>${real ? `<aside>
-    <div class="sec"><div class="label"><span>Open questions (${qs.length})</span><button data-act="kbGo" data-s="questions">Manage ›</button></div>
-      ${qs.map(q => `<div class="srow"><div class="body">${esc(q.text)}</div><span class="side">${ago(minsSince(q.at))}</span></div>`).join('') || '<div class="none">None recorded.</div>'}</div>
+    ${effortUsage(sess, past)}
     ${watch.length ? `<div class="sec"><div class="label"><span>Watching</span><button data-act="kbGo" data-s="watch">Manage ›</button></div>
       ${watch.map(w => `<div class="srow"><div class="body"><b>${esc(w.name)}</b><div class="sub">${esc(w.why)}</div></div></div>`).join('')}</div>` : ''}
     <div class="sec"><div class="label"><span>Directories filed here automatically</span></div>
-      ${e.dirs.length ? e.dirs.map(d => `<div class="none mono">${esc(tilde(d))}</div>`).join('') : '<div class="none">None yet. Move a session here and choose to remember its directory.</div>'}</div>
-    <div class="bar" style="margin-top:34px"><button class="btn quiet" data-act="effortDelete" data-id="${e.id}">Delete this effort</button></div>
+      ${e.dirs.length ? e.dirs.map(d => `<div class="srow"><div class="body mono">${esc(tilde(d))}</div><button class="x" data-act="dirRemove" data-id="${e.id}" data-dir="${esc(d)}" title="Stop filing sessions in this directory here" aria-label="Stop filing ${esc(tilde(d))} here">×</button></div>`).join('')
+        : '<div class="none">None yet. Move a session here and choose to remember its directory.</div>'}</div>
   </aside>` : ''}</div>`;
+}
+
+/* Asks before an effort is deleted, saying what goes with it and offering to shelve it instead. */
+let modalId = null;
+function deleteModal() {
+  const e = liveEfforts.find(x => x.id === modalId);
+  if (!e) { modal = null; return ''; }
+  const open = live.filter(s => s.effort === e.id).length, closed = pasts[e.id]?.closedCount || 0;
+  const qs = knowledge.questions.filter(q => q.effort === e.id).length, watch = knowledge.watch.filter(w => w.efforts.includes(e.id)).length;
+  const sessions = [open && plural(open, 'open session'), closed && plural(closed, 'closed session')].filter(Boolean);
+  const goes = [
+    sessions.length && `${cap(listOf(sessions))} filed here ${open + closed === 1 ? 'is' : 'are'} left unsorted.`,
+    e.dirs.length && `${e.dirs.length === 1 ? 'Its directory stops' : `Its ${num(e.dirs.length)} directories stop`} filing sessions.`,
+    qs && `${cap(plural(qs, 'open question'))} ${qs === 1 ? 'is' : 'are'} kept, under no effort.`,
+    watch && `${cap(plural(watch, 'thing'))} it watches ${watch === 1 ? 'loses its' : 'lose their'} tie to it.`,
+    'Any repository you filed here is unsorted again, and what the model wrote of where it stands is dropped. The journal keeps what it says of it.',
+  ].filter(Boolean);
+  return `<div class="veil" data-act="modalClose"><div class="modal" data-act="noop" role="alertdialog" aria-label="Delete this effort">
+    <h2>Delete ${esc(e.name)}?</h2>
+    <ul>${goes.map(g => `<li>${g}</li>`).join('')}</ul>
+    <p class="prose" style="margin-top:14px">This cannot be undone.${e.shelved ? '' : ' Shelving it takes it off the board and keeps all of this.'}</p>
+    <div class="mfoot"><button class="btn" data-act="modalClose">Cancel</button>
+      <span class="bar">${e.shelved ? '' : `<button class="btn" data-act="effortShelve" data-id="${e.id}" data-to="1">Shelve it instead</button>`}<button class="btn danger" data-act="effortDeleteYes" data-id="${e.id}">Delete it</button></span></div>
+  </div></div>`;
 }
 
 /* The efforts there are cards for, in the user's order, with Unsorted last where anything is. */
 const cardEfforts = () => !live ? EFFORTS.concat(UNSORTED)
-  : liveEfforts.concat(live.some(s => !s.effort) || liveItems.some(i => i.effort === 'unsorted') || !liveEfforts.length ? [LIVE_UNSORTED] : []);
+  : openEfforts().concat(live.some(s => !s.effort) || liveItems.some(i => i.effort === 'unsorted') || !openEfforts().length ? [LIVE_UNSORTED] : []);
 /* What a card says of an effort: the things in it that need the user, the most pressing first, and its
    sessions, each as its status and what to say of it. */
 function effortFacts(e) {
@@ -1267,9 +1400,9 @@ const cardName = e => `view-transition-name:effort-${e.id}`;
 /* An effort as a card: what it is, where it stands, the first things in it that need the user, and its
    sessions as dots. A mini card is one collapsed in the column beside the effort that is open, and keeps only
    the name, how many things need the user, and the dots; sel marks the one that is open. Unsorted, which the
-   user did not declare, stays where it is put. */
+   user did not declare, and a shelved effort stay where they are put. */
 function effortCard(e, mini, sel) {
-  const { needs, dots } = effortFacts(e), n = needs.length, shown = needs.slice(0, 2), loose = e.id === 'unsorted';
+  const { needs, dots } = effortFacts(e), n = needs.length, shown = needs.slice(0, 2), loose = e.id === 'unsorted' || !!e.shelved;
   const line = state.fluent && e.line && (!live || dots.length) ? `<p class="l">${spark}${esc(e.line)}</p>` : e.about ? `<p class="l">${esc(e.about)}</p>` : '';
   const about = `${e.name}: ${n ? `${num(n)} need${n === 1 ? 's' : ''} you` : 'nothing needs you'}, ${plural(dots.length, 'session')}`;
   return `<div class="ecard ${mini ? 'mini' : ''} ${sel ? 'sel' : ''} ${loose ? 'loose' : ''}" role="button" tabindex="0" ${sel ? 'aria-current="true"' : ''} ${loose ? '' : `draggable="true" aria-keyshortcuts="${mini ? 'Shift+ArrowUp Shift+ArrowDown' : 'Shift+ArrowLeft Shift+ArrowRight'}"`} data-act="effort" data-id="${e.id}" style="${cardName(e)}" aria-label="${esc(about)}">
@@ -1292,6 +1425,22 @@ const newEffortCard = () => `<form class="ecard new" data-form="effort">
       <p class="none">${modelless() ? `${NO_MODEL}, so sessions are filed by an effort's directories or by you.` : liveEfforts.length ? 'The description is what the model reads when it files sessions.' : 'Declare an effort and Slorp will start filing sessions under it.'}</p>
     </form>`;
 
+/* Whether the form for a new effort is open in the column, and whether its box still wants the cursor. */
+let adding = false, addFocus = false;
+const newEffortMini = () => adding ? `<form class="ecard mini new" data-form="effort">
+      <input name="name" data-keep="effort-name" placeholder="Name of the effort" required aria-label="Name of the effort">
+      <input name="about" data-keep="effort-about" placeholder="One line on what it covers" aria-label="What it covers">
+      <span class="send"><button type="button" class="btn" data-act="effortAddCancel">Cancel</button><button class="btn go">Add</button></span>
+    </form>` : '<button class="ecard mini new" data-act="effortAdd">+ New effort</button>';
+/* The efforts the user has shelved, under the board: shut until asked for, unless something in one needs the user. */
+function shelf() {
+  const list = live ? liveEfforts.filter(e => e.shelved) : [];
+  if (!list.length) return '';
+  const open = state.shelfOpen || list.some(e => effortFacts(e).needs.length);
+  return `<div class="shelf"><div class="ghead"><button class="name" data-act="shelf"><span class="chev ${open ? '' : 'shut'}">▼</span> Shelved</button><span class="n">${list.length}</span></div>
+    ${open ? `<div class="board">${list.map(e => effortCard(e, true)).join('')}</div>` : ''}</div>`;
+}
+
 /* Efforts: the board of them all, or, with one opened, that one as a large card that fills the view beside
    a column of them all collapsed, where the open one is marked and clicking another opens it instead. */
 function viewEfforts() {
@@ -1299,11 +1448,12 @@ function viewEfforts() {
   if (!state.effortSel) return `<div class="full" data-scroll="eff-board"><div class="page">
     <h1>Efforts</h1><p class="lede">${live && !liveEfforts.length ? 'The work you track across sessions. Nothing is declared yet.' : BOARD_LEDE}</p>
     <div class="board">${cardEfforts().map(e => effortCard(e)).join('')}${live ? newEffortCard() : ''}</div>
+    ${shelf()}
   </div></div>`;
   const e = effortById(state.effortSel), all = cardEfforts();
   return `<div class="split efx">
     <section class="pane estack" data-scroll="eff-stack"><button class="back" data-act="effortBoard" title="Back to the board (Esc)">‹ All efforts</button>
-      ${(all.some(x => x.id === e.id) ? all : all.concat(e)).map(x => effortCard(x, true, x.id === e.id)).join('')}</section>
+      ${(all.some(x => x.id === e.id) ? all : all.concat(e)).map(x => effortCard(x, true, x.id === e.id)).join('')}${live ? newEffortMini() : ''}</section>
     <section class="pane detail" data-scroll="eff-${e.id}"><div class="ebig ${e.id === 'unsorted' ? 'loose' : ''}">${live ? effortDetailLive(e) : effortDetail(e)}</div></section>
   </div>`;
 }
@@ -1538,8 +1688,10 @@ function itemMenu(it, more) {
   return actsMenu(it.id, 'Snooze, dismiss, move and more', `${menuPart('snooze', 'Snooze', `<button data-act="snooze" data-id="${it.id}" data-for="hour">For an hour</button><button data-act="snooze" data-id="${it.id}" data-for="tomorrow">Until tomorrow</button>`)}
       <button data-act="dismiss" data-id="${it.id}">Dismiss</button>${more}`);
 }
+/* The user's efforts that are not shelved: the ones on the board, and the ones things can be filed under. */
+const openEfforts = () => liveEfforts.filter(e => !e.shelved);
 /* The efforts a live session or repository could be filed under other than cur. */
-const effortsBut = cur => liveEfforts.concat(LIVE_UNSORTED).filter(e => e.id !== cur).map(e => [e.id, e.name]).concat([['__new', 'New effort…']]);
+const effortsBut = cur => openEfforts().concat(LIVE_UNSORTED).filter(e => e.id !== cur).map(e => [e.id, e.name]).concat([['__new', 'New effort…']]);
 /* The menu beside a session's title: what can be done with the session, after what can be done with its item, if it has one. */
 function sessionMenu(s, it) {
   const roles = knowledge.roles.filter(r => !(r.id === s.role && s.roleVia === 'you')).map(r => [r.id, r.name])
@@ -1942,13 +2094,14 @@ function sessionRowLive(s) {
   </button>`;
 }
 
-function closedRow(a) {
+function closedRow(a, act = 'actSel') {
   const name = state.fluent ? `<span class="t">${esc(clip(a.label, 90))}</span>` : `<span class="mono t">${esc(`${a.agent} · ${shortPath(a.cwd || '')} · ${a.id.slice(0, 8)}`)}</span>`;
-  return `<button class="row ${a.id === state.actSel ? 'sel' : ''}" data-act="actSel" data-id="${a.id}" style="${kindColor(a.agent)}">
+  const tag = act ? 'button' : 'div';
+  return `<${tag} class="row ${act === 'actSel' && a.id === state.actSel ? 'sel' : ''}" ${act ? `data-act="${act}" data-id="${a.id}"` : 'title="Closed too long ago to be listed under Sessions"'} style="${kindColor(a.agent)}">
     <span class="h">${name}<span class="w"><span>${ago(minsSince(a.endedAt))}</span></span></span>
     ${state.fluent && a.title ? `<span class="st">${esc(clip(a.title, 160))}</span>` : ''}
-    ${state.rows === 'short' ? '' : `<span class="m">${a.agent ? kindBadge(a.agent) : ''}${a.effort ? `<span>${esc(effortById(a.effort).name)}</span>` : ''}</span>`}
-  </button>`;
+    ${state.rows === 'short' || act !== 'actSel' ? '' : `<span class="m">${a.agent ? kindBadge(a.agent) : ''}${a.effort ? `<span>${esc(effortById(a.effort).name)}</span>` : ''}</span>`}
+  </${tag}>`;
 }
 
 /* A closed session's page: how it stood when it closed, a way back into it, and its timeline. */
@@ -2081,9 +2234,9 @@ function pullGroups() {
 }
 const pullsShown = () => pullGroups().flatMap(([key, , list]) => state.collapsed['pr:' + key] ? [] : list);
 
-function pullRow(p) {
+function pullRow(p, act = 'pullSel') {
   const [word, tone] = pullState(p), open = openPoints(p).length, next = state.fluent && p.brief?.next;
-  return `<button class="row ${pullKey(p) === state.pullSel ? 'sel' : ''}" data-act="pullSel" data-id="${esc(pullKey(p))}" style="${kindColor('github')}">
+  return `<button class="row ${act === 'pullSel' && pullKey(p) === state.pullSel ? 'sel' : ''}" data-act="${act}" data-id="${esc(pullKey(p))}" style="${kindColor('github')}">
     <span class="h"><span class="t">${esc(clip(p.title, 90))}</span><span class="w"><span>${ago(pullAt(p))}</span>${p.urgency === 'blocking' || p.urgency === 'awaiting' ? `<span class="tag ${p.urgency}">${p.urgency}</span>` : ''}</span></span>
     <span class="st">${next ? spark + esc(next) : esc(p.needs)}</span>
     ${state.rows === 'short' ? '' : `<span class="m"><span class="mono">${esc(p.repo.split('/').pop())}#${p.number}</span><span>${p.mine ? 'yours' : `by ${esc(p.author || 'someone')}`}${p.reviewed ? ', reviewed' : ''}</span>
@@ -2348,19 +2501,23 @@ function journalTags(d) {
   return `<div class="jtags">${chips}<form data-form="tag" data-id="${d.day}"><input name="tag" data-keep="tag-${d.day}" placeholder="Add a tag…" maxlength="32" list="jtagsKnown" autocomplete="off" aria-label="Add a tag to this day"><datalist id="jtagsKnown">${known}</datalist></form></div>`;
 }
 
-function journalEffort(e) {
-  const real = (live ? liveEfforts : EFFORTS).some(x => x.id === e.id), many = (e.sessions || []).length > 1;
+/* An effort's part of a day: what was done, what was left open, and the sessions and pull requests it came from. */
+function journalPart(e) {
+  const many = (e.sessions || []).length > 1;
   const point = p => {
     const from = (p.sessions || []).map(id => (e.sessions || []).find(s => s.id === id)).filter(Boolean);
     const meta = pointPulls(e, p).map(journalPull).join('') + (many ? from.map(journalSession).join('') : '');
     return `<li>${esc(p.text)}${meta ? `<span class="pm">${meta}</span>` : ''}</li>`;
   };
   const about = [(e.pulls || []).length ? `<span>${(e.pulls || []).map(journalPull).join(' ')}</span>` : '', (e.sessions || []).length ? `<span>${plural(e.sessions.length, 'session')}: ${e.sessions.map(journalSession).join(', ')}</span>` : ''].join('');
-  return `<div class="sec"><h3>${real ? `<button data-act="effort" data-id="${esc(e.id)}">${esc(e.name)} ›</button>` : esc(e.name)}</h3>
-    ${e.summary ? `<p class="prose">${esc(e.summary)}</p>` : ''}
+  return `${e.summary ? `<p class="prose">${esc(e.summary)}</p>` : ''}
     ${(e.points || []).length ? `<ul>${e.points.map(point).join('')}</ul>` : ''}
     ${(e.open || []).length ? `<div class="label" style="margin-top:12px">Still open</div><ul class="open">${e.open.map(p => `<li>${esc(p)}</li>`).join('')}</ul>` : ''}
-    ${about ? `<div class="jmeta">${about}</div>` : ''}</div>`;
+    ${about ? `<div class="jmeta">${about}</div>` : ''}`;
+}
+function journalEffort(e) {
+  const real = (live ? liveEfforts : EFFORTS).some(x => x.id === e.id);
+  return `<div class="sec"><h3>${real ? `<button data-act="effort" data-id="${esc(e.id)}">${esc(e.name)} ›</button>` : esc(e.name)}</h3>${journalPart(e)}</div>`;
 }
 
 function journalPage(d) {
@@ -2435,7 +2592,7 @@ function viewJournal() {
 
 /* ───────────────────────── Knowledge base ───────────────────────── */
 
-const effortOptions = () => (live ? '<option value="">No effort</option>' : '') + (live ? liveEfforts : EFFORTS).map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join('');
+const effortOptions = () => (live ? '<option value="">No effort</option>' : '') + (live ? openEfforts() : EFFORTS).map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join('');
 const GLYPH = { person: '@', channel: '#', dm: '✉' };
 
 const KB_LIVE_LEDE = {
@@ -2701,7 +2858,7 @@ function render() {
   document.documentElement.style.setProperty('--notice', `${44 * notices.length}px`);
   $('#notice').innerHTML = notices.join('');
   $('#main').innerHTML = main;
-  $('#modal').innerHTML = modal === 'search' ? searchModal() : '';
+  $('#modal').innerHTML = modal === 'search' ? searchModal() : modal === 'effortDelete' ? deleteModal() : '';
   if (modalFocus) { modalFocus = false; $('#q')?.focus(); }
   // The toggle shows only where there is more of what the user said to see.
   document.querySelectorAll('.said').forEach(el => {
@@ -2716,6 +2873,8 @@ function render() {
   });
   if (renameFocus) { renameFocus = false; $('.rename input')?.focus(); $('.rename input')?.select(); }
   if (card) document.querySelector(`.ecard[data-id="${CSS.escape(card)}"]`)?.focus({ preventScroll: true });
+  if (editFocus) { editFocus = false; $('.eedit input')?.focus(); $('.eedit input')?.select(); }
+  if (addFocus) { addFocus = false; $('.ecard.mini.new input')?.focus(); }
   if (reveal) { reveal = false; $('.ecard.sel')?.scrollIntoView({ block: 'nearest' }); }
   freshId = null;
 }
@@ -2843,6 +3002,7 @@ const actions = {
     return false;
   },
   detailTab: d => { state.detailTab = d.t; },
+  effortTab: d => { state.effortTab = d.t; },
   sourceRaw: d => { state.sourceRaw = d.on === '1'; },
   copyReply: d => {
     const text = (live.find(x => x.id === d.id) || {}).lastReply || '';
@@ -2914,8 +3074,25 @@ const actions = {
     return false;
   },
   reopen: d => { ask(`/api/archive/${d.id}/resume`, {}, () => toast('Reopened in the background')); return false; },
-  effortDelete: d => {
-    toast(`Delete "${effortById(d.id).name}" and its filings?`, () => { api('DELETE', `/api/efforts/${d.id}`); }, 'Delete');
+  effortEdit: d => { editing = d.id; editFocus = true; },
+  effortEditCancel: () => { editing = null; },
+  effortAdd: () => { adding = addFocus = true; },
+  effortAddCancel: () => { adding = false; },
+  shelf: () => { state.shelfOpen = !state.shelfOpen; },
+  journalOpen: d => { state.journalSel = d.id; go('journal'); },
+  effortShelve: d => {
+    const name = effortById(d.id).name, on = d.to === '1';
+    modal = null;
+    api('POST', `/api/efforts/${d.id}`, { shelved: on }, () => toast(on ? `Shelved ${name}` : `${name} is back on the board`, () => { api('POST', `/api/efforts/${d.id}`, { shelved: !on }); }));
+  },
+  effortDelete: d => { modal = 'effortDelete'; modalId = d.id; },
+  effortDeleteYes: d => {
+    const name = effortById(d.id).name;
+    modal = null;
+    api('DELETE', `/api/efforts/${d.id}`, null, () => toast(`Deleted ${name}`));
+  },
+  dirRemove: d => {
+    api('DELETE', `/api/efforts/${d.id}/dirs`, { dir: d.dir }, () => toast(`${shortPath(d.dir)} no longer files here`, () => { api('POST', `/api/efforts/${d.id}/dirs`, { dir: d.dir }); }));
     return false;
   },
   liveSuggest: d => {
@@ -3023,7 +3200,20 @@ document.addEventListener('submit', e => {
   const f = Object.fromEntries(new FormData(form)), sec = form.dataset.form, id = sec[0] + (++state.seq);
   const clear = () => form.querySelectorAll('input').forEach(el => { el.value = ''; });
   if (sec === 'name') { api('POST', `/api/sessions/${form.dataset.id}/name`, { name: f.name }); renaming = null; render(); return; }
-  if (sec === 'effort') { api('POST', '/api/efforts', { name: f.name, about: f.about }); clear(); return; }
+  if (sec === 'effort') {
+    /* Added from the column, the new effort is opened; added from the board, its card joins the others. */
+    const had = new Set(liveEfforts.map(e => e.id)), beside = !!state.effortSel;
+    fetch('/api/efforts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: f.name, about: f.about }) })
+      .then(async res => {
+        if (!res.ok) throw new Error((await res.text()).trim() || res.status);
+        clear(); adding = false;
+        await refresh(true);
+        const made = liveEfforts.find(e => !had.has(e.id));
+        if (beside && made && state.view === 'efforts' && state.effortSel) { openEffort(made.id); save(); render(); }
+      }).catch(err => toast(err instanceof TypeError ? 'Could not reach the Slorp service' : `That did not work: ${err.message}`));
+    return;
+  }
+  if (sec === 'effortEdit') { api('POST', `/api/efforts/${form.dataset.id}`, { name: f.name, about: f.about }); editing = null; render(); return; }
   if (sec === 'tag') { tagDay(form.dataset.id, f.tag, true); clear(); if (!live) render(); return; }
   if (sec === 'model') {
     const typed = modelTyped(), chosen = { ...(summarizer.fixedUrl ? {} : { url: typed.url }), ...(summarizer.fixedModel ? {} : { name: typed.name }) };
@@ -3050,6 +3240,7 @@ document.addEventListener('submit', e => {
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && e.target.closest('.rename')) { renaming = null; render(); return; }
+  if (e.key === 'Escape' && e.target.closest('.eedit, .ecard.mini.new')) { editing = null; adding = false; render(); return; }
   if (e.key === 'Escape' && modal) { modal = null; render(); return; }
   if (e.key === 'Escape' && $('#acts')?.open) { $('#acts').removeAttribute('open'); return; }
   if ((e.metaKey || e.ctrlKey) && e.key === 'k' && live) { e.preventDefault(); openSearch(); render(); return; }
@@ -3068,7 +3259,7 @@ document.addEventListener('keydown', e => {
     $('.hit.sel')?.scrollIntoView({ block: 'nearest' });
     return;
   }
-  if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  if (modal || e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
   const att = state.view === 'attention', card = e.target.matches?.('.ecard[data-id]') ? e.target : null;
   if (card && (e.key === 'Enter' || e.key === ' ')) openEffort(card.dataset.id);
   else if (card && card.draggable && e.shiftKey && /^Arrow/.test(e.key)) {

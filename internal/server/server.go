@@ -406,6 +406,50 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		edited(w, k.Delete(r.PathValue("id")))
 	})
 
+	// Gives an effort another name or description, puts it aside or brings
+	// it back; whatever is left out stays as it is.
+	mux.HandleFunc("POST /api/efforts/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Name    *string `json:"name"`
+			About   *string `json:"about"`
+			Shelved *bool   `json:"shelved"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		id := r.PathValue("id")
+		var err error
+		if in.Name != nil || in.About != nil {
+			err = k.Edit(id, in.Name, in.About)
+		}
+		if err == nil && in.Shelved != nil {
+			err = k.Shelve(id, *in.Shelved)
+		}
+		if err == nil && !k.Has(id) {
+			err = errors.New("no such effort")
+		}
+		edited(w, err)
+	})
+
+	mux.HandleFunc("GET /api/efforts/{id}/past", func(w http.ResponseWriter, r *http.Request) {
+		past, ok := h.Past(r.PathValue("id"))
+		if !ok {
+			http.Error(w, "no such effort", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, past)
+	})
+
+	mux.HandleFunc("DELETE /api/efforts/{id}/dirs", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Dir string `json:"dir"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		edited(w, k.RemoveDir(r.PathValue("id"), in.Dir))
+	})
+
 	mux.HandleFunc("POST /api/efforts/{id}/move", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Before string `json:"before"`

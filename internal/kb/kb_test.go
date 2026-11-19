@@ -148,6 +148,87 @@ func TestMoveRearrangesEfforts(t *testing.T) {
 	}
 }
 
+func TestEditRenamesAndRedescribes(t *testing.T) {
+	st := testdb.Open(t)
+	k := testdb.KB(t, st)
+	e, err := k.Create("Widgets", "Making widgets")
+	must(t, err)
+	name, about, blank := "  Gadgets ", " Making gadgets ", "  "
+
+	must(t, k.Edit(e.ID, &name, nil))
+	if got := k.Efforts()[0]; got.ID != e.ID || got.Name != "Gadgets" || got.About != "Making widgets" {
+		t.Errorf("after a rename: %+v, want the same effort by another name", got)
+	}
+	must(t, k.Edit(e.ID, nil, &about))
+	if got := k.Efforts()[0]; got.Name != "Gadgets" || got.About != "Making gadgets" {
+		t.Errorf("after a new description: %+v", got)
+	}
+	must(t, k.Edit(e.ID, nil, &blank))
+	if got := k.Efforts()[0]; got.About != "" {
+		t.Errorf("a description could not be cleared: %q", got.About)
+	}
+	if k.Edit(e.ID, &blank, nil) == nil || k.Efforts()[0].Name != "Gadgets" {
+		t.Error("an effort was left without a name")
+	}
+	if k.Edit("nope", &name, nil) == nil {
+		t.Error("an unknown effort was edited")
+	}
+	if got := testdb.KB(t, st).Efforts()[0]; got.Name != "Gadgets" {
+		t.Errorf("after reopen the effort is named %q", got.Name)
+	}
+}
+
+func TestShelve(t *testing.T) {
+	st := testdb.Open(t)
+	k := testdb.KB(t, st)
+	a := create(t, k, "A")
+	must(t, k.AddDir(a, "/work/a"))
+	must(t, k.Assign("s1", a))
+
+	must(t, k.Shelve(a, true))
+	if !k.Has(a) || k.Active(a) || !k.Efforts()[0].Shelved {
+		t.Error("a shelved effort should still be there, and not be one the model may file under")
+	}
+	if effort, _, _ := k.Resolve("s1", "/x"); effort != a {
+		t.Error("shelving lost what the user filed under the effort")
+	}
+	if effort, _, _ := k.Resolve("s2", "/work/a/x"); effort != a {
+		t.Error("shelving lost the effort's directory rule")
+	}
+	if !testdb.KB(t, st).Efforts()[0].Shelved {
+		t.Error("an effort came back off the shelf on reopen")
+	}
+	must(t, k.Shelve(a, false))
+	if !k.Active(a) || k.Efforts()[0].Shelved {
+		t.Error("an effort brought back is still shelved")
+	}
+	if k.Shelve("nope", true) == nil || k.Active("nope") || k.Active("") {
+		t.Error("an unknown effort was shelved or counted as active")
+	}
+}
+
+func TestRemoveDir(t *testing.T) {
+	k := open(t)
+	a, b := create(t, k, "A"), create(t, k, "B")
+	must(t, k.AddDir(a, "/work/a"))
+	must(t, k.AddDir(a, "/work/shared"))
+	must(t, k.AddDir(b, "/work/b"))
+
+	must(t, k.RemoveDir(a, "/work/a/"))
+	if _, _, ok := k.Resolve("s", "/work/a/x"); ok {
+		t.Error("a removed directory still files sessions")
+	}
+	if effort, _, _ := k.Resolve("s", "/work/shared"); effort != a {
+		t.Error("removing one directory took another with it")
+	}
+	if k.RemoveDir(a, "/work/b") == nil || k.RemoveDir("nope", "/work/shared") == nil {
+		t.Error("a directory was removed from an effort that does not have it")
+	}
+	if effort, _, _ := k.Resolve("s", "/work/b"); effort != b {
+		t.Error("a refused removal took the directory from its own effort")
+	}
+}
+
 func TestDeleteForgetsTheEffortEverywhere(t *testing.T) {
 	k := open(t)
 	a, b := create(t, k, "A"), create(t, k, "B")
@@ -202,6 +283,11 @@ func TestRevisionsTrackWhatTheModelReads(t *testing.T) {
 		{"watch entry", func() { must(t, k.Add(kb.SectionWatch, kb.Entry{Type: "dm", Name: "x"})) }, false, false},
 		{"file a session", func() { must(t, k.Assign("s", a)) }, false, false},
 		{"directory rule", func() { must(t, k.AddDir(a, "/w")) }, false, false},
+		{"drop directory rule", func() { must(t, k.RemoveDir(a, "/w")) }, false, false},
+		{"rename effort", func() { name := "B"; must(t, k.Edit(a, &name, nil)) }, true, false},
+		{"shelve effort", func() { must(t, k.Shelve(a, true)) }, true, false},
+		{"shelve it again", func() { must(t, k.Shelve(a, true)) }, false, false},
+		{"bring effort back", func() { must(t, k.Shelve(a, false)) }, true, false},
 		{"remove context", func() { must(t, k.Remove(kb.SectionContext, k.Knowledge().Context[0].ID)) }, false, true},
 		{"remove hint", func() { must(t, k.Remove(kb.SectionRouting, k.Knowledge().Routing[0].ID)) }, true, false},
 		{"delete effort", func() { must(t, k.Delete(a)) }, true, false},
