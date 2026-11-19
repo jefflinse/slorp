@@ -385,11 +385,26 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
 .ecard.new:hover { border-color: var(--line); box-shadow: none; }
 .ecard.new input { width: 100%; padding: 7px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--raised); }
 .ecard.new .btn { align-self: flex-start; }
-/* An effort's own page: where it stands and what is going on, beside what is kept about it */
+/* An effort opened: all of them collapsed in a column, the open one marked, and it as one large card beside them */
+.split.efx { grid-template-columns: 300px 1fr; }
+.estack { display: flex; flex-direction: column; gap: 8px; padding: 26px 8px 40px 36px; }
+.estack .back { align-self: flex-start; margin-bottom: 8px; color: var(--ink2); font-size: 12.5px; font-weight: 600; }
+.estack .back:hover { color: var(--accent); }
+.ecard.mini { flex: none; gap: 7px; min-height: 0; padding: 10px 12px 9px; border-radius: 10px; }
+.ecard.mini .t { font-size: 14px; font-weight: 600; }
+.ecard.mini .t.mono { font-size: 11.5px; font-weight: 400; }
+.ecard.mini .count { margin: 1px 0 0; }
+.ecard.mini.sel { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
+.split.efx .pane.detail { padding: 26px 36px 28px 8px; }
+.ebig { min-height: 100%; padding: 26px 32px 40px; border: 1px solid var(--line); border-radius: 14px; background: var(--raised); container-type: inline-size; }
+.ebig.loose { background: transparent; border-style: dashed; }
 .epage { display: grid; grid-template-columns: minmax(0, 740px) minmax(240px, 360px); gap: 0 56px; align-items: start; }
 .epage aside { padding-top: 34px; }
 .epage aside .sec:first-child { margin-top: 0; }
-@media (max-width: 1100px) { .epage { grid-template-columns: minmax(0, 740px); } .epage aside { padding-top: 0; } .epage aside .sec:first-child { margin-top: 30px; } }
+@container (max-width: 940px) { .epage { grid-template-columns: minmax(0, 740px); } .epage aside { padding-top: 0; } .epage aside .sec:first-child { margin-top: 30px; } }
+/* A card keeps its name as it goes between the board and the column, so each is seen to move there. */
+::view-transition-group(*) { animation-duration: 0.22s; }
+::view-transition-old(*), ::view-transition-new(*) { block-size: 100%; object-fit: none; object-position: left top; overflow: clip; }
 .time { display: grid; grid-template-columns: 62px 1fr; gap: 4px 12px; }
 .time .a { color: var(--ink3); font-size: 12px; padding-top: 3px; }
 .time .what { font-size: 14px; }
@@ -478,8 +493,11 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
 @media (max-width: 860px) {
   .top { gap: 10px; overflow-x: auto; }
   .model, .used, .lim { display: none; }
-  .split, .split.narrow, .split.sided, .split.sided.shut { grid-template-columns: 1fr; height: auto; }
+  .split, .split.narrow, .split.efx, .split.sided, .split.sided.shut { grid-template-columns: 1fr; height: auto; }
   .full { height: auto; overflow: visible; }
+  .estack { padding: 20px 16px 0; }
+  .split.efx .pane.detail { padding: 14px 16px 48px; }
+  .ebig { padding: 20px 18px 32px; }
   .pane.list { border-right: 0; border-bottom: 1px solid var(--line); max-height: 48vh; }
   .pane.detail, .page { padding: 20px 16px 48px; }
   h1 { font-size: 24px; }
@@ -879,10 +897,16 @@ function go(view) {
   history.pushState(place(), '', '#' + view);
 }
 
-/* Opens an effort's page, or the board of them all when given none, leaving a history entry so Back undoes it. */
+/* Opens an effort as the large card, or the board of them all when given none. Going between the board and
+   an effort leaves a history entry so Back undoes it; going from one effort to another is a selection.
+   morph asks the next drawing to show each card moving to where it now is, and reveal to bring the open
+   effort's card into sight in the column. */
+let morph = false, reveal = false;
 function openEffort(id) {
   if (state.view !== 'efforts') { state.effortSel = id; go('efforts'); return; }
   if (state.effortSel === id) return;
+  morph = reveal = true;
+  if (state.effortSel && id) { state.effortSel = id; return; }
   history.replaceState(place(), '');
   state.effortSel = id;
   history.pushState(place(), '', '#efforts');
@@ -1016,16 +1040,13 @@ function viewAttention() {
 
 /* ───────────────────────── Efforts ───────────────────────── */
 
-/* The way back to the board, and what the effort is in its source's words. */
-const effortCrumb = e => `<div class="crumb"><button class="eff" data-act="effortBoard" title="All efforts (Esc)">‹ Efforts</button><span class="mono">${esc(e.raw)}</span></div>`;
-
 function effortDetail(e) {
   const needs = activeMockItems().filter(i => effortOf(i) === e.id).sort(byUrgency);
   const sess = SESSIONS.filter(s => sessEffort(s) === e.id);
   const qs = state.kb.questions.filter(q => q.effort === e.id);
   const watch = state.kb.watch.filter(w => w.efforts.includes(e.id));
   return `<div class="epage"><div>
-    ${effortCrumb(e)}
+    <div class="crumb"><span class="mono">${esc(e.raw)}</span></div>
     <h1>${esc(e.name)}</h1>
     <div class="sec"><div class="label"><span>${spark}Where this stands</span></div><p class="prose">${esc(e.stands)}</p></div>
     <div class="sec"><div class="label"><span>Needs you (${needs.length})</span></div>
@@ -1205,7 +1226,7 @@ function effortDetailLive(e) {
     : e.stands || (modelless() ? `${NO_MODEL} to write this.` : 'Not written yet.');
   const qs = knowledge.questions.filter(q => q.effort === e.id), watch = knowledge.watch.filter(w => w.efforts.includes(e.id));
   return `<div class="epage"><div>
-    ${effortCrumb(e)}
+    <div class="crumb"><span class="mono">${esc(e.raw)}</span></div>
     <h1>${esc(e.name)}</h1>
     ${e.about ? `<p class="lede" style="margin-bottom:0">${esc(e.about)}</p>` : ''}
     <div class="sec"><div class="label"><span>${real && e.stands && sess.length ? spark : ''}Where this stands</span></div><p class="prose">${esc(stands)}</p></div>
@@ -1229,56 +1250,62 @@ function effortDetailLive(e) {
   </aside>` : ''}</div>`;
 }
 
-/* An effort as a card on the board: what it is, where it stands, the first things in it that need the user,
-   and its sessions as dots, each given as its status and what to say of it. A loose card is one the user
-   did not declare, which stays where it is put. */
-function effortCard(e, needs, dots, loose) {
-  const n = needs.length, shown = needs.slice(0, 2);
-  const line = state.fluent && e.line ? `<p class="l">${spark}${esc(e.line)}</p>` : e.about ? `<p class="l">${esc(e.about)}</p>` : '';
+/* The efforts there are cards for, in the user's order, with Unsorted last where anything is. */
+const cardEfforts = () => !live ? EFFORTS.concat(UNSORTED)
+  : liveEfforts.concat(live.some(s => !s.effort) || liveItems.some(i => i.effort === 'unsorted') || !liveEfforts.length ? [LIVE_UNSORTED] : []);
+/* What a card says of an effort: the things in it that need the user, the most pressing first, and its
+   sessions, each as its status and what to say of it. */
+function effortFacts(e) {
+  if (!live) return { needs: activeMockItems().filter(i => effortOf(i) === e.id).sort(byUrgency),
+    dots: SESSIONS.filter(s => sessEffort(s) === e.id).map(s => [s.status, `${s.title || s.name || s.id}: ${STATUS[s.status]}`]) };
+  return { needs: activeItems().filter(i => i.effort === e.id).sort(byUrgency),
+    dots: live.filter(s => (s.effort || 'unsorted') === e.id).map(s => [statusOf(s)[0], `${clip(s.label, 60)}: ${statusOf(s)[1]}`]) };
+}
+/* The name a card keeps on the board and in the column. */
+const cardName = e => `view-transition-name:effort-${e.id}`;
+
+/* An effort as a card: what it is, where it stands, the first things in it that need the user, and its
+   sessions as dots. A mini card is one collapsed in the column beside the effort that is open, and keeps only
+   the name, how many things need the user, and the dots; sel marks the one that is open. Unsorted, which the
+   user did not declare, stays where it is put. */
+function effortCard(e, mini, sel) {
+  const { needs, dots } = effortFacts(e), n = needs.length, shown = needs.slice(0, 2), loose = e.id === 'unsorted';
+  const line = state.fluent && e.line && (!live || dots.length) ? `<p class="l">${spark}${esc(e.line)}</p>` : e.about ? `<p class="l">${esc(e.about)}</p>` : '';
   const about = `${e.name}: ${n ? `${num(n)} need${n === 1 ? 's' : ''} you` : 'nothing needs you'}, ${plural(dots.length, 'session')}`;
-  return `<div class="ecard ${loose ? 'loose' : ''}" role="button" tabindex="0" ${loose ? '' : 'draggable="true" aria-keyshortcuts="Shift+ArrowLeft Shift+ArrowRight"'} data-act="effort" data-id="${e.id}" aria-label="${esc(about)}">
-    <div class="eh">${title(e, 't')}${n ? `<span class="count" title="${n} need${n === 1 ? 's' : ''} you">${n}</span>` : ''}${loose ? '' : '<span class="grip" aria-hidden="true" title="Drag to rearrange">⠿</span>'}</div>
-    ${line}
-    ${n ? `<div class="ens">${shown.map(i => `<button class="en" data-act="openItem" data-id="${i.id}" style="${kindColor(i.kind)}">${title(i, 'nt')}
+  return `<div class="ecard ${mini ? 'mini' : ''} ${sel ? 'sel' : ''} ${loose ? 'loose' : ''}" role="button" tabindex="0" ${sel ? 'aria-current="true"' : ''} ${loose ? '' : `draggable="true" aria-keyshortcuts="${mini ? 'Shift+ArrowUp Shift+ArrowDown' : 'Shift+ArrowLeft Shift+ArrowRight'}"`} data-act="effort" data-id="${e.id}" style="${cardName(e)}" aria-label="${esc(about)}">
+    <div class="eh">${title(e, 't')}${n ? `<span class="count" title="${n} need${n === 1 ? 's' : ''} you">${n}</span>` : ''}${loose || mini ? '' : '<span class="grip" aria-hidden="true" title="Drag to rearrange">⠿</span>'}</div>
+    ${mini ? '' : line}
+    ${n && !mini ? `<div class="ens">${shown.map(i => `<button class="en" data-act="openItem" data-id="${i.id}" style="${kindColor(i.kind)}">${title(i, 'nt')}
         <span class="w">${i.urgency === 'whenever' ? '' : `<span class="tag ${i.urgency}">${i.urgency}</span>`}<span>${ago(ageOf(i))}</span></span></button>`).join('')}
       ${n > shown.length ? `<span class="more">and ${num(n - shown.length)} more</span>` : ''}</div>` : ''}
     <div class="ef">${dots.length ? `<span class="dots">${dots.slice(0, 12).map(([status, tip]) => `<span class="dot ${status}" title="${esc(tip)}"></span>`).join('')}</span>` : ''}
-      <span>${dots.length ? plural(dots.length, 'session') : 'No open sessions'}${n ? '' : ' · nothing needs you'}</span></div>
+      <span>${dots.length ? plural(dots.length, 'session') : 'No open sessions'}${n || mini ? '' : ' · nothing needs you'}</span></div>
   </div>`;
 }
 
-/* The board: the user's efforts as cards in the order they keep them, then whatever follows. */
-const effortBoard = (cards, lede) => `<div class="full" data-scroll="eff-board"><div class="page">
-    <h1>Efforts</h1><p class="lede">${lede}</p>
-    <div class="board">${cards}</div>
-  </div></div>`;
-const effortPage = detail => `<div class="full" data-scroll="eff-${state.effortSel}"><div class="page">${detail}</div></div>`;
 const BOARD_LEDE = 'The work you have declared, in the order you keep it. Drag a card to move it, and Attention lists its groups the same way.';
-
-function viewEffortsLive() {
-  if (state.effortSel && state.effortSel !== 'unsorted' && !liveEfforts.some(e => e.id === state.effortSel)) state.effortSel = null;
-  if (state.effortSel) return effortPage(effortDetailLive(effortById(state.effortSel)));
-  const loose = live.some(s => !s.effort) || liveItems.some(i => i.effort === 'unsorted') || !liveEfforts.length ? [LIVE_UNSORTED] : [];
-  const cards = liveEfforts.concat(loose).map(e => {
-    const sess = live.filter(s => (s.effort || 'unsorted') === e.id);
-    return effortCard(sess.length ? e : { ...e, line: '' }, activeItems().filter(i => i.effort === e.id).sort(byUrgency),
-      sess.map(s => [statusOf(s)[0], `${clip(s.label, 60)}: ${statusOf(s)[1]}`]), e.id === 'unsorted');
-  }).join('');
-  const hint = modelless() ? `${NO_MODEL}, so sessions are filed by an effort's directories or by you.` : liveEfforts.length ? 'The description is what the model reads when it files sessions.' : 'Declare an effort and Slorp will start filing sessions under it.';
-  return effortBoard(`${cards}<form class="ecard new" data-form="effort">
+const newEffortCard = () => `<form class="ecard new" data-form="effort">
       <span class="label">New effort</span>
       <input name="name" data-keep="effort-name" placeholder="Name, e.g. Snapshot store" required aria-label="Name of the effort">
       <input name="about" data-keep="effort-about" placeholder="One line on what it covers" aria-label="What it covers">
       <button class="btn go">Add effort</button>
-      <p class="none">${hint}</p>
-    </form>`, liveEfforts.length ? BOARD_LEDE : 'The work you track across sessions. Nothing is declared yet.');
-}
+      <p class="none">${modelless() ? `${NO_MODEL}, so sessions are filed by an effort's directories or by you.` : liveEfforts.length ? 'The description is what the model reads when it files sessions.' : 'Declare an effort and Slorp will start filing sessions under it.'}</p>
+    </form>`;
 
+/* Efforts: the board of them all, or, with one opened, that one as a large card that fills the view beside
+   a column of them all collapsed, where the open one is marked and clicking another opens it instead. */
 function viewEfforts() {
-  if (live) return viewEffortsLive();
-  if (state.effortSel) return effortPage(effortDetail(effortById(state.effortSel)));
-  return effortBoard(EFFORTS.concat(UNSORTED).map(e => effortCard(e, activeMockItems().filter(i => effortOf(i) === e.id).sort(byUrgency),
-    SESSIONS.filter(s => sessEffort(s) === e.id).map(s => [s.status, `${s.title || s.name || s.id}: ${STATUS[s.status]}`]), e.id === 'unsorted')).join(''), BOARD_LEDE);
+  if (live && state.effortSel && state.effortSel !== 'unsorted' && !liveEfforts.some(e => e.id === state.effortSel)) state.effortSel = null;
+  if (!state.effortSel) return `<div class="full" data-scroll="eff-board"><div class="page">
+    <h1>Efforts</h1><p class="lede">${live && !liveEfforts.length ? 'The work you track across sessions. Nothing is declared yet.' : BOARD_LEDE}</p>
+    <div class="board">${cardEfforts().map(e => effortCard(e)).join('')}${live ? newEffortCard() : ''}</div>
+  </div></div>`;
+  const e = effortById(state.effortSel), all = cardEfforts();
+  return `<div class="split efx">
+    <section class="pane estack" data-scroll="eff-stack"><button class="back" data-act="effortBoard" title="Back to the board (Esc)">‹ All efforts</button>
+      ${(all.some(x => x.id === e.id) ? all : all.concat(e)).map(x => effortCard(x, true, x.id === e.id)).join('')}</section>
+    <section class="pane detail" data-scroll="eff-${e.id}"><div class="ebig ${e.id === 'unsorted' ? 'loose' : ''}">${live ? effortDetailLive(e) : effortDetail(e)}</div></section>
+  </div>`;
 }
 
 /* Puts an effort just ahead of another, or last when there is no other: on the page at once, and for good
@@ -2638,6 +2665,10 @@ const RENDER = { attention: viewAttention, efforts: viewEfforts, sessions: viewS
 
 function render() {
   if (dragged) return;  // a card is held: the page is drawn again when it is let go
+  if (morph) {
+    morph = false;
+    if (document.startViewTransition && !matchMedia('(prefers-reduced-motion: reduce)').matches) { document.startViewTransition(render); return; }
+  }
   if (!live) { const order = state.effortOrder || SEED_ORDER; EFFORTS.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id)); }
   const card = document.activeElement?.matches?.('.ecard[data-id]') ? document.activeElement.dataset.id : null;
   const scrolls = {};
@@ -2685,6 +2716,7 @@ function render() {
   });
   if (renameFocus) { renameFocus = false; $('.rename input')?.focus(); $('.rename input')?.select(); }
   if (card) document.querySelector(`.ecard[data-id="${CSS.escape(card)}"]`)?.focus({ preventScroll: true });
+  if (reveal) { reveal = false; $('.ecard.sel')?.scrollIntoView({ block: 'nearest' }); }
   freshId = null;
 }
 
@@ -3039,9 +3071,9 @@ document.addEventListener('keydown', e => {
   if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
   const att = state.view === 'attention', card = e.target.matches?.('.ecard[data-id]') ? e.target : null;
   if (card && (e.key === 'Enter' || e.key === ' ')) openEffort(card.dataset.id);
-  else if (card && card.draggable && e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
-    const ids = (live ? liveEfforts : EFFORTS).map(x => x.id), i = ids.indexOf(card.dataset.id);
-    if (e.key === 'ArrowLeft' ? i > 0 : i < ids.length - 1) moveEffort(ids[i], e.key === 'ArrowLeft' ? ids[i - 1] : ids[i + 2] || '');
+  else if (card && card.draggable && e.shiftKey && /^Arrow/.test(e.key)) {
+    const shown = [...card.parentNode.querySelectorAll('.ecard[draggable]')], i = shown.indexOf(card), back = e.key === 'ArrowLeft' || e.key === 'ArrowUp';
+    if (back ? i > 0 : i < shown.length - 1) moveEffort(card.dataset.id, back ? shown[i - 1].dataset.id : shown[i + 2]?.dataset.id || '');
   }
   else if (e.key === 'Escape' && state.view === 'efforts' && state.effortSel) openEffort(null);
   else if (/^[1-9]$/.test(e.key) && nav()[e.key - 1]) visit(nav()[e.key - 1]);
@@ -3059,6 +3091,9 @@ document.addEventListener('keydown', e => {
   } else if (state.view === 'pulls' && (e.key === 'j' || e.key === 'k')) {
     const order = pullsShown().map(pullKey), i = order.indexOf(state.pullSel) + (e.key === 'j' ? 1 : -1);
     if (order[i]) state.pullSel = order[i];
+  } else if (state.view === 'efforts' && state.effortSel && (e.key === 'j' || e.key === 'k')) {
+    const order = cardEfforts().map(x => x.id), i = order.indexOf(state.effortSel) + (e.key === 'j' ? 1 : -1);
+    if (order[i]) openEffort(order[i]);
   } else if (state.view === 'journal' && (e.key === 'j' || e.key === 'k')) {
     const order = journalShown().map(d => d.day), i = order.indexOf(state.journalSel) + (e.key === 'j' ? 1 : -1);
     if (order[i]) state.journalSel = order[i];
@@ -3073,6 +3108,7 @@ document.addEventListener('keydown', e => {
 window.addEventListener('popstate', () => {
   const v = location.hash.slice(1);
   if (!VIEWS.includes(v)) return;
+  morph = v === 'efforts' && state.view === v;
   Object.assign(state, history.state, { view: v });
   save(); render();
 });
