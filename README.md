@@ -26,7 +26,7 @@ To try Slorp without installing it, `go run github.com/jefflinse/slorp@latest` d
 
 Slorp lists Claude Code sessions with or without the plugin. The plugin is what lets you reply to a session and answer its permission prompts from the page. See [its README](integrations/claude-code/README.md) to install it by hand or configure it.
 
-Summaries, suggested replies, automatic filing and wrap-ups are written by a local model. Slorp looks for an OpenAI-compatible LLM server, such as LM Studio, Ollama or llama.cpp, at `http://localhost:1234` and uses the model it has loaded. Settings on the page points it at another server, names the model where a server offers several, turns it off, and checks that it answers. `-llm` and `-model` do the same when Slorp starts, and stand over what Settings holds for as long as it runs. Without a model Slorp still lists your sessions and lets you answer them, and the page marks what is missing. `slorp -h` lists the other options.
+Summaries, suggested replies, automatic filing and the journal are written by a local model. Slorp looks for an OpenAI-compatible LLM server, such as LM Studio, Ollama or llama.cpp, at `http://localhost:1234` and uses the model it has loaded. Settings on the page points it at another server, names the model where a server offers several, turns it off, and checks that it answers. `-llm` and `-model` do the same when Slorp starts, and stand over what Settings holds for as long as it runs. Without a model Slorp still lists your sessions and lets you answer them, and the page marks what is missing. `slorp -h` lists the other options.
 
 OpenCode sessions are supported through [a plugin of their own](integrations/opencode/README.md).
 
@@ -36,7 +36,8 @@ OpenCode sessions are supported through [a plugin of their own](integrations/ope
 - **Attention.** The sessions that need you, whether for a question, a permission prompt or finished work to look at, each summarized by a local model.
 - **Answer from the page.** Reply to a session, or allow or deny a permission prompt, without finding its terminal.
 - **Efforts and roles.** Sessions are filed under the efforts they belong to, by a directory rule, by you, or by the model's guess. A role marks a kind of session, such as a reviewer on a loop, and how much of your attention it may ask for.
-- **Timelines and wrap-ups.** What you asked each session and how it came out, and an account of the day by effort.
+- **Timelines.** What you asked each session and how it came out.
+- **Journal.** A page for each day: what moved in each effort, with each thing done tied to the sessions it came from and the pull requests they were working on. The local model writes a day when you ask, and the day after if you did not. Days are tagged by the model and by you, and can be searched and narrowed to a tag.
 - **Closed sessions and search.** Sessions are kept after they close, and `⌘K` searches all of them.
 - **Start, stop and reopen.** Claude Code background sessions can be started under an effort, stopped, and reopened from the page.
 - **One conversation, one session.** A Claude Code conversation keeps its name, effort, role and timeline when it is cleared, handed off or moved to the background.

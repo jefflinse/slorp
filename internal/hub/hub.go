@@ -1189,17 +1189,25 @@ func (h *Hub) Cwds() []string {
 	return out
 }
 
-// pullOn names the one of pulls made from the branch a session is on, in a
-// repository checked out where it works. A pull request whose branch has
-// its base's name can only come from a fork, and is no session's.
+// pullOn names the one of pulls a session is working on, or "".
 func (h *Hub) pullOn(s *Session, pulls []PullRequest) string {
-	for _, p := range pulls {
-		held := func(repo string) bool { return strings.EqualFold(repo, p.Repo) }
-		if s.Branch != "" && p.Branch == s.Branch && p.Branch != p.Base && slices.ContainsFunc(h.checkouts[s.Cwd], held) {
-			return p.Repo + "#" + strconv.Itoa(p.Number)
-		}
+	if p, ok := h.pullAt(s.Cwd, s.Branch, pulls); ok {
+		return p.Repo + "#" + strconv.Itoa(p.Number)
 	}
 	return ""
+}
+
+// pullAt finds the one of pulls made from branch in a repository checked
+// out in dir. A pull request whose branch has its base's name can only come
+// from a fork, and is found for none.
+func (h *Hub) pullAt(dir, branch string, pulls []PullRequest) (PullRequest, bool) {
+	for _, p := range pulls {
+		held := func(repo string) bool { return strings.EqualFold(repo, p.Repo) }
+		if branch != "" && p.Branch == branch && p.Branch != p.Base && slices.ContainsFunc(h.checkouts[dir], held) {
+			return p, true
+		}
+	}
+	return PullRequest{}, false
 }
 
 // fed returns every feed's items, and one for each question or pushback
@@ -1300,9 +1308,9 @@ type State struct {
 	PullRequests []PullRequest `json:"pullRequests"`
 	// Limits are the user's usage windows as the agents last read them.
 	Limits []Limit `json:"limits"`
-	// Wrapups are the days that have been wrapped up or are waiting to be,
-	// by day.
-	Wrapups map[string]Wrapup `json:"wrapups"`
+	// Journal lists the days that have been wrapped up or are waiting to
+	// be, the latest first.
+	Journal []JournalDay `json:"journal"`
 	// Archive lists the sessions that have closed, the latest first.
 	Archive []Archived `json:"archive"`
 	// Plugins says, for each agent that can be asked, whether it has the
@@ -1319,7 +1327,7 @@ func (h *Hub) State() State {
 		feeds[id] = f.FeedStatus
 	}
 	return State{Sessions: sessions, Items: append(items(sessions), h.fed()...), Efforts: h.efforts(sessions), Summarizer: h.summ,
-		Settings: h.settings, Knowledge: h.kb.Knowledge(), Lookups: append([]Lookup{}, h.lookups...), Feeds: feeds, PullRequests: h.pulls(), Limits: h.limited(), Wrapups: maps.Clone(h.wrapups), Archive: h.archives(), Plugins: maps.Clone(h.plugins)}
+		Settings: h.settings, Knowledge: h.kb.Knowledge(), Lookups: append([]Lookup{}, h.lookups...), Feeds: feeds, PullRequests: h.pulls(), Limits: h.limited(), Journal: h.journal(), Archive: h.archives(), Plugins: maps.Clone(h.plugins)}
 }
 
 func (h *Hub) efforts(sessions []Session) []Effort {

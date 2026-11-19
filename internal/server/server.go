@@ -491,18 +491,47 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 	})
 
 	// The page asks for a day, named as "2006-01-02", to be wrapped up.
-	mux.HandleFunc("POST /api/wrapup", func(w http.ResponseWriter, r *http.Request) {
-		var in struct {
-			Day string `json:"day"`
-		}
-		if !readJSON(w, r, &in) {
-			return
-		}
-		if !h.AskWrapup(in.Day) {
+	mux.HandleFunc("POST /api/journal/{day}", func(w http.ResponseWriter, r *http.Request) {
+		if !h.AskWrapup(r.PathValue("day")) {
 			http.Error(w, "day must be like 2006-01-02", http.StatusBadRequest)
 			return
 		}
 		w.WriteHeader(http.StatusAccepted)
+	})
+
+	mux.HandleFunc("GET /api/journal/{day}", func(w http.ResponseWriter, r *http.Request) {
+		entry, ok := h.Wrapup(r.PathValue("day"))
+		if !ok {
+			http.Error(w, "nothing has been written for that day", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, entry)
+	})
+
+	// The user gives a day of the journal a tag, or takes one off.
+	mux.HandleFunc("POST /api/journal/{day}/tags", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Tag string `json:"tag"`
+			On  bool   `json:"on"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		if !h.TagDay(r.PathValue("day"), in.Tag, in.On) {
+			http.Error(w, "no such day in the journal, or no tag named", http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("POST /api/journal/search", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Query string `json:"q"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"hits": h.SearchJournal(in.Query)})
 	})
 
 	mux.HandleFunc("POST /api/sessions/{id}/name", func(w http.ResponseWriter, r *http.Request) {

@@ -35,6 +35,9 @@ const (
 	tick       = 2 * time.Second
 	retryAfter = time.Minute
 	idleCheck  = 30 * time.Second
+	// missedCheck is how often, with nothing else to do, the journal is
+	// looked over for a day nobody asked to have written.
+	missedCheck = 10 * time.Minute
 	// maxTokens leaves room for models that reason before answering.
 	maxTokens = 3000
 	// maxLookups caps what one description may look up.
@@ -65,8 +68,9 @@ type Enricher struct {
 
 	client *http.Client
 	failed map[string]time.Time
-	// checked is when the model was last asked after.
-	checked time.Time
+	// checked is when the model was last asked after, and missed when the
+	// journal was last looked over.
+	checked, missed time.Time
 	// cfg is what Resolve last gave.
 	cfg Config
 }
@@ -133,7 +137,8 @@ func (e *Enricher) Run(ctx context.Context) {
 
 // step does one piece of work if there is one, and tells the hub which model
 // is there to do it: before each piece, every idleCheck while there is
-// none, and at once when the user's settings change which to use.
+// none, and at once when the user's settings change which to use. With a
+// model and nothing to do, it has the journal ask for a day it is missing.
 func (e *Enricher) step(ctx context.Context) {
 	if e.Resolve != nil {
 		if cfg := e.Resolve(e.Hub.Settings().Model); cfg != e.cfg || e.checked.IsZero() {
@@ -163,6 +168,10 @@ func (e *Enricher) step(ctx context.Context) {
 	said.Model = model
 	e.Hub.SetSummarizer(said)
 	if job == nil {
+		if time.Since(e.missed) >= missedCheck {
+			e.missed = time.Now()
+			e.Hub.AskMissed(e.missed)
+		}
 		return
 	}
 	if err := job(ctx, model); err != nil && ctx.Err() == nil {
@@ -196,12 +205,12 @@ func (e *Enricher) next() (key, what string, job func(context.Context, string) e
 	}
 	for _, w := range e.Hub.Unwrapped() {
 		return "wrapup:" + w.Key, "wrap up " + w.Day.Format("2 January"), func(ctx context.Context, model string) error {
-			headline, efforts, err := e.wrapup(ctx, model, w)
+			headline, efforts, tags, err := e.wrapup(ctx, model, w)
 			failure := ""
 			if err != nil {
 				failure = "The local model could not write it: " + err.Error()
 			}
-			e.Hub.SetWrapup(w, headline, efforts, failure)
+			e.Hub.SetWrapup(w, headline, efforts, tags, failure)
 			return err
 		}
 	}

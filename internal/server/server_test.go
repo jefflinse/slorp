@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -345,14 +346,66 @@ func TestAClosedSessionCanBeReadBack(t *testing.T) {
 
 func TestAskingForAWrapup(t *testing.T) {
 	f := newFixture(t)
-	if code := f.post("/api/wrapup", `{"day":"tomorrow"}`); code != http.StatusBadRequest {
+	if code := f.post("/api/journal/tomorrow", ""); code != http.StatusBadRequest {
 		t.Errorf("asking for no day at all = %d, want 400", code)
 	}
-	if code := f.post("/api/wrapup", `{"day":"2026-11-17"}`); code != http.StatusAccepted {
+	if code, _ := f.do("GET", "/api/journal/2026-11-17", "", nil); code != http.StatusNotFound {
+		t.Errorf("reading a day nobody asked for = %d, want 404", code)
+	}
+	if code := f.post("/api/journal/2026-11-17", ""); code != http.StatusAccepted {
 		t.Fatalf("asking for a day = %d, want 202", code)
 	}
-	if got := f.state().Wrapups; len(got) != 1 || got["2026-11-17"].State != hub.WrapupEmpty {
-		t.Errorf("wrap-ups = %+v, want that day, empty for want of anything said", got)
+	if got := f.state().Journal; len(got) != 1 || got[0].Day != "2026-11-17" || got[0].State != hub.WrapupEmpty {
+		t.Errorf("journal = %+v, want that day, empty for want of anything said", got)
+	}
+}
+
+func TestTheJournalIsReadTaggedAndSearched(t *testing.T) {
+	f := newFixture(t)
+	f.connect("s1")
+	day := time.Now().Format("2006-01-02")
+	f.hub.Apply("claude", "s1", func(s *hub.Session) { s.LastPrompt, s.PromptAt = "add the retry", time.Now() })
+	if code := f.post("/api/journal/"+day, ""); code != http.StatusAccepted {
+		t.Fatalf("asking for today = %d, want 202", code)
+	}
+	logs := f.hub.Unwrapped()
+	if len(logs) != 1 {
+		t.Fatalf("waiting = %+v, want today", logs)
+	}
+	f.hub.SetWrapup(logs[0], "Retries landed", []hub.WrapupEffort{{ID: "unsorted", Name: "Unsorted", Points: []hub.WrapupPoint{{Text: "Added the retry", Sessions: []string{"s1"}}}}}, []string{"reliability"}, "")
+
+	entry := func() (got hub.Wrapup) {
+		t.Helper()
+		code, body := f.do("GET", "/api/journal/"+day, "", nil)
+		if err := json.Unmarshal([]byte(body), &got); code != http.StatusOK || err != nil {
+			t.Fatalf("reading today = %d %s (%v)", code, body, err)
+		}
+		return got
+	}
+	if got := entry(); got.Headline != "Retries landed" || len(got.Efforts) != 1 || got.Efforts[0].Points[0].Text != "Added the retry" || !reflect.DeepEqual(got.Tags, []hub.Tag{{Name: "reliability", Via: hub.ViaGuess}}) {
+		t.Errorf("today reads back as %+v, want what was written with the model's tag", got)
+	}
+
+	for body, want := range map[string]int{`{"tag":"Uploads","on":true}`: http.StatusNoContent, `{"tag":"reliability","on":false}`: http.StatusNoContent,
+		`{"tag":" ","on":true}`: http.StatusNotFound, `not json`: http.StatusBadRequest} {
+		if code := f.post("/api/journal/"+day+"/tags", body); code != want {
+			t.Errorf("tagging with %s = %d, want %d", body, code, want)
+		}
+	}
+	if code := f.post("/api/journal/2020-01-01/tags", `{"tag":"uploads","on":true}`); code != http.StatusNotFound {
+		t.Errorf("tagging a day the journal does not have = %d, want 404", code)
+	}
+	if got := entry(); !reflect.DeepEqual(got.Tags, []hub.Tag{{Name: "uploads"}}) || !reflect.DeepEqual(got.Dropped, []string{"reliability"}) {
+		t.Errorf("after tagging: tags %+v, dropped %v; want the user's own tag alone and the model's held against it", got.Tags, got.Dropped)
+	}
+
+	var found struct{ Hits []hub.JournalHit }
+	code, body := f.do("POST", "/api/journal/search", `{"q":"retry"}`, nil)
+	if err := json.Unmarshal([]byte(body), &found); code != http.StatusOK || err != nil || !reflect.DeepEqual(found.Hits, []hub.JournalHit{{Day: day, Text: "Added the retry"}}) {
+		t.Errorf("searching = %d %s (%v); want today for its point", code, body, err)
+	}
+	if code, body := f.do("POST", "/api/journal/search", `{"q":"zeppelin"}`, nil); code != http.StatusOK || strings.TrimSpace(body) != `{"hits":[]}` {
+		t.Errorf("searching for what is not there = %d %s; want an empty list", code, body)
 	}
 }
 
