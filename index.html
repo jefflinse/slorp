@@ -452,6 +452,21 @@ button.ecard.new:hover { border-color: var(--ink3); color: var(--ink); }
 .modal ul { margin: 12px 0 0; padding-left: 20px; }
 .modal li { margin: 5px 0; font-size: 14.5px; line-height: 1.5; }
 .modal .mfoot .bar { margin: 0; }
+/* The dialog a session is started from */
+.modal.start { width: min(620px, 100%); }
+.modal.start form { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 12px; margin-top: 16px; }
+.modal.start .wide { grid-column: 1 / -1; }
+.modal.start label, .modal.start .field { display: grid; gap: 5px; min-width: 0; align-content: start; }
+.modal.start label > span, .modal.start .field > span { font-size: 12px; font-weight: 600; color: var(--ink2); }
+.modal.start label > span i { font-style: normal; font-weight: 400; color: var(--ink3); }
+.modal.start input, .modal.start textarea, .modal.start select.btn { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background-color: var(--bg); color: var(--ink); font-size: 14px; }
+.modal.start select.btn { padding-right: 26px; }
+.modal.start textarea { display: block; min-height: 130px; resize: vertical; line-height: 1.45; }
+.modal.start .seg { justify-self: start; }
+.modal.start .seg button { padding: 6px 14px; font-size: 13px; }
+.modal.start .seg button:disabled { color: var(--ink3); opacity: 0.6; cursor: not-allowed; }
+.modal.start .mfoot { margin-top: 6px; }
+.modal.start .mfoot > span:first-child { flex: 1; min-width: 200px; }
 .epage { display: grid; grid-template-columns: minmax(0, 740px) minmax(240px, 360px); gap: 0 56px; align-items: start; }
 .epage aside { padding-top: 34px; }
 .epage aside .sec:first-child { margin-top: 0; }
@@ -524,10 +539,6 @@ button.ecard.new:hover { border-color: var(--ink3); color: var(--ink); }
 .add { display: flex; flex-wrap: wrap; gap: 8px; padding: 16px 0; border-top: 1px solid var(--line); }
 .add input, .add select { padding: 7px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--raised); }
 .add input { flex: 1; min-width: 180px; }
-.add.start { padding: 4px 0 14px; border-top: 0; max-width: 760px; }
-.add.start textarea { flex-basis: 100%; min-height: 76px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); resize: vertical; line-height: 1.45; }
-.add.start .send { flex-basis: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--ink3); font-size: 12px; }
-.add.start .send span:last-child { display: flex; gap: 8px; }
 
 /* Toast */
 #toast, #news { position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 80px); background: var(--ink); color: var(--bg); padding: 9px 14px; border-radius: 9px; display: flex; gap: 14px; align-items: center; transition: transform 0.18s; z-index: 20; max-width: calc(100vw - 32px); }
@@ -1258,20 +1269,41 @@ function roleNote(s) {
     ? `<div class="none" style="margin-bottom:10px">As a ${esc(r.name)} session it ${r.attention === 'none' ? 'never shows under Attention' : 'shows under Attention only when it is stopped'}.</div>` : '';
 }
 
-/* The effort whose start form is open, and whether a start is on its way. */
-let starting = null, launching = false;
-function startForm(e) {
-  const real = e.id !== 'unsorted';
+/* Starting a session: the effort the dialog was opened from, whether a start is on its way, what the session
+   is to run on, and whether the local model is to think. The last choices made are kept for the next one. */
+let starting = null, launching = false, startWith = 'claude', startThinking = true;
+const START_MODELS = [['', 'Default'], ['fable', 'Fable'], ['opus', 'Opus'], ['sonnet', 'Sonnet'], ['haiku', 'Haiku']];
+const START_EFFORTS = [['', 'Default'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max']];
+const localName = () => summarizer.model ? summarizer.model.split('/').pop() : '';
+function openStart(effort) {
+  const last = state.startOpts || {};
+  starting = effort; launching = false; modal = 'start'; modalFocus = true;
+  startWith = last.engine === 'local' && localName() ? 'local' : 'claude';
+  startThinking = last.thinking !== false;
+}
+function startModal() {
+  const e = effortById(starting);
+  if (!live || !e) { modal = null; return ''; }
+  const real = e.id !== 'unsorted', last = state.startOpts || {}, local = localName(), on = startWith === 'local' && local ? 'local' : 'claude';
   const dirs = [...new Set((real ? e.dirs : []).concat(live.filter(s => (s.effort || 'unsorted') === e.id).map(s => s.cwd)).filter(Boolean).map(tilde))];
-  return `<form class="add start" data-form="start" data-id="${e.id}">
-    <input name="dir" class="mono" data-keep="start-dir-${e.id}" list="start-dirs" value="${esc(dirs[0] || '')}" placeholder="Directory to work in, such as ~/dev/project" required spellcheck="false" autocomplete="off" aria-label="Directory to work in" style="flex-basis:100%">
-    <datalist id="start-dirs">${dirs.map(d => `<option value="${esc(d)}"></option>`).join('')}</datalist>
-    <input name="name" data-keep="start-name-${e.id}" maxlength="80" placeholder="Name (optional)" aria-label="Name for the session">
-    ${knowledge.roles.length ? `<select name="role" data-keep="start-role-${e.id}" aria-label="Role for the session"><option value="">No role</option>${knowledge.roles.map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select>` : ''}
-    <textarea name="prompt" data-keep="start-prompt-${e.id}" placeholder="What should it do?" required aria-label="First message"></textarea>
-    <div class="send"><span>Starts a Claude Code session in the background${real ? ', filed under this effort' : ''}.</span>
-      <span><button type="button" class="btn" data-act="startCancel">Cancel</button><button class="btn go" ${launching ? 'disabled' : ''}>${launching ? 'Starting…' : 'Start'}</button></span></div>
-  </form>`;
+  const pick = (name, label, options, chosen) => `<label><span>${label}</span><select class="btn" name="${name}" data-keep="start-${name}">${options.map(([v, t]) => `<option value="${v}" ${v === (chosen || '') ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`;
+  const way = (id, label, off) => `<button type="button" class="${on === id ? 'on' : ''}" data-act="startWith" data-to="${id}" aria-pressed="${on === id}" ${off ? `disabled title="${esc(off)}"` : ''}>${esc(label)}</button>`;
+  return `<div class="veil"><div class="modal start" data-act="noop" role="dialog" aria-label="New Session">
+    <h2>New Session</h2>
+    <form data-form="start" data-id="${e.id}">
+      <div class="seg wide" role="group" aria-label="What it runs on">${way('claude', 'Claude Code')}${way('opencode', 'OpenCode', 'Slorp cannot start OpenCode sessions yet')}${way('local', local || 'Local model', local ? '' : 'No local model is running')}</div>
+      <label class="wide"><span>Directory</span><input name="dir" class="mono" data-keep="start-dir" list="start-dirs" value="${esc(dirs[0] || '')}" placeholder="~/dev/project" required spellcheck="false" autocomplete="off" ${dirs.length ? '' : 'data-first'}>
+        <datalist id="start-dirs">${dirs.map(d => `<option value="${esc(d)}"></option>`).join('')}</datalist></label>
+      <label class="${knowledge.roles.length ? '' : 'wide'}"><span>Name <i>optional</i></span><input name="name" data-keep="start-name" maxlength="80" autocomplete="off"></label>
+      ${knowledge.roles.length ? pick('role', 'Role', [['', 'No role']].concat(knowledge.roles.map(r => [r.id, esc(r.name)]))) : ''}
+      ${on === 'claude' ? pick('model', 'Model', START_MODELS, last.model) + pick('effortLevel', 'Effort', START_EFFORTS, last.effortLevel)
+        : `<div class="field"><span>Thinking</span><div class="seg" role="group" aria-label="Thinking"><button type="button" class="${startThinking ? 'on' : ''}" data-act="startThinking" data-to="1" aria-pressed="${startThinking}">On</button><button type="button" class="${startThinking ? '' : 'on'}" data-act="startThinking" data-to="" aria-pressed="${!startThinking}">Off</button></div></div>
+          <label><span>Temperature <i>optional</i></span><input name="temperature" type="number" min="0" max="2" step="0.05" data-keep="start-temperature" value="${esc(last.temperature ?? '')}" placeholder="The model's own"></label>`}
+      <label class="wide"><span>Prompt</span><textarea name="prompt" data-keep="start-prompt" placeholder="What should it do?" required ${dirs.length ? 'data-first' : ''}></textarea></label>
+      <div class="mfoot wide"><span>${on === 'local' ? `Starts a Claude Code session in the background that runs on ${esc(local)}` : 'Starts a Claude Code session in the background'}${real ? `, filed under ${esc(e.name)}` : ''}.</span>
+        <span class="bar"><button type="button" class="btn" data-act="modalClose">Cancel</button><button class="btn go" ${launching ? 'disabled' : ''}>${launching ? 'Starting…' : 'Start session'}</button></span></div>
+    </form>
+  </div></div>`;
 }
 /* What an effort has behind it: the days of the journal it moved on, and its closed sessions with what they
    used. It is fetched when the effort is opened, and again whenever the journal, the closed sessions or the
@@ -1380,13 +1412,12 @@ function effortDetailLive(e) {
     <div class="sec"><div class="label"><span>Needs you (${needs.length})</span></div>
       ${needs.length ? `<div style="margin:0 -18px">${needs.map(i => rowHtml(i, 'openItem')).join('')}</div>` : '<div class="none">Nothing. This is moving without you, or not moving at all.</div>'}</div>
     ${effortTabs([
-      ['sessions', 'Sessions', sess.length, `${starting === e.id ? startForm(e) : ''}
-        ${sess.length ? `<div class="rows plain">${sess.map(x => `<div class="srow" ${dragsFrom(x.id, e.id)}><span class="dot ${statusOf(x)[0]}"></span>
+      ['sessions', 'Sessions', sess.length, `${sess.length ? `<div class="rows plain">${sess.map(x => `<div class="srow" ${dragsFrom(x.id, e.id)}><span class="dot ${statusOf(x)[0]}"></span>
           <div class="body"><div class="ttl"><button data-act="openSession" data-id="${x.id}" title="Open this session">${esc(clip(x.label, 90))}</button></div>
             ${x.insight?.title ? `<div class="sub">${esc(clip(x.insight.title, 90))}</div>` : ''}
             <div class="sub">${statusOf(x)[1]} · <span class="mono">${esc(shortPath(x.cwd))}</span>${x.effortVia ? ` · ${VIA[x.effortVia]}` : ''}</div></div>
           ${roleChip(x)}${moveSelect(x)}</div>`).join('')}</div>` : '<div class="none">None are open.</div>'}
-        ${effortClosed(e, past)}`, starting === e.id ? '' : `<button class="btn" data-act="startOpen" data-id="${e.id}">Start one</button>`],
+        ${effortClosed(e, past)}`, `<button class="btn" data-act="startOpen" data-id="${e.id}">New Session</button>`],
       effortPulls(e),
       real && effortQuestions(e, qs),
       real && effortDays(e, past?.days),
@@ -2981,8 +3012,8 @@ function render() {
   document.documentElement.style.setProperty('--notice', `${44 * notices.length}px`);
   $('#notice').innerHTML = notices.join('');
   $('#main').innerHTML = main;
-  $('#modal').innerHTML = modal === 'search' ? searchModal() : modal === 'effortDelete' ? deleteModal() : modal === 'effortMerge' ? mergeModal() : '';
-  if (modalFocus) { modalFocus = false; $('#q')?.focus(); }
+  $('#modal').innerHTML = modal === 'search' ? searchModal() : modal === 'start' ? startModal() : modal === 'effortDelete' ? deleteModal() : modal === 'effortMerge' ? mergeModal() : '';
+  if (modalFocus) { modalFocus = false; $('#q, #modal [data-first]')?.focus(); }
   // The toggle shows only where there is more of what the user said to see.
   document.querySelectorAll('.said').forEach(el => {
     const tx = el.querySelector('.tx');
@@ -3189,8 +3220,9 @@ const actions = {
     return false;
   },
   holdTo: d => { api('POST', '/api/settings', { answerPermissions: d.to === 'both' }); return false; },
-  startOpen: d => { starting = d.id; },
-  startCancel: () => { starting = null; },
+  startOpen: d => { openStart(d.id); },
+  startWith: d => { startWith = d.to; },
+  startThinking: d => { startThinking = !!d.to; },
   stop: d => {
     const s = live.find(x => x.id === d.id);
     toast(`Stop "${clip(s ? s.label : d.id, 50)}"? Its conversation is kept.`, () => { ask(`/api/sessions/${d.id}/stop`, {}, () => toast('Stopped. Reopen it from the closed sessions under Sessions.')); }, 'Stop');
@@ -3358,7 +3390,13 @@ document.addEventListener('submit', e => {
     if (launching) return;
     const effort = form.dataset.id === 'unsorted' ? '' : form.dataset.id;
     launching = true;
-    ask('/api/sessions', { dir: f.dir, name: f.name, prompt: f.prompt, role: f.role || '', effort }, () => { starting = null; toast('Started. It will show up here in a moment.'); }, () => { launching = false; render(); });
+    const local = startWith === 'local', opts = local ? { engine: 'local', thinking: startThinking, temperature: f.temperature ?? '' } : { engine: 'claude', model: f.model || '', effortLevel: f.effortLevel || '' };
+    const runs = local ? { local: { thinking: opts.thinking, temperature: opts.temperature === '' ? null : +opts.temperature } } : { model: opts.model, effortLevel: opts.effortLevel };
+    ask('/api/sessions', { dir: f.dir, name: f.name, prompt: f.prompt, role: f.role || '', effort, ...runs }, () => {
+      if (modal === 'start') modal = null;
+      state.startOpts = { ...state.startOpts, ...opts }; save();
+      toast('Started. It will show up here in a moment.');
+    }, () => { launching = false; render(); });
     render();
     return;
   }
@@ -3376,6 +3414,8 @@ document.addEventListener('keydown', e => {
   if ((e.metaKey || e.ctrlKey) && e.key === 'k' && live) { e.preventDefault(); openSearch(); render(); return; }
   /* ⌘↵ in a message box presses the button that sends it. */
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && e.target.tagName === 'TEXTAREA') {
+    const form = e.target.closest('form[data-form="start"]');
+    if (form) { e.preventDefault(); form.requestSubmit(); return; }
     const bar = e.target.nextElementSibling;
     const send = bar?.matches('.send') && [...bar.querySelectorAll('button')].pop();
     if (send) { e.preventDefault(); send.click(); }

@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,6 +25,9 @@ import (
 	"github.com/jefflinse/slorp/internal/kb"
 	"github.com/jefflinse/slorp/internal/opencode"
 )
+
+// modelName is what an agent's name for one of its models looks like.
+var modelName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,99}$`)
 
 // agents are the agents a bridge may report for.
 var agents = map[string]bool{claude.Agent: true, opencode.Agent: true}
@@ -79,10 +83,9 @@ type History func(sessionID string, limit int) ([]hub.Exchange, error)
 
 // Launcher starts, reopens and stops one agent's sessions in the background.
 type Launcher interface {
-	// Start begins a session working in dir, named name unless that is
-	// empty, with prompt as the first thing said in it. It returns the id
-	// the session goes by, empty when the agent had not listed it yet.
-	Start(ctx context.Context, dir, name, prompt string) (sessionID string, err error)
+	// Start begins the session l describes. It returns the id the session
+	// goes by, empty when the agent had not listed it yet.
+	Start(ctx context.Context, l hub.Launch) (sessionID string, err error)
 	// Resume reopens a closed session that worked in dir, and says prompt in
 	// it unless that is empty.
 	Resume(ctx context.Context, sessionID, dir, prompt string) error
@@ -226,25 +229,43 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 	})
 
 	// The page starts a session in the background, optionally filed under an
-	// effort and given a role from its first moment.
+	// effort and given a role from its first moment. It runs on the model and
+	// at the effort level asked for, or with local on the local model in use,
+	// reached through Slorp.
 	mux.HandleFunc("POST /api/sessions", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Agent  string `json:"agent"`
-			Dir    string `json:"dir"`
-			Name   string `json:"name"`
-			Prompt string `json:"prompt"`
-			Effort string `json:"effort"`
-			Role   string `json:"role"`
+			Agent       string `json:"agent"`
+			Dir         string `json:"dir"`
+			Name        string `json:"name"`
+			Prompt      string `json:"prompt"`
+			Effort      string `json:"effort"`
+			Role        string `json:"role"`
+			Model       string `json:"model"`
+			EffortLevel string `json:"effortLevel"`
+			Local       *struct {
+				Thinking    bool     `json:"thinking"`
+				Temperature *float64 `json:"temperature"`
+			} `json:"local"`
 		}
 		if !readJSON(w, r, &in) {
 			return
 		}
-		launcher := launchers[cmp.Or(in.Agent, claude.Agent)]
+		agent := cmp.Or(in.Agent, claude.Agent)
+		launcher := launchers[agent]
 		prompt, name := strings.TrimSpace(in.Prompt), []rune(strings.TrimSpace(in.Name))
+		start := hub.Launch{Name: string(name[:min(len(name), nameLimit)]), Prompt: prompt, Model: strings.TrimSpace(in.Model), Effort: in.EffortLevel}
 		var problem string
 		switch {
 		case launcher == nil:
 			problem = "Slorp cannot start sessions of this agent"
+		case in.Local != nil && agent != claude.Agent:
+			problem = "only Claude Code sessions can run on the local model"
+		case in.Local != nil && in.Local.Temperature != nil && (*in.Local.Temperature < 0 || *in.Local.Temperature > maxTemperature):
+			problem = "temperature must be between 0 and 2"
+		case in.Local == nil && start.Model != "" && !modelName.MatchString(start.Model):
+			problem = "that is not the name of a model"
+		case in.Local == nil && start.Effort != "" && !slices.Contains(claude.Efforts, start.Effort):
+			problem = "no such effort level"
 		case prompt == "":
 			problem = "prompt is required"
 		case len(prompt) > startLimit:
@@ -263,7 +284,18 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		id, err := launcher.Start(r.Context(), dir, string(name[:min(len(name), nameLimit)]), prompt)
+		start.Dir = dir
+		if in.Local != nil {
+			// The session runs on whichever model is in use as it starts,
+			// and keeps to it. Claude Code's effort levels mean nothing to it.
+			start.Model, start.Effort = h.Summarizer().Model, ""
+			if start.Model == "" {
+				http.Error(w, "no local model is in use", http.StatusBadRequest)
+				return
+			}
+			start.Local = &hub.LocalModel{URL: localBase(r.Host, in.Local.Thinking, in.Local.Temperature), Thinking: in.Local.Thinking}
+		}
+		id, err := launcher.Start(r.Context(), start)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
@@ -283,6 +315,8 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		h.Touch()
 		writeJSON(w, http.StatusAccepted, map[string]string{"sessionId": id})
 	})
+
+	mux.Handle("/api/local/{thinking}/{temperature}/{rest...}", localModel(h))
 
 	mux.HandleFunc("POST /api/sessions/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")

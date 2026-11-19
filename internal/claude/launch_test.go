@@ -2,11 +2,14 @@ package claude
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jefflinse/slorp/internal/hub"
 )
 
 // fakeClaude writes a stand-in for the claude command that appends each
@@ -49,7 +52,7 @@ func TestStartRunsClaudeInTheBackground(t *testing.T) {
 	bin, calls := fakeClaude(t, roster, said)
 	a := &Adapter{Bin: bin}
 
-	id, err := a.Start(context.Background(), work, "probe", "--version is a flag")
+	id, err := a.Start(context.Background(), hub.Launch{Dir: work, Name: "probe", Prompt: "--version is a flag"})
 	if err != nil || id != "3e14f875-full" {
 		t.Fatalf("Start = %q, %v; want the roster's session id for the job it printed", id, err)
 	}
@@ -63,11 +66,51 @@ func TestStartRunsClaudeInTheBackground(t *testing.T) {
 	}
 
 	a.Plugin = "/plugins/slorp"
-	if _, err := a.Start(context.Background(), work, "", "go"); err != nil {
+	if _, err := a.Start(context.Background(), hub.Launch{Dir: work, Prompt: "go"}); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := calls()[1], work+"|--bg|--plugin-dir|/plugins/slorp|--|go"; got != want {
 		t.Errorf("ran %q, want %q: no name given, and the plugin loaded", got, want)
+	}
+}
+
+func TestStartOnAChosenModel(t *testing.T) {
+	work := workDir(t)
+	bin, calls := fakeClaude(t, `[]`, "echo 'backgrounded · 3e14f875'")
+	old := listedWait
+	listedWait = 0
+	t.Cleanup(func() { listedWait = old })
+	a := &Adapter{Bin: bin, Plugin: "/plugins/slorp"}
+
+	if _, err := a.Start(context.Background(), hub.Launch{Dir: work, Model: "opus", Effort: "high", Prompt: "go"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := calls()[0], work+"|--bg|--model|opus|--effort|high|--plugin-dir|/plugins/slorp|--|go"; got != want {
+		t.Errorf("ran %q, want %q", got, want)
+	}
+
+	local := hub.Launch{Dir: work, Model: "qwen/qwen3", Prompt: "go", Local: &hub.LocalModel{URL: "http://127.0.0.1:4747/api/local/think/0.2", Thinking: true}}
+	if _, err := a.Start(context.Background(), local); err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Split(calls()[1], "|")
+	if len(args) != 10 || strings.Join(args[1:5], "|") != "--bg|--model|qwen/qwen3|--settings" {
+		t.Fatalf("ran %q, want the local model named and settings passed", args)
+	}
+	var settings struct {
+		Thinking bool              `json:"alwaysThinkingEnabled"`
+		Env      map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal([]byte(args[5]), &settings); err != nil {
+		t.Fatalf("settings %q: %v", args[5], err)
+	}
+	if !settings.Thinking || settings.Env["ANTHROPIC_BASE_URL"] != local.Local.URL || settings.Env["ANTHROPIC_AUTH_TOKEN"] == "" {
+		t.Errorf("settings = %+v, want thinking on and the session sent to the local server", settings)
+	}
+	for _, alias := range []string{"HAIKU", "SONNET", "OPUS"} {
+		if got := settings.Env["ANTHROPIC_DEFAULT_"+alias+"_MODEL"]; got != "qwen/qwen3" {
+			t.Errorf("%s model = %q, want every model Claude Code asks for to be the local one", alias, got)
+		}
 	}
 }
 
@@ -78,7 +121,7 @@ func TestStartWaitsForTheRosterToNameTheSession(t *testing.T) {
 ( sleep 0.4; echo '[{"id":"3e14f875","sessionId":"3e14f875-full"}]' > "$r.next"; mv "$r.next" "$r" ) >/dev/null 2>&1 &
 echo 'backgrounded · 3e14f875'`
 	bin, _ := fakeClaude(t, `[]`, body)
-	if id, err := (&Adapter{Bin: bin}).Start(context.Background(), t.TempDir(), "", "go"); err != nil || id != "3e14f875-full" {
+	if id, err := (&Adapter{Bin: bin}).Start(context.Background(), hub.Launch{Dir: t.TempDir(), Prompt: "go"}); err != nil || id != "3e14f875-full" {
 		t.Errorf("Start = %q, %v; want it to wait for the roster to give the job a session id", id, err)
 	}
 }
@@ -89,12 +132,12 @@ func TestStartWithoutAnIDStillSucceeds(t *testing.T) {
 	t.Cleanup(func() { listedWait = old })
 
 	bin, _ := fakeClaude(t, `[]`, "echo 'started somehow'")
-	if id, err := (&Adapter{Bin: bin}).Start(context.Background(), t.TempDir(), "", "go"); err != nil || id != "" {
+	if id, err := (&Adapter{Bin: bin}).Start(context.Background(), hub.Launch{Dir: t.TempDir(), Prompt: "go"}); err != nil || id != "" {
 		t.Errorf("Start = %q, %v; want no id and no error when claude names no job", id, err)
 	}
 
 	bin, _ = fakeClaude(t, `[{"id":"other","sessionId":"other-full"},{"id":"3e14f875"}]`, "echo 'backgrounded · 3e14f875'")
-	if id, err := (&Adapter{Bin: bin}).Start(context.Background(), t.TempDir(), "", "go"); err != nil || id != "" {
+	if id, err := (&Adapter{Bin: bin}).Start(context.Background(), hub.Launch{Dir: t.TempDir(), Prompt: "go"}); err != nil || id != "" {
 		t.Errorf("Start = %q, %v; want no id and no error when the roster never gives the job a session id", id, err)
 	}
 }
@@ -102,14 +145,14 @@ func TestStartWithoutAnIDStillSucceeds(t *testing.T) {
 func TestStartReportsWhatClaudeSaidWentWrong(t *testing.T) {
 	bin, _ := fakeClaude(t, `[]`, "echo 'not logged in' >&2; exit 1")
 	a := &Adapter{Bin: bin}
-	if _, err := a.Start(context.Background(), t.TempDir(), "", "go"); err == nil || err.Error() != "not logged in" {
+	if _, err := a.Start(context.Background(), hub.Launch{Dir: t.TempDir(), Prompt: "go"}); err == nil || err.Error() != "not logged in" {
 		t.Errorf("Start error = %v, want what claude wrote", err)
 	}
-	if _, err := a.Start(context.Background(), filepath.Join(t.TempDir(), "gone"), "", "go"); err == nil {
+	if _, err := a.Start(context.Background(), hub.Launch{Dir: filepath.Join(t.TempDir(), "gone"), Prompt: "go"}); err == nil {
 		t.Error("starting in a directory that does not exist reported success")
 	}
 	a.Bin = filepath.Join(t.TempDir(), "missing")
-	if _, err := a.Start(context.Background(), t.TempDir(), "", "go"); err == nil {
+	if _, err := a.Start(context.Background(), hub.Launch{Dir: t.TempDir(), Prompt: "go"}); err == nil {
 		t.Error("a claude command that cannot run reported success")
 	}
 }

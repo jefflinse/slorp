@@ -42,13 +42,16 @@ type fixture struct {
 // launcher records what it was asked to start, reopen, stop and install.
 type launcher struct {
 	calls []string
+	// started is each session it was asked to start.
+	started []hub.Launch
 	// id is the session id a start reports, and err what every call fails with.
 	id  string
 	err error
 }
 
-func (l *launcher) Start(_ context.Context, dir, name, prompt string) (string, error) {
-	l.calls = append(l.calls, "start "+dir+"|"+name+"|"+prompt)
+func (l *launcher) Start(_ context.Context, s hub.Launch) (string, error) {
+	l.calls = append(l.calls, "start "+s.Dir+"|"+s.Name+"|"+s.Prompt)
+	l.started = append(l.started, s)
 	return l.id, l.err
 }
 
@@ -1203,6 +1206,99 @@ func TestStartingASession(t *testing.T) {
 	f.launcher.err = errors.New("not logged in")
 	if code, res := f.do("POST", "/api/sessions", body(""), nil); code != 502 || !strings.Contains(res, "not logged in") {
 		t.Errorf("a start claude refused = %d %q, want 502 saying why", code, res)
+	}
+}
+
+func TestStartingOnAChosenModel(t *testing.T) {
+	f := newFixture(t)
+	dir := t.TempDir()
+	body := func(fields string) string {
+		return `{"dir":` + strconv.Quote(dir) + `,"prompt":"go"` + fields + `}`
+	}
+	for name, bad := range map[string]string{
+		"a model that is an option":   body(`,"model":"--resume"`),
+		"an unknown effort level":     body(`,"effortLevel":"extreme"`),
+		"the local model with none":   body(`,"local":{"thinking":true}`),
+		"a temperature too high":      body(`,"local":{"temperature":2.5}`),
+		"a temperature below zero":    body(`,"local":{"temperature":-1}`),
+		"the local model on OpenCode": body(`,"agent":"opencode","local":{}`),
+	} {
+		if code := f.post("/api/sessions", bad); code != 400 {
+			t.Errorf("starting with %s = %d, want 400", name, code)
+		}
+	}
+	if len(f.launcher.started) != 0 {
+		t.Fatalf("refused starts still reached the launcher: %+v", f.launcher.started)
+	}
+
+	if code := f.post("/api/sessions", body(`,"model":" opus[1m] ","effortLevel":"xhigh"`)); code != 202 {
+		t.Fatalf("start on a model = %d", code)
+	}
+	if got := f.launcher.started[0]; got.Model != "opus[1m]" || got.Effort != "xhigh" || got.Local != nil {
+		t.Errorf("launcher was asked for %+v, want the model and effort level chosen", got)
+	}
+
+	f.hub.SetSummarizer(hub.Summarizer{Model: "qwen/qwen3", URL: "http://localhost:1234"})
+	if code := f.post("/api/sessions", body(`,"model":"opus","effortLevel":"low","local":{"thinking":true,"temperature":0.2}`)); code != 202 {
+		t.Fatalf("start on the local model = %d", code)
+	}
+	got := f.launcher.started[1]
+	if got.Model != "qwen/qwen3" || got.Effort != "" {
+		t.Errorf("local start asked for model %q at effort %q, want the local model in use and no effort level", got.Model, got.Effort)
+	}
+	if want := f.srv.URL + "/api/local/think/0.2"; got.Local == nil || got.Local.URL != want || !got.Local.Thinking {
+		t.Errorf("local start = %+v, want it reaching the model through Slorp at %s", got.Local, want)
+	}
+	if code := f.post("/api/sessions", body(`,"local":{}`)); code != 202 {
+		t.Fatalf("start on the local model as it comes = %d", code)
+	}
+	if got, want := f.launcher.started[2].Local, f.srv.URL+"/api/local/plain/auto"; got.URL != want || got.Thinking {
+		t.Errorf("local start = %+v, want %s", got, want)
+	}
+}
+
+func TestSessionsReachTheLocalModelThroughSlorp(t *testing.T) {
+	f := newFixture(t)
+	if code, _ := f.do("POST", "/api/local/plain/0.2/v1/messages", `{}`, nil); code != 503 {
+		t.Errorf("with no local model = %d, want 503", code)
+	}
+
+	var path, key string
+	var asked map[string]json.RawMessage
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path, key, asked = r.URL.RequestURI(), r.Header.Get("X-Api-Key"), nil
+		json.NewDecoder(r.Body).Decode(&asked)
+		w.Write([]byte("answered"))
+	}))
+	t.Cleanup(model.Close)
+	f.hub.SetSummarizer(hub.Summarizer{Model: "qwen", URL: model.URL + "/"})
+	said := `{"model":"qwen","temperature":1,"thinking":{"type":"enabled","budget_tokens":2048},"messages":[]}`
+	keyed := func(r *http.Request) { r.Header.Set("X-Api-Key", "slorp") }
+
+	code, body := f.do("POST", "/api/local/plain/0.2/v1/messages?beta=true", said, keyed)
+	if code != 200 || body != "answered" {
+		t.Fatalf("asked through Slorp = %d %q, want the model's answer", code, body)
+	}
+	if path != "/v1/messages?beta=true" || key != "slorp" {
+		t.Errorf("the model was asked at %q with key %q, want the path, query and headers the session sent", path, key)
+	}
+	if string(asked["temperature"]) != "0.2" || string(asked["thinking"]) != `{"type":"disabled"}` || string(asked["model"]) != `"qwen"` {
+		t.Errorf("the model was asked %s, want the temperature set, thinking off and the rest kept", asked)
+	}
+
+	f.do("POST", "/api/local/think/auto/v1/messages", said, nil)
+	if string(asked["temperature"]) != "1" || !strings.Contains(string(asked["thinking"]), "enabled") {
+		t.Errorf("the model was asked %s, want what the session sent left alone", asked)
+	}
+	f.do("POST", "/api/local/plain/0/v1/messages/count_tokens", said, nil)
+	if path != "/v1/messages/count_tokens" || string(asked["temperature"]) != "1" {
+		t.Errorf("counting tokens asked %q %s, want it passed on unchanged", path, asked)
+	}
+
+	for _, bad := range []string{"/api/local/loud/0.2/v1/messages", "/api/local/plain/hot/v1/messages", "/api/local/plain/3/v1/messages"} {
+		if code, _ := f.do("POST", bad, said, nil); code != 404 {
+			t.Errorf("POST %s = %d, want 404", bad, code)
+		}
 	}
 }
 

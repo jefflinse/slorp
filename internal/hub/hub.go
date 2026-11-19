@@ -1591,6 +1591,13 @@ func (s *Session) label() (name, via string) {
 	return s.ID[:min(8, len(s.ID))], ""
 }
 
+// Summarizer returns which local model is in use and where.
+func (h *Hub) Summarizer() Summarizer {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.summ
+}
+
 func (h *Hub) SetSummarizer(s Summarizer) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

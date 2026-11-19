@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/jefflinse/slorp/internal/hub"
 )
 
 const (
@@ -22,16 +25,45 @@ const (
 // listedWait is how long a session just started is waited for in the roster.
 var listedWait = 3 * time.Second
 
-// Start begins a session in the background, working in dir and named name
-// when that is not empty, with prompt as the first thing said in it. It
-// returns the id the session goes by in the roster, empty when Claude Code
-// started it without the roster listing it in time.
-func (a *Adapter) Start(ctx context.Context, dir, name, prompt string) (sessionID string, err error) {
+// Efforts are how hard Claude Code can be told a session's model should work.
+var Efforts = []string{"low", "medium", "high", "xhigh", "max"}
+
+// Start begins the session l describes in the background. It returns the id
+// the session goes by in the roster, empty when Claude Code started it
+// without the roster listing it in time.
+func (a *Adapter) Start(ctx context.Context, l hub.Launch) (sessionID string, err error) {
 	args := []string{"--bg"}
-	if name != "" {
-		args = append(args, "--name", name)
+	if l.Name != "" {
+		args = append(args, "--name", l.Name)
 	}
-	return a.launch(ctx, dir, a.withPlugin(args), prompt)
+	if l.Model != "" {
+		args = append(args, "--model", l.Model)
+	}
+	if l.Effort != "" {
+		args = append(args, "--effort", l.Effort)
+	}
+	if l.Local != nil {
+		args = append(args, "--settings", localSettings(l.Model, *l.Local))
+	}
+	return a.launch(ctx, l.Dir, a.withPlugin(args), l.Prompt)
+}
+
+// localSettings returns the settings that have a session reach model on the
+// local server m and nothing of Anthropic's. A session keeps them for as long
+// as it lives, which the environment of the process starting it would not.
+func localSettings(model string, m hub.LocalModel) string {
+	b, _ := json.Marshal(map[string]any{
+		"alwaysThinkingEnabled": m.Thinking,
+		"env": map[string]string{
+			"ANTHROPIC_BASE_URL":                       m.URL,
+			"ANTHROPIC_AUTH_TOKEN":                     "slorp",
+			"ANTHROPIC_DEFAULT_HAIKU_MODEL":            model,
+			"ANTHROPIC_DEFAULT_SONNET_MODEL":           model,
+			"ANTHROPIC_DEFAULT_OPUS_MODEL":             model,
+			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+		},
+	})
+	return string(b)
 }
 
 // Resume reopens a closed session in the background, in the directory it
