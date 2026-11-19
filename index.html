@@ -1852,6 +1852,7 @@ function sessionMenu(s, it) {
     .concat(s.role || s.roleVia !== 'you' ? [['__none', 'No role']] : [], [['__new', 'New role…']]);
   const rows = `${menuPart('move', 'Move to', menuTo('liveMoveTo', s.id, effortsBut(s.effort || 'unsorted')))}
     ${menuPart('role', s.role && s.roleVia === 'you' ? 'Change role' : 'Role', menuTo('liveRoleTo', s.id, roles))}
+    ${s.job ? `<button data-act="copyText" data-text="${esc(attachCommand(s))}" title="Copies the command that opens this background session in Claude Code, in a terminal. It keeps running when you leave it.">Copy attach command</button>` : ''}
     ${s.job ? `<button data-act="stop" data-id="${s.id}" title="Stops this background session. Its conversation is kept, and it can be reopened from the closed sessions under Sessions.">Stop session</button>` : ''}`;
   return it ? itemMenu(it, `${s.pending ? '' : `<button data-act="livePark" data-id="${it.id}">Park as open question</button>`}${rows}`)
     : actsMenu(s.id, 'Move, give a role and more', rows);
@@ -2062,6 +2063,7 @@ function aboutSession(s) {
     ['Filed under', `${esc(effortById(s.effort || 'unsorted').name)}${s.effort && VIA[s.effortVia] ? `, ${VIA[s.effortVia]}` : ''}`],
     s.role && roleById(s.role) && ['Role', `${esc(roleById(s.role).name)}, ${s.roleVia === 'guess' ? 'guessed by the model' : 'given by you'}`],
     ['Session', `<span class="mono">${esc(s.id)}</span> <button class="link" data-act="copyText" data-text="${esc(s.id)}">copy</button>`],
+    s.job && ['Attach', `<span class="mono">${esc(attachCommand(s))}</span> <button class="link" data-act="copyText" data-text="${esc(attachCommand(s))}" title="Copy the command that opens this background session in Claude Code, in a terminal">copy</button>`],
   ].filter(Boolean);
   const sent = (s.replies || []).map(r => `<div><b>${esc(r.state)}</b> · ${esc(r.text)}</div>`).join('');
   return `<div class="label tlhead"><span>Details</span></div><dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
@@ -2260,6 +2262,8 @@ function closedRow(a, act = 'actSel') {
 
 /* A closed session's page: how it stood when it closed, a way back into it, and its timeline. */
 const shellWord = s => /^[\w./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
+/* The command that opens a session running in the background in Claude Code, in a terminal. */
+const attachCommand = s => `claude attach ${shellWord(s.job)}`;
 const resumeCommand = a => a.agent === 'claude' && a.cwd ? `cd ${shellWord(a.cwd)} && claude --resume ${shellWord(a.id)}` : '';
 function closedPage(a) {
   const doc = archiveDocs[a.id], cmd = resumeCommand(a);
