@@ -39,12 +39,13 @@ const discussRetry = 5 * time.Minute
 
 // PullRef names one pull request an integration listed, and Key what the
 // listing last said of it: a discussion or brief made under one key is out
-// of date under another.
+// of date under another. Wanted is true while the user is looking at it.
 type PullRef struct {
 	Source string
 	Repo   string
 	Number int
 	Key    string
+	Wanted bool
 }
 
 func (r PullRef) id() string {
@@ -217,6 +218,7 @@ func (h *Hub) Undiscussed(n int) []PullRef {
 	for _, p := range h.ranked() {
 		ref := pullRef(p)
 		if d := h.discussed[ref.id()]; len(out) < n && (d == nil || d.Key != ref.Key) && time.Since(h.discussFailed[ref.id()]) > discussRetry {
+			ref.Wanted = ref.id() == h.wantedPull
 			out = append(out, ref)
 		}
 	}

@@ -352,6 +352,45 @@ func TestDefaultsAreGentle(t *testing.T) {
 	if p.Every < time.Minute || p.Tick < time.Second || p.Tick >= p.Every {
 		t.Errorf("Every = %v, Tick = %v; want feeds collected minutes apart", p.Every, p.Tick)
 	}
+	if p.Discuss < time.Minute || p.Discuss > p.Every {
+		t.Errorf("Discuss = %v; want discussions read no more than once a minute, and no less often than the feed is collected", p.Discuss)
+	}
+}
+
+func TestStepReadsDiscussionsOnlyWhenDue(t *testing.T) {
+	src := newSource("github")
+	var listed []integrations.PullRequest
+	src.discussions = map[string]integrations.Discussion{}
+	for n := 1; n <= 4; n++ {
+		listed = append(listed, integrations.PullRequest{Repo: "acme/widgets", Number: n, At: time.Date(2026, 11, n, 0, 0, 0, 0, time.UTC)})
+		src.discussions["github acme/widgets#"+strconv.Itoa(n)] = integrations.Discussion{}
+	}
+	src.pulls = map[string][]integrations.PullRequest{"github": listed}
+	p, h, _ := newPoller(t, src)
+	p.Discuss, p.Discussions = time.Hour, 1
+
+	p.Step(ctx, false)
+	p.Step(ctx, false)
+	p.Step(ctx, false)
+	if want := []string{"github acme/widgets#4"}; !reflect.DeepEqual(src.discussed, want) {
+		t.Fatalf("read %v; want one read, and no more until they are due again", src.discussed)
+	}
+
+	// The one the user opens is read at once, and only that one.
+	h.WantPull("github", "acme/widgets", 1)
+	p.Step(ctx, false)
+	p.Step(ctx, false)
+	if want := []string{"github acme/widgets#4", "github acme/widgets#1"}; !reflect.DeepEqual(src.discussed, want) {
+		t.Fatalf("read %v; want the one the user is looking at read without waiting, once", src.discussed)
+	}
+
+	p.Discuss = 0
+	p.Step(ctx, false)
+	p.Discuss = time.Hour
+	p.Step(ctx, false)
+	if want := []string{"github acme/widgets#4", "github acme/widgets#1", "github acme/widgets#3"}; !reflect.DeepEqual(src.discussed, want) {
+		t.Errorf("read %v; want the next read once it is due, and the wait begun again", src.discussed)
+	}
 }
 
 func TestStepReadsAFewDiscussionsAtATime(t *testing.T) {
@@ -369,7 +408,7 @@ func TestStepReadsAFewDiscussionsAtATime(t *testing.T) {
 	if p.Discussions < 1 || p.Discussions > 5 {
 		t.Fatalf("Discussions = %d; want a few read each time it looks", p.Discussions)
 	}
-	p.Discussions = 2
+	p.Discuss, p.Discussions = 0, 2
 
 	p.Step(ctx, false)
 	if want := []string{"github acme/widgets#5", "github acme/widgets#4"}; !reflect.DeepEqual(src.discussed, want) {

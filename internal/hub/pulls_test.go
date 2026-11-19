@@ -57,8 +57,8 @@ func TestDiscussionsAreReadForWhatChanged(t *testing.T) {
 	if !h.WantPull("github", "ACME/Widgets", 1) || h.WantPull("github", "acme/widgets", 99) || h.WantPull("gitlab", "acme/widgets", 1) {
 		t.Error("WantPull: want a listed pull request with nothing read to have work due, and one not listed to have none")
 	}
-	if got := refs(h.Undiscussed(1)); len(got) != 1 || got[0] != 1 {
-		t.Errorf("to read once the user is looking at #1: %v; want it first", got)
+	if got := h.Undiscussed(2); len(got) != 2 || got[0].Number != 1 || !got[0].Wanted || got[1].Wanted {
+		t.Errorf("to read once the user is looking at #1: %+v; want it first, and the only one marked as wanted", got)
 	}
 
 	first := all[2]
