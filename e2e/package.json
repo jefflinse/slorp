@@ -1,0 +1,6 @@
+{
+  "name": "slorp-browser-tests",
+  "private": true,
+  "scripts": { "test": "node --test *.spec.cjs" },
+  "devDependencies": { "playwright": "1.58.2" }
+}

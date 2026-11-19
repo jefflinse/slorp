@@ -85,11 +85,14 @@ type Session struct {
 	// watching it, oldest first.
 	Timeline []Moment `json:"timeline,omitempty"`
 	// Backfilling counts the earlier exchanges still waiting for the model.
-	Backfilling int      `json:"backfilling,omitempty"`
-	Pending     *Pending `json:"pending,omitempty"`
-	CanReply    bool     `json:"canReply"`
-	Replies     []Reply  `json:"replies,omitempty"`
-	Insight     *Insight `json:"insight,omitempty"`
+	Backfilling    int      `json:"backfilling,omitempty"`
+	Pending        *Pending `json:"pending,omitempty"`
+	CanReply       bool     `json:"canReply"`
+	PluginVersion  string   `json:"pluginVersion,omitempty"`
+	PluginRevision string   `json:"pluginRevision,omitempty"`
+	PluginTUI      bool     `json:"pluginTui,omitempty"`
+	Replies        []Reply  `json:"replies,omitempty"`
+	Insight        *Insight `json:"insight,omitempty"`
 	// Effort is the effort this session is filed under, empty when unsorted.
 	Effort    string `json:"effort"`
 	EffortVia string `json:"effortVia,omitempty"`
@@ -140,6 +143,14 @@ type Plugin struct {
 	Version string `json:"version,omitempty"`
 	// Latest is the version its marketplace offers, when newer than Version.
 	Latest string `json:"latest,omitempty"`
+	// Source and Path identify a managed copy or an existing local plugin.
+	Source   string `json:"source,omitempty"`
+	Revision string `json:"revision,omitempty"`
+	Path     string `json:"path,omitempty"`
+	// NeedsSetup means the server plugin is present but its TUI companion is not.
+	NeedsSetup      bool   `json:"needsSetup,omitempty"`
+	UpdateAvailable bool   `json:"updateAvailable,omitempty"`
+	Error           string `json:"error,omitempty"`
 }
 
 // Tokens counts what a session's responses took, by how each is charged.
@@ -500,6 +511,8 @@ type Pending struct {
 	// Question is true when the session asked the user something, which is
 	// answered by picking from its options and not by an allow.
 	Question bool `json:"question"`
+	// Ordered answers questions by position, preserving individual selections.
+	Ordered bool `json:"ordered,omitempty"`
 	// Input is the tool's full input, shown to the user before they decide.
 	Input string `json:"input"`
 	// Answerable is true while Slorp may answer the request as well as the
@@ -518,16 +531,19 @@ type asked struct {
 	text   string
 	labels []string
 	// many is true when more than one option may be picked.
-	many bool
+	many   bool
+	custom bool
 }
 
 // questionsIn reads the questions a prompt's input holds. It returns nil
-// unless each has its own text and at least one labelled option.
-func questionsIn(input string) []asked {
+// unless each has text and labelled options or accepts custom text. Legacy
+// prompts require distinct question text because their answers are keyed by it.
+func questionsIn(input string, ordered bool) []asked {
 	var in struct {
 		Questions []struct {
 			Question    string `json:"question"`
 			MultiSelect bool   `json:"multiSelect"`
+			Custom      bool   `json:"custom"`
 			Options     []struct {
 				Label string `json:"label"`
 			} `json:"options"`
@@ -538,14 +554,14 @@ func questionsIn(input string) []asked {
 	}
 	var out []asked
 	for _, q := range in.Questions {
-		a := asked{text: q.Question, many: q.MultiSelect}
+		a := asked{text: q.Question, many: q.MultiSelect, custom: ordered && q.Custom}
 		for _, o := range q.Options {
 			if o.Label == "" || slices.Contains(a.labels, o.Label) {
 				return nil
 			}
 			a.labels = append(a.labels, o.Label)
 		}
-		if q.Question == "" || len(a.labels) == 0 || slices.ContainsFunc(out, func(b asked) bool { return b.text == q.Question }) {
+		if q.Question == "" || (len(a.labels) == 0 && !a.custom) || (!ordered && slices.ContainsFunc(out, func(b asked) bool { return b.text == q.Question })) {
 			return nil
 		}
 		out = append(out, a)
@@ -560,6 +576,8 @@ type Decision struct {
 	// Answers holds, for a question, what the user picked for each of its
 	// questions by its text; several picks are joined with ", ".
 	Answers map[string]string `json:"answers,omitempty"`
+	// Selections preserves answers by question position for ordered prompts.
+	Selections [][]string `json:"selections,omitempty"`
 }
 
 // Decision behaviors. Terminal means Slorp will not answer: the session's
@@ -909,7 +927,7 @@ func (h *Hub) Ask(agent, sessionID string, p Pending, canAnswer bool) Pending {
 	p.ID, p.At = newID(), time.Now()
 	h.Apply(agent, sessionID, func(s *Session) {
 		if p.Question {
-			p.questions = questionsIn(p.Input)
+			p.questions = questionsIn(p.Input, p.Ordered)
 		}
 		p.Answerable = canAnswer && h.settings.AnswerPermissions && (!p.Question || p.questions != nil)
 		s.Pending, s.Status, s.WaitingFor, s.ActiveAt = &p, Waiting, "permission prompt", p.At
@@ -971,6 +989,7 @@ func (h *Hub) asking(requestID string) bool {
 // allowed: Answer answers those.
 func (h *Hub) Decide(requestID string, dec Decision) bool {
 	dec.Answers = nil
+	dec.Selections = nil
 	return h.decide(requestID, func(p *Pending) (Decision, bool) { return dec, !(p.Question && dec.Behavior == Allow) })
 }
 
@@ -981,7 +1000,7 @@ func (h *Hub) Decide(requestID string, dec Decision) bool {
 // takes several.
 func (h *Hub) Answer(requestID string, picks map[string][]string) bool {
 	return h.decide(requestID, func(p *Pending) (Decision, bool) {
-		if len(p.questions) == 0 || len(picks) != len(p.questions) {
+		if p.Ordered || len(p.questions) == 0 || len(picks) != len(p.questions) {
 			return Decision{}, false
 		}
 		answers := map[string]string{}
@@ -1002,6 +1021,29 @@ func (h *Hub) Answer(requestID string, picks map[string][]string) bool {
 			answers[q.text] = strings.Join(chosen, ", ")
 		}
 		return Decision{Behavior: Allow, Answers: answers}, true
+	})
+}
+
+// AnswerSelections answers an ordered question prompt, retaining each label
+// and allowing custom text only for questions that explicitly accept it.
+func (h *Hub) AnswerSelections(requestID string, picks [][]string) bool {
+	return h.decide(requestID, func(p *Pending) (Decision, bool) {
+		if !p.Ordered || len(p.questions) == 0 || len(picks) != len(p.questions) {
+			return Decision{}, false
+		}
+		answers := make([][]string, len(picks))
+		for i, q := range p.questions {
+			if len(picks[i]) == 0 || (!q.many && len(picks[i]) != 1) {
+				return Decision{}, false
+			}
+			for _, label := range picks[i] {
+				if strings.TrimSpace(label) == "" || len(label) > 8000 || (!q.custom && !slices.Contains(q.labels, label)) || slices.Contains(answers[i], label) {
+					return Decision{}, false
+				}
+				answers[i] = append(answers[i], label)
+			}
+		}
+		return Decision{Behavior: Allow, Selections: answers}, true
 	})
 }
 

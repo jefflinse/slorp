@@ -56,6 +56,7 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:4747", "loopback address to listen on")
 	ui := flag.String("ui", "", "path to a web UI page to serve in place of the one built in, read afresh for each request")
 	claudeBin := flag.String("claude", "claude", "Claude Code executable")
+	opencodeBin := flag.String("opencode", "opencode", "OpenCode executable")
 	llm := flag.String("llm", enrich.DefaultURL, "OpenAI-compatible local model server, in place of the one chosen in Settings; empty runs without a model")
 	model := flag.String("model", "", "model to summarize with, in place of the one chosen in Settings (default: whichever one is loaded)")
 	data := flag.String("data", "", "directory for Slorp's database (default: ~/.slorp)")
@@ -76,6 +77,9 @@ func main() {
 
 	if *data == "" {
 		*data = filepath.Join(home, ".slorp")
+	}
+	if *data, err = filepath.Abs(*data); err != nil {
+		log.Fatal(err)
 	}
 	// Sessions start in other directories, where a relative path would not hold.
 	if *plugin != "" {
@@ -99,7 +103,14 @@ func main() {
 	tools := integrations.NewManager(func() map[string]bool { return h.Settings().Integrations }, integrations.GitHub(integrations.Exec))
 	transcripts := &claude.Adapter{Hub: h, Bin: *claudeBin, Home: home, Interval: 5 * time.Second, Plugin: *plugin, URL: "http://" + *addr, Updates: 24 * time.Hour}
 	go transcripts.Run(ctx)
-	go (&opencode.Adapter{Hub: h, Interval: 2 * time.Second, Silence: 30 * time.Second}).Run(ctx)
+	configHome := os.Getenv("XDG_CONFIG_HOME")
+	if configHome == "" {
+		configHome = filepath.Join(home, ".config")
+	}
+	oc := &opencode.Adapter{Hub: h, Interval: 2 * time.Second, Silence: 30 * time.Second,
+		Bin: *opencodeBin, Home: home, Data: *data, URL: "http://" + *addr,
+		ConfigDir: filepath.Join(configHome, "opencode"), ExtraConfigDir: os.Getenv("OPENCODE_CONFIG_DIR"), ConfigFile: os.Getenv("OPENCODE_CONFIG")}
+	go oc.Run(ctx)
 	started := enrich.Startup{URL: *llm, Model: *model}
 	flag.Visit(func(f *flag.Flag) {
 		started.URLGiven = started.URLGiven || f.Name == "llm"
@@ -116,7 +127,7 @@ func main() {
 	})
 	go poller.Run(ctx)
 
-	srv := &http.Server{Addr: *addr, Handler: server.New(h, k, tools, poller, map[string]server.History{claude.Agent: transcripts.Exchanges}, map[string]server.Launcher{claude.Agent: transcripts}, map[string]server.Delegates{claude.Agent: transcripts}, summarizer, server.Page(page, *ui))}
+	srv := &http.Server{Addr: *addr, Handler: server.New(h, k, tools, poller, map[string]server.History{claude.Agent: transcripts.Exchanges}, map[string]server.Launcher{claude.Agent: transcripts}, map[string]server.PluginManager{claude.Agent: transcripts, opencode.Agent: oc}, map[string]server.Delegates{claude.Agent: transcripts}, summarizer, server.Page(page, *ui))}
 	go func() {
 		<-ctx.Done()
 		srv.Close()

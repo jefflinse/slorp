@@ -96,7 +96,7 @@ type asked struct{ checks, rescans int }
 func (a *asked) Check()  { a.checks++ }
 func (a *asked) Rescan() { a.rescans++ }
 
-func newFixture(t *testing.T) *fixture {
+func newFixture(t *testing.T, extraPlugins ...map[string]PluginManager) *fixture {
 	t.Helper()
 	st := testdb.Open(t)
 	k := testdb.KB(t, st)
@@ -112,7 +112,13 @@ func newFixture(t *testing.T) *fixture {
 		Tools: []integrations.Tool{{Name: "fake_lookup", Description: "Look something up."}},
 	})
 	rec, launch, probe := &record{}, &launcher{}, &prober{}
-	srv := httptest.NewServer(New(h, k, tools, feeds, map[string]History{"claude": rec.read}, map[string]Launcher{"claude": launch}, map[string]Delegates{"claude": rec}, probe, Page([]byte("<title>slorp</title>"), "")))
+	plugins := map[string]PluginManager{"claude": launch}
+	for _, extra := range extraPlugins {
+		for agent, plugin := range extra {
+			plugins[agent] = plugin
+		}
+	}
+	srv := httptest.NewServer(New(h, k, tools, feeds, map[string]History{"claude": rec.read}, map[string]Launcher{"claude": launch}, plugins, map[string]Delegates{"claude": rec}, probe, Page([]byte("<title>slorp</title>"), "")))
 	t.Cleanup(srv.Close)
 	return &fixture{t, srv, h, k, feeds, probes, rec, launch, probe}
 }

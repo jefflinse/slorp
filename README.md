@@ -6,7 +6,7 @@ Slorp helps make sense of the dozens of agent sessions running on your machine.
 
 ## Getting Started
 
-You need [Go](https://go.dev/dl/) 1.27 or later and [Claude Code](https://claude.com/claude-code).
+You need [Go](https://go.dev/dl/) 1.27 or later and [Claude Code](https://claude.com/claude-code) or [OpenCode](https://opencode.ai).
 
 1. Install Slorp.
 
@@ -20,7 +20,7 @@ You need [Go](https://go.dev/dl/) 1.27 or later and [Claude Code](https://claude
    slorp
    ```
 
-3. If Claude Code doesn't have the Slorp plugin yet, the page says so and offers to install it. Sessions already open load it after `/reload-plugins` or a restart.
+3. Slorp detects missing agent plugins and offers to install them on the page or under **Settings → Integrations**. Claude Code sessions load their plugin after `/reload-plugins` or a restart. OpenCode needs a restart.
 
 To try Slorp without installing it, `go run github.com/jefflinse/slorp@latest` does the same as steps 1 and 2.
 
@@ -28,7 +28,7 @@ Slorp lists Claude Code sessions with or without the plugin. The plugin is what 
 
 Summaries, suggested replies, automatic filing and the journal are written by a local model. Slorp looks for an OpenAI-compatible LLM server, such as LM Studio, Ollama or llama.cpp, at `http://localhost:1234` and uses the model it has loaded. Settings on the page points it at another server, names the model where a server offers several, turns it off, and checks that it answers. `-llm` and `-model` do the same when Slorp starts, and stand over what Settings holds for as long as it runs. Without a model Slorp still lists your sessions and lets you answer them, and the page marks what is missing. `slorp -h` lists the other options.
 
-OpenCode sessions are supported through [a plugin of their own](integrations/opencode/README.md).
+The [OpenCode plugin](integrations/opencode/README.md) is bundled in the Slorp executable, so installation needs no repository checkout. It discovers opened and resumed local terminal conversations even before you send a message, reports model and usage information, and lets you answer permissions and structured questions from Slorp. Settings offers updates when the installed plugin differs from the bundled copy.
 
 ## Features
 

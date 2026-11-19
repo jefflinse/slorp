@@ -92,6 +92,10 @@ type Launcher interface {
 	// Stop ends a session by the id its agent's commands take, keeping its
 	// conversation.
 	Stop(ctx context.Context, job string) error
+}
+
+// PluginManager installs and maintains an agent's bridge independently of launching sessions.
+type PluginManager interface {
 	// Install gives the agent the Slorp plugin, or turns it back on.
 	Install(ctx context.Context) error
 	// Update brings the agent's Slorp plugin up to the newest version.
@@ -168,12 +172,13 @@ func Page(built []byte, path string) http.Handler {
 	})
 }
 
-// New serves the page and its API. history, launchers and delegates are by
+// New serves the page and its API. history, launchers, plugins and delegates are by
 // agent; an agent with no history keeps no record Slorp can read, one with
 // no launcher has sessions Slorp can only watch, and one with no delegates
 // has subagents Slorp knows nothing of.
-func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history map[string]History, launchers map[string]Launcher, delegates map[string]Delegates, prober Prober, page http.Handler) http.Handler {
+func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history map[string]History, launchers map[string]Launcher, plugins map[string]PluginManager, delegates map[string]Delegates, prober Prober, page http.Handler) http.Handler {
 	mux := http.NewServeMux()
+	epoch := strconv.FormatInt(time.Now().UnixNano(), 36)
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -386,7 +391,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 	}
 
 	mux.HandleFunc("POST /api/plugins/{agent}", func(w http.ResponseWriter, r *http.Request) {
-		launcher := launchers[r.PathValue("agent")]
+		launcher := plugins[r.PathValue("agent")]
 		if launcher == nil {
 			http.Error(w, "Slorp cannot install a plugin for this agent", http.StatusNotFound)
 			return
@@ -399,7 +404,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 	})
 
 	mux.HandleFunc("POST /api/plugins/{agent}/update", func(w http.ResponseWriter, r *http.Request) {
-		launcher := launchers[r.PathValue("agent")]
+		launcher := plugins[r.PathValue("agent")]
 		if launcher == nil {
 			http.Error(w, "Slorp cannot update a plugin for this agent", http.StatusNotFound)
 			return
@@ -412,7 +417,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 	})
 
 	mux.HandleFunc("DELETE /api/plugins/{agent}", func(w http.ResponseWriter, r *http.Request) {
-		launcher := launchers[r.PathValue("agent")]
+		launcher := plugins[r.PathValue("agent")]
 		if launcher == nil {
 			http.Error(w, "Slorp cannot uninstall a plugin for this agent", http.StatusNotFound)
 			return
@@ -720,11 +725,15 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 
 	mux.HandleFunc("POST /api/bridge/poll", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Agent     string `json:"agent"`
-			SessionID string `json:"sessionId"`
-			Cwd       string `json:"cwd"`
-			Title     string `json:"title"`
-			Branch    string `json:"branch"`
+			Agent          string          `json:"agent"`
+			SessionID      string          `json:"sessionId"`
+			Cwd            string          `json:"cwd"`
+			Title          string          `json:"title"`
+			Branch         string          `json:"branch"`
+			Snapshot       *bridgeSnapshot `json:"snapshot"`
+			PluginVersion  string          `json:"pluginVersion"`
+			PluginRevision string          `json:"pluginRevision"`
+			PluginTUI      bool            `json:"pluginTui"`
 			// ContextWindow is what the session's model can take, in tokens.
 			ContextWindow int `json:"contextWindow"`
 			// CostUSD is the agent's own estimate of the session's cost so far.
@@ -775,6 +784,9 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			}
 		}
 		fresh := h.Apply(agent, in.SessionID, func(s *hub.Session) {
+			in.Snapshot.apply(s)
+			s.PluginVersion, s.PluginRevision = first(in.PluginVersion, nameLimit), first(in.PluginRevision, nameLimit)
+			s.PluginTUI = in.PluginTUI
 			if in.Agents != nil {
 				s.Delegated(live)
 			}
@@ -810,15 +822,17 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			replies = []hub.Reply{}
 		}
 		// fresh tells a bridge that Slorp knew nothing of the session until now.
-		writeJSON(w, http.StatusOK, map[string]any{"replies": replies, "fresh": fresh})
+		writeJSON(w, http.StatusOK, map[string]any{"replies": replies, "fresh": fresh, "epoch": epoch})
 	})
 
 	mux.HandleFunc("POST /api/bridge/event", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Agent     string `json:"agent"`
-			SessionID string `json:"sessionId"`
-			Type      string `json:"type"`
-			Text      string `json:"text"`
+			Agent     string          `json:"agent"`
+			SessionID string          `json:"sessionId"`
+			Type      string          `json:"type"`
+			Text      string          `json:"text"`
+			At        int64           `json:"at"`
+			Snapshot  *bridgeSnapshot `json:"snapshot"`
 		}
 		if !readJSON(w, r, &in) || in.SessionID == "" {
 			return
@@ -834,6 +848,9 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 				s.Status, s.WaitingFor, s.Pending, s.ActiveAt = hub.Working, "", nil, now
 				if in.Text != "" {
 					s.LastPrompt, s.PromptAt = in.Text, now
+					if in.At > 0 {
+						s.PromptAt = time.UnixMilli(in.At)
+					}
 				}
 			case "turn.complete":
 				s.Status, s.WaitingFor, s.Pending, s.ActiveAt = hub.Idle, "", nil, now
@@ -844,6 +861,8 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 				if s.Pending != nil {
 					s.Status, s.WaitingFor, s.Pending = hub.Working, "", nil
 				}
+			case "snapshot":
+				in.Snapshot.apply(s)
 			}
 		})
 		w.WriteHeader(http.StatusNoContent)
@@ -859,6 +878,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			Input     string `json:"input"`
 			CanAnswer bool   `json:"canAnswer"`
 			Question  bool   `json:"question"`
+			Ordered   bool   `json:"ordered"`
 			// AgentID is the subagent that asks, when one does.
 			AgentID string `json:"agentId"`
 		}
@@ -869,8 +889,8 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		if !ok {
 			return
 		}
-		p := h.Ask(agent, in.SessionID, hub.Pending{Tool: in.Tool, Summary: in.Summary, Input: in.Input, Question: in.Question, AgentID: in.AgentID}, in.CanAnswer)
-		writeJSON(w, http.StatusOK, map[string]any{"id": p.ID, "answerable": p.Answerable})
+		p := h.Ask(agent, in.SessionID, hub.Pending{Tool: in.Tool, Summary: in.Summary, Input: in.Input, Question: in.Question, Ordered: in.Ordered, AgentID: in.AgentID}, in.CanAnswer)
+		writeJSON(w, http.StatusOK, map[string]any{"id": p.ID, "answerable": p.Answerable, "epoch": epoch})
 	})
 
 	// A bridge long-polls here for the user's decision in Slorp.
@@ -906,13 +926,20 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			Message  string `json:"message"`
 			// Answers are the options picked, by label, for each question of
 			// a question prompt by its text.
-			Answers map[string][]string `json:"answers"`
+			Answers    map[string][]string `json:"answers"`
+			Selections [][]string          `json:"selections"`
 		}
 		if !readJSON(w, r, &in) {
 			return
 		}
-		if len(in.Answers) > 0 {
-			if !h.Answer(r.PathValue("id"), in.Answers) {
+		if in.Selections != nil || len(in.Answers) > 0 {
+			ok := false
+			if in.Selections != nil && len(in.Answers) == 0 {
+				ok = h.AnswerSelections(r.PathValue("id"), in.Selections)
+			} else if in.Selections == nil {
+				ok = h.Answer(r.PathValue("id"), in.Answers)
+			}
+			if !ok {
 				http.Error(w, "that question is no longer waiting here, or those are not answers to it", http.StatusConflict)
 				return
 			}

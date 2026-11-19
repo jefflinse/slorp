@@ -1790,7 +1790,8 @@ function api(method, path, body, done) {
 /* Asks the service to do something outside itself, and says why when it could not. */
 /* Says when Claude Code lacks the Slorp mod, or has an older one than is offered, and offers to put that right. */
 let installing = false, removing = false, updating = false;
-function modNotice() {
+let opencodeBusy = '';
+function claudeNotice() {
   const p = plugins.claude;
   if (live && p && p.installed && p.enabled && p.latest && state.modPassed !== p.latest) return `<div><span>Version ${esc(p.latest)} of the Slorp mod for Claude Code is out. It has ${esc(p.version)}.</span>
     <button class="btn go" data-act="updateMod" ${updating ? 'disabled' : ''}>${updating ? 'Updating…' : 'Update it'}</button><button class="btn" data-act="modPass" data-v="${esc(p.latest)}">Dismiss</button></div>`;
@@ -1798,6 +1799,31 @@ function modNotice() {
   const off = p.installed;
   return `<div><span>${off ? 'The Slorp mod is turned off in Claude Code' : "Claude Code doesn't have the Slorp mod"}, so its sessions can be watched here but not answered.</span>
     <button class="btn go" data-act="installMod" ${installing ? 'disabled' : ''}>${installing ? (off ? 'Turning it on…' : 'Installing…') : off ? 'Turn it on' : 'Install it'}</button></div>`;
+}
+
+function modNotice() {
+  const p = plugins.opencode;
+  let notice = '';
+  if (live && p && !p.error && p.source !== 'file' && (!p.installed || p.needsSetup || p.updateAvailable)) {
+    const label = p.updateAvailable ? 'Update' : p.installed ? 'Finish setup' : 'Install';
+    const why = p.updateAvailable ? 'This Slorp includes an updated OpenCode plugin.' : p.installed ? 'The OpenCode plugin needs its terminal companion to discover reopened sessions.' : 'Install the Slorp plugin to see your OpenCode sessions here.';
+    notice = `<div><span>${why}</span><button class="btn go" data-act="opencodePlugin" data-op="${p.updateAvailable ? 'update' : 'install'}" ${opencodeBusy ? 'disabled' : ''}>${opencodeBusy ? 'Working…' : label}</button></div>`;
+  }
+  return claudeNotice() + notice;
+}
+
+function changeOpenCodePlugin(op) {
+  if (opencodeBusy) return;
+  opencodeBusy = op;
+  render();
+  fetch(`/api/plugins/opencode${op === 'update' ? '/update' : ''}`, {
+    method: op === 'uninstall' ? 'DELETE' : 'POST',
+    ...(op === 'uninstall' ? {} : { headers: { 'Content-Type': 'application/json' }, body: '{}' }),
+  }).then(async res => {
+    if (!res.ok) throw new Error((await res.text()).trim() || res.status);
+    toast(op === 'uninstall' ? 'Uninstalled. Restart OpenCode to unload the plugin.' : 'Ready. Quit and restart OpenCode to load both parts of the plugin.');
+  }).catch(err => toast(err instanceof TypeError ? 'Could not reach the Slorp service' : `That did not work: ${err.message}`))
+    .finally(() => { opencodeBusy = ''; refresh(true); });
 }
 
 /* Whether Slorp is running with no local model: one was looked for and not
@@ -2183,6 +2209,11 @@ function askedQuestions(p) {
 /* What the user has picked so far for a question prompt: for each of its
    questions by position, the positions of the options picked. */
 const picksFor = id => state.picks[id] || {};
+const selectionsFor = (p, qs) => qs.map((q, n) => {
+  const picks = picksFor(p.id), selected = (picks[n] || []).map(i => q.options[i]?.label).filter(Boolean);
+  const text = p.ordered && q.custom ? (picks.custom?.[n] || '').trim() : '';
+  return text ? (q.multiSelect ? [...new Set([...selected, text])] : [text]) : selected;
+});
 
 /* The questions laid out; with a prompt Slorp may answer, each option is a
    button that picks it. */
@@ -2195,6 +2226,7 @@ function questionBox(qs, p) {
         return p ? `<button class="opt ${(picks[n] || []).includes(i) ? 'on' : ''}" data-act="pick" data-id="${p.id}" data-q="${n}" data-o="${i}" data-many="${q.multiSelect ? 1 : 0}" aria-pressed="${(picks[n] || []).includes(i)}">${inner}</button>`
           : `<div class="opt">${inner}</div>`;
       }).join('')}
+      ${p?.ordered && q.custom ? `<input class="opt" data-question-custom="${p.id}" data-q="${n}" data-many="${q.multiSelect ? 1 : 0}" data-keep="answer-${p.id}-${n}" value="${esc(picks.custom?.[n] || '')}" maxlength="8000" placeholder="Or type your own answer…" aria-label="Your answer to ${esc(q.question)}">` : ''}
       ${q.multiSelect ? '<div class="none" style="margin-top:6px">More than one may be chosen.</div>' : ''}</div>`).join('');
 }
 
@@ -2212,10 +2244,11 @@ function promptBox(s) {
   const p = s.pending, qs = askedQuestions(p);
   const inTerminal = `<div class="none" style="margin-top:10px">Answer in the session's terminal. Slorp cannot pick an option for you.</div>`;
   if (qs && p.answerable) {
-    const picks = picksFor(p.id), ready = qs.every((q, n) => (picks[n] || []).length);
+    const ready = selectionsFor(p, qs).every(a => a.length);
     return `${questionBox(qs, p)}<div class="replies" style="margin-top:12px">
       <button class="btn go" data-act="liveAnswer" data-id="${p.id}" ${ready ? '' : 'disabled'}>Send answer</button>
-      <span class="none" style="align-self:center">${ready ? 'The terminal is asking too; whichever you answer first decides.' : `Pick an option for ${qs.length === 1 ? 'the question' : 'each question'}. To type something else, answer in the terminal.`}</span></div>`;
+      ${p.ordered ? `<button class="btn" data-act="livePermit" data-id="${p.id}" data-behavior="deny">Dismiss</button>` : ''}
+      <span class="none" style="align-self:center">${ready ? 'The terminal is asking too; whichever you answer first decides.' : `Answer ${qs.length === 1 ? 'the question' : 'each question'}${p.ordered && qs.some(q => q.custom) ? ' using the options or your own text.' : '. To type something else, answer in the terminal.'}`}</span></div>`;
   }
   if (qs) return questionBox(qs) + inTerminal;
   if (p.question) return `<div class="asked"><p class="q" style="white-space:pre-wrap">${esc(p.input || p.summary)}</p></div>${inTerminal}`;
@@ -2874,12 +2907,17 @@ function agentsBody() {
       <span class="does">${p && !(p.installed && p.enabled) ? `<button class="btn go" data-act="installMod" ${busy ? 'disabled' : ''}>${installing ? (p.installed ? 'Turning it on…' : 'Installing…') : p.installed ? 'Turn on' : 'Install'}</button>` : ''}
         ${p && p.installed && p.latest ? `<button class="btn go" data-act="updateMod" ${busy ? 'disabled' : ''}>${updating ? 'Updating…' : 'Update'}</button>` : ''}
         ${p && p.installed ? `<button class="btn" data-act="uninstallMod" ${busy ? 'disabled' : ''}>${removing ? 'Uninstalling…' : 'Uninstall'}</button>` : ''}</span></div>`;
-  const opencode = `<div class="card"><span class="glyph" style="${kindColor('opencode')};color:var(--k)">O</span>
-      <div class="body"><div class="nm">OpenCode</div>
-      <div class="why">The Slorp plugin for OpenCode, which is Slorp's only view of its sessions: one appears here at its first prompt, and can be replied to and have its permission prompts answered.</div>
-      <div class="meta"><span>${open('opencode').length ? `${plural(open('opencode').length, 'open session')} reporting` : 'no sessions reporting'}</span></div>
-      <div class="seen">OpenCode cannot be asked whether it has the plugin, so it is installed by hand.</div></div>
-      <a class="btn" href="https://github.com/jefflinse/slorp/tree/main/integrations/opencode#install" target="_blank" rel="noopener noreferrer">How to install ↗</a></div>`;
+  const oc = plugins.opencode, connected = open('opencode').filter(s => s.canReply);
+  const current = connected.filter(s => s.pluginTui && (oc?.revision ? s.pluginRevision === oc.revision : s.pluginVersion === oc?.version));
+  const ocWord = !oc ? 'checking' : oc.error ? 'setup issue' : !oc.installed ? 'not installed' : oc.needsSetup ? 'setup incomplete' : oc.updateAvailable ? 'update available' : current.length ? 'reporting' : connected.length ? 'restart needed' : 'installed';
+  const ocButton = (op, label) => `<button class="btn ${op === 'uninstall' ? '' : 'go'}" data-act="opencodePlugin" data-op="${op}" ${opencodeBusy ? 'disabled' : ''}>${opencodeBusy === op ? 'Working…' : label}</button>`;
+  const opencode = `<div class="card" data-plugin="opencode"><span class="glyph" style="${kindColor('opencode')};color:var(--k)">O</span>
+      <div class="body"><div class="nm">OpenCode <span class="tag ${oc?.error || oc?.needsSetup || oc?.updateAvailable ? 'awaiting' : 'whenever'}">${ocWord}</span></div>
+      <div class="why">The Slorp plugin reports sessions, usage, replies and permission prompts. Its terminal companion discovers an opened conversation even before you send a message.</div>
+      <div class="meta">${oc?.version ? `<span>version ${esc(oc.version)}</span>` : ''}<span>${running('opencode')}</span>${oc?.source ? `<span>${oc.source === 'managed' ? 'bundled with Slorp' : oc.source === 'file' ? 'single-file installation' : 'local package'}</span>` : ''}</div>
+      ${oc?.path ? `<div class="seen mono">${esc(oc.path)}</div>` : ''}
+      <div class="seen">${oc?.error ? esc(oc.error) : oc?.source === 'file' ? 'Remove the old single-file plugin from OpenCode before installing this package.' : 'Quit and restart OpenCode after installation or an update. Installation works without a Slorp checkout.'}</div></div>
+      <span class="does">${oc && !oc.error ? `${!oc.installed || oc.needsSetup && oc.source !== 'file' ? ocButton('install', oc.installed ? 'Finish setup' : 'Install') : ''}${oc.source === 'managed' && oc.updateAvailable ? ocButton('update', 'Update') : ''}${oc.source === 'managed' && oc.installed ? ocButton('uninstall', 'Uninstall') : ''}` : ''}</span></div>`;
   return claude + opencode;
 }
 
@@ -2965,7 +3003,7 @@ function settingsBody(sec) {
 
 function viewSettings() {
   if (!SETTINGS[state.setSel]) state.setSel = 'general';
-  const on = (plugins.claude?.installed && plugins.claude.enabled ? 1 : 0) + integrations.filter(i => i.enabled).length;
+  const on = Object.values(plugins).filter(p => p.installed && p.enabled).length + integrations.filter(i => i.enabled).length;
   const aside = { integrations: live ? on : '', model: live ? (summarizer.off ? 'off' : summarizer.model ? 'on' : 'none') : '' };
   const nav = Object.entries(SETTINGS).map(([k, name]) => `<button class="${state.setSel === k ? 'on' : ''}" data-act="setSel" data-s="${k}">${name}<span>${aside[k] ?? ''}</span></button>`).join('');
   return `<div class="split narrow">
@@ -3125,6 +3163,12 @@ const actions = {
     installing = true;
     ask('/api/plugins/claude', {}, () => toast('Done. Sessions already open pick it up after /reload-plugins or a restart.'), () => { installing = false; });
   },
+  opencodePlugin: d => {
+    if (opencodeBusy) return false;
+    if (d.op === 'uninstall') toast('Uninstall the Slorp plugin from OpenCode?', () => changeOpenCodePlugin('uninstall'), 'Uninstall');
+    else changeOpenCodePlugin(d.op);
+    return false;
+  },
   updateMod: () => {
     if (installing || removing || updating) return false;
     updating = true;
@@ -3186,12 +3230,18 @@ const actions = {
   pick: d => {
     const all = state.picks[d.id] ||= {}, mine = all[d.q] || [], o = Number(d.o);
     all[d.q] = d.many === '1' ? (mine.includes(o) ? mine.filter(x => x !== o) : mine.concat(o)) : [o];
+    if (d.many !== '1') {
+      if (all.custom) delete all.custom[d.q];
+      const input = document.querySelector(`[data-keep="answer-${d.id}-${d.q}"]`);
+      if (input) input.value = '';
+    }
   },
   liveAnswer: d => {
-    const s = live.find(x => x.pending && x.pending.id === d.id), qs = s && askedQuestions(s.pending), picks = picksFor(d.id);
+    const s = live.find(x => x.pending && x.pending.id === d.id), qs = s && askedQuestions(s.pending);
     if (!qs) return false;
-    const answers = Object.fromEntries(qs.map((q, n) => [q.question, (picks[n] || []).map(i => q.options[i].label)]));
-    fetch(`/api/permissions/${d.id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ answers }) })
+    const selections = selectionsFor(s.pending, qs);
+    const body = s.pending.ordered ? { selections } : { answers: Object.fromEntries(qs.map((q, n) => [q.question, selections[n]])) };
+    fetch(`/api/permissions/${d.id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       .then(res => {
         toast(res.status === 409 ? 'That question is no longer waiting here' : !res.ok ? 'Slorp refused that' : 'Answered');
         delete state.picks[d.id];
@@ -3344,6 +3394,13 @@ document.addEventListener('click', e => {
   if (actions[el.dataset.act](el.dataset, el) !== false) { save(); render(); }
 });
 document.addEventListener('input', e => {
+  if (e.target.dataset.questionCustom) {
+    const d = e.target.dataset, picks = state.picks[d.questionCustom] ||= {};
+    (picks.custom ||= {})[d.q] = e.target.value;
+    if (d.many !== '1' && e.target.value.trim()) picks[d.q] = [];
+    save(); render();
+    return;
+  }
   if (e.target.id === 'jq') {
     journalQuery = e.target.value;
     clearTimeout(journalTimer);
