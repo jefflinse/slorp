@@ -108,6 +108,28 @@ func (s *Store) Create(name, about string) (Effort, error) {
 	return e, s.save()
 }
 
+// Move puts an effort just ahead of the effort named by before, or last when
+// before is empty. The order is the user's own and is not read by the model.
+func (s *Store) Move(id, before string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i := s.index(id)
+	if i < 0 || (before != "" && s.index(before) < 0) {
+		return errors.New("no such effort")
+	}
+	if id == before {
+		return nil
+	}
+	e := s.f.Efforts[i]
+	s.f.Efforts = slices.Delete(s.f.Efforts, i, i+1)
+	at := len(s.f.Efforts)
+	if before != "" {
+		at = s.index(before)
+	}
+	s.f.Efforts = slices.Insert(s.f.Efforts, at, e)
+	return s.save()
+}
+
 // Delete removes an effort and every filing under it.
 func (s *Store) Delete(id string) error {
 	s.mu.Lock()

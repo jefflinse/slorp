@@ -406,6 +406,16 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		edited(w, k.Delete(r.PathValue("id")))
 	})
 
+	mux.HandleFunc("POST /api/efforts/{id}/move", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Before string `json:"before"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		edited(w, k.Move(r.PathValue("id"), in.Before))
+	})
+
 	mux.HandleFunc("POST /api/efforts/{id}/dirs", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Dir string `json:"dir"`

@@ -858,6 +858,20 @@ func TestEffortsOverHTTP(t *testing.T) {
 		t.Errorf("session filing = %q via %q", s.Effort, s.EffortVia)
 	}
 
+	f.post("/api/efforts", `{"name":"Docs"}`)
+	if code := f.post("/api/efforts/docs/move", `{"before":"`+id+`"}`); code != 204 {
+		t.Fatalf("move = %d", code)
+	}
+	if st := f.state(); st.Efforts[0].ID != "docs" || st.Efforts[1].ID != id {
+		t.Errorf("after a move the efforts run %s, %s", st.Efforts[0].ID, st.Efforts[1].ID)
+	}
+	if code := f.post("/api/efforts/docs/move", `{"before":"nope"}`); code != 400 {
+		t.Errorf("moving ahead of an unknown effort = %d, want 400", code)
+	}
+	if code, _ := f.do("DELETE", "/api/efforts/docs", "", nil); code != 204 {
+		t.Fatalf("delete = %d", code)
+	}
+
 	if code, _ := f.do("DELETE", "/api/efforts/"+id, "", nil); code != 204 {
 		t.Fatalf("delete = %d", code)
 	}

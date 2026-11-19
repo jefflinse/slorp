@@ -108,6 +108,46 @@ func TestAddDirTakesTheDirectoryFromOtherEfforts(t *testing.T) {
 	}
 }
 
+func TestMoveRearrangesEfforts(t *testing.T) {
+	st := testdb.Open(t)
+	k := testdb.KB(t, st)
+	a, b, c := create(t, k, "A"), create(t, k, "B"), create(t, k, "C")
+	order := func(k *kb.Store) string {
+		out := ""
+		for _, e := range k.Efforts() {
+			out += e.ID
+		}
+		return out
+	}
+	revision := k.Revision()
+
+	for _, step := range []struct{ id, before, want string }{
+		{c, a, "cab"},
+		{c, "", "abc"},
+		{a, c, "bac"},
+		{b, b, "bac"},
+		{b, a, "bac"},
+		{b, "", "acb"},
+	} {
+		must(t, k.Move(step.id, step.before))
+		if got := order(k); got != step.want {
+			t.Errorf("Move(%q, %q): order %s, want %s", step.id, step.before, got, step.want)
+		}
+	}
+	if k.Move("nope", a) == nil || k.Move(a, "nope") == nil {
+		t.Error("a move naming an unknown effort was accepted")
+	}
+	if got := order(k); got != "acb" {
+		t.Errorf("a refused move left the order %s", got)
+	}
+	if k.Revision() != revision {
+		t.Error("rearranging changed the filing revision, which would make the model file every session again")
+	}
+	if got := order(testdb.KB(t, st)); got != "acb" {
+		t.Errorf("order after reopen %s, want acb", got)
+	}
+}
+
 func TestDeleteForgetsTheEffortEverywhere(t *testing.T) {
 	k := open(t)
 	a, b := create(t, k, "A"), create(t, k, "B")
