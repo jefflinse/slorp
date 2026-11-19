@@ -1061,7 +1061,7 @@ function itemDetail(it) {
     <div class="sec"><div class="label"><span>From the source, verbatim</span><button data-act="toggleRaw" data-id="${it.id}">${rawOpen ? 'Hide' : 'Show'}</button></div>
       ${rawOpen ? rawBlock(it.lines) : `<div class="none mono">${esc(it.raw)}</div>`}</div>
     <div class="sec"><div class="label"><span>Also going on in ${esc(eff.name)}</span></div>
-      ${siblings.length ? siblings.map(sessionRow).join('') : '<div class="none">Nothing else is running here.</div>'}</div>
+      ${siblings.length ? siblings.map(s => sessionRow(s)).join('') : '<div class="none">Nothing else is running here.</div>'}</div>
   </div>`;
 }
 
@@ -2295,7 +2295,7 @@ function viewSessionsLive() {
   } else if (sel) detail = closedPage(sel);
   return sessionsView([
     ['active', 'Active', open.length, line, open.map(sessionRowLive).join('')],
-    ['closed', 'Closed', closed.length, closed.length ? 'Each as it stood when it closed.' : 'Sessions are kept here once they close.', closed.map(closedRow).join('')],
+    ['closed', 'Closed', closed.length, closed.length ? 'Each as it stood when it closed.' : 'Sessions are kept here once they close.', closed.map(a => closedRow(a)).join('')],
   ], detail, side);
 }
 
@@ -2533,7 +2533,7 @@ function viewPulls() {
   const list = groups.map(([key, name, items]) => {
     const shut = state.collapsed['pr:' + key];
     return !items.length && key !== 'you' ? '' : `<div class="ghead"><button class="name" data-act="collapse" data-key="pr:${key}"><span class="chev ${shut ? 'shut' : ''}">▼</span> ${name}</button><span class="n">${items.length}</span></div>
-      ${shut ? '' : `${lines[key] ? `<div class="gline">${lines[key]}</div>` : ''}${items.map(pullRow).join('') || (key === 'you' ? '<div class="gline">Nothing here is yours to move.</div>' : '')}`}`;
+      ${shut ? '' : `${lines[key] ? `<div class="gline">${lines[key]}</div>` : ''}${items.map(p => pullRow(p)).join('') || (key === 'you' ? '<div class="gline">Nothing here is yours to move.</div>' : '')}`}`;
   }).join('');
   const side = !sel ? '' : state.sideShut
     ? `<aside class="pane side"><button class="rail" data-act="side" title="Show where it stands" aria-expanded="false"><span>‹</span><span class="label">${sel.brief ? spark : ''}Where it stands</span></button></aside>`
