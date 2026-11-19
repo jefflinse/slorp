@@ -711,8 +711,8 @@ const KB_SECTIONS = {
 
 const KEY = 'slorp.proto.v1';
 const VIEWS = ['attention', 'efforts', 'sessions', 'pulls', 'knowledge', 'settings'];
-/* The views the top bar names; Settings is reached by its own button. */
-const NAV = VIEWS.slice(0, 5);
+/* The views the top bar names, in its order; Settings is reached by its own button. Pull requests are named only while GitHub is turned on to list them. */
+const nav = () => VIEWS.filter(v => v !== 'settings' && !(v === 'pulls' && pullsOff()));
 const VIEW_NAMES = { pulls: 'PRs' };
 const fresh = () => ({ view: 'attention', sel: null, effortSel: 'snap', kbSel: 'watch', setSel: 'general', groupBy: 'effort', srcFilter: 'all', pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto',
   handled: {}, moved: {}, sessMoved: {}, extra: [], arrived: {}, collapsed: {}, showHandled: false, variant: {}, rawOpen: {},
@@ -1322,6 +1322,8 @@ const clip = (t, n) => t.length > n ? t.slice(0, n) + '…' : t;
 const srcOf = s => `${KINDS[s.agent] || s.agent} ${s.kind === 'background' ? 'background session' : 'session'}`;
 const rawOf = s => `${s.agent} · ${shortPath(s.cwd)} · ${s.id.slice(0, 8)}`;
 const statusOf = s => LIVE_STATUS[s.status] || LIVE_STATUS.idle;
+/* Whether there is nowhere for pull requests to come from: the service is there and GitHub is not turned on. */
+const pullsOff = () => !!live && !integrations.find(i => i.id === 'github')?.enabled;
 /* The item a session has under Attention, while the user has yet to deal with it. */
 const itemOf = s => liveItems.find(i => i.session && i.session.id === s.id && isActive(i));
 
@@ -2100,8 +2102,8 @@ function viewPulls() {
   if (!all.some(p => pullKey(p) === state.pullSel)) state.pullSel = pullsShown().map(pullKey)[0] || null;
   const sel = all.find(p => pullKey(p) === state.pullSel), d = sel && discussionOf(sel);
   if (sel) fetchPull(sel);
-  const off = live && !(github && github.enabled && github.available);
-  const status = off ? `Pull requests come from GitHub, which is turned off or unavailable. <button class="link" data-act="setGo" data-s="integrations">Open integrations ›</button>`
+  const off = live && !github.available;
+  const status = off ? `Pull requests come from GitHub, which is turned on but unavailable. <button class="link" data-act="setGo" data-s="integrations">Open integrations ›</button>`
     : live ? `${!feed ? 'Checking GitHub now…' : feed.error ? `The last check, ${ago(minsSince(feed.at))}, failed: ${esc(feed.error)}` : `As GitHub listed them ${ago(minsSince(feed.at))}.`} <button class="link" data-act="feedCheck">Check now</button>` : '';
   const chips = PULL_FILTERS.map(([k, name, t]) => `<button class="chip ${state.pullFilter === k ? 'on' : ''}" data-act="pullFilter" data-f="${k}">${name} <span class="n">${all.filter(t).length}</span></button>`).join('');
   const rows = ['long', 'short'].map(as => `<button class="${(state.rows || 'long') === as ? 'on' : ''}" data-act="rows" data-as="${as}">${cap(as)}</button>`).join('');
@@ -2122,7 +2124,7 @@ function viewPulls() {
       ${status ? `<div class="gline" style="padding-top:8px">${status}</div>` : ''}
       ${off ? '' : list}
     </section>
-    <section class="pane detail" data-scroll="pr-${esc(state.pullSel || '')}">${sel ? pullPage(sel, d) : `<div class="empty">${off ? 'Nothing is listed while GitHub is off.' : all.length ? 'No pull request is selected.' : 'No open pull request is yours, or waiting on your review, or reviewed by you.'}</div>`}</section>
+    <section class="pane detail" data-scroll="pr-${esc(state.pullSel || '')}">${sel ? pullPage(sel, d) : `<div class="empty">${off ? 'Nothing is listed while GitHub is unavailable.' : all.length ? 'No pull request is selected.' : 'No open pull request is yours, or waiting on your review, or reviewed by you.'}</div>`}</section>
     ${side}
   </div>`;
 }
@@ -2320,7 +2322,7 @@ function modelBody() {
     </form>`;
 }
 
-const KEYS = [['1 – 5', 'Attention, Efforts, Sessions, PRs, Knowledge'], [',', 'Settings'], ['j  k', 'Next and previous in the Attention, Sessions and PRs lists'], ['e', 'Dismiss the selected item'], ['s', 'Snooze the selected item for an hour'],
+const keys = () => [[`1 – ${nav().length}`, nav().map(v => VIEW_NAMES[v] || cap(v)).join(', ')], [',', 'Settings'], ['j  k', `Next and previous in the ${listOf(['Attention', 'Sessions'].concat(pullsOff() ? [] : 'PRs'))} lists`], ['e', 'Dismiss the selected item'], ['s', 'Snooze the selected item for an hour'],
   ['r', 'Fluent or raw'], ['/  ⌘K', 'Search sessions'], ['w', 'Wrap up the day'], ['⌘↵', 'Send what is in a message box'], ['Esc', 'Close a menu, the search, or a rename']];
 
 const SETTINGS_LEDE = {
@@ -2332,7 +2334,7 @@ const SETTINGS_LEDE = {
 function settingsBody(sec) {
   if (sec === 'general') return generalBody();
   if (sec === 'model') return live ? modelBody() : '<div class="none">The demo has no local model to report on.</div>';
-  if (sec === 'keys') return `<dl class="facts keys">${KEYS.map(([k, what]) => `<dt class="mono">${k}</dt><dd>${what}</dd>`).join('')}</dl>`;
+  if (sec === 'keys') return `<dl class="facts keys">${keys().map(([k, what]) => `<dt class="mono">${k}</dt><dd>${what}</dd>`).join('')}</dl>`;
   if (!live) return '<div class="none">Integrations belong to the Slorp service, which this demo is not connected to.</div>';
   return `<div class="label">Agents</div>${agentsBody()}
     <div class="label" style="margin-top:34px">Tools</div>
@@ -2368,9 +2370,10 @@ function render() {
   actsSub = acts?.open ? acts.querySelector('details[open]')?.dataset.sub || null : null;
 
   document.documentElement.dataset.theme = state.theme;
+  if (state.view === 'pulls' && pullsOff()) { state.view = 'attention'; history.replaceState(place(), '', '#attention'); }
   const main = RENDER[state.view]();  // first: it may settle the selection
   const n = activeItems().length;
-  $('#nav').innerHTML = NAV.map(v => `<button class="${state.view === v ? 'on' : ''}" data-act="view" data-view="${v}">${VIEW_NAMES[v] || cap(v)}${v === 'attention' && n ? `<span class="count">${n}</span>` : ''}</button>`).join('');
+  $('#nav').innerHTML = nav().map(v => `<button class="${state.view === v ? 'on' : ''}" data-act="view" data-view="${v}">${VIEW_NAMES[v] || cap(v)}${v === 'attention' && n ? `<span class="count">${n}</span>` : ''}</button>`).join('');
   $('#tools').innerHTML = `
     <span class="model" ${modelless() ? `title="${esc(modelWhy(true))}"` : ''}><span class="dot ${live && isOffline ? 'error' : modelless() ? 'idle' : 'running'}"></span>${live ? (isOffline ? 'service offline' : `live · ${summarizer.model ? summarizer.model.split('/').pop() : 'no local model'}`) : 'qwen3:14b · local · caught up'}</span>${live ? usageTotal() + limitMeters() : ''}
     <span class="seg" role="group" aria-label="Voice" title="Fluent shows what the model wrote. Raw shows what the sources said. (r)">
@@ -2736,7 +2739,7 @@ document.addEventListener('keydown', e => {
   }
   if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
   const att = state.view === 'attention';
-  if (/^[1-5]$/.test(e.key)) go(VIEWS[e.key - 1]);
+  if (/^[1-9]$/.test(e.key) && nav()[e.key - 1]) go(nav()[e.key - 1]);
   else if (e.key === ',') go('settings');
   else if (e.key === 'r') state.fluent = !state.fluent;
   else if (e.key === 'w' && live) modal = modal === 'wrapup' ? null : 'wrapup';
