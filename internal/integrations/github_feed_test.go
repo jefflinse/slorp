@@ -18,7 +18,7 @@ import (
 // github stands in for gh talking to GitHub: it answers the feed's listing
 // and detail queries from the pull requests it holds, ten details to a page.
 type github struct {
-	mine, review []node
+	mine, review, reviewed []node
 	// fail names the requests, counted from 1, that GitHub answers with an error.
 	fail map[int]bool
 	// endless makes every page of details claim another follows.
@@ -56,12 +56,10 @@ func (g *github) run(_ context.Context, dir string, argv ...string) ([]byte, err
 	switch {
 	case dir != "" || len(argv) < 5 || !reflect.DeepEqual(argv[:4], []string{"gh", "api", "graphql", "-f"}):
 	case vars["query"] == listQuery:
-		return json.Marshal(node{"data": node{"mine": node{"nodes": only(g.mine, detailFields, true)}, "review": node{"nodes": only(g.review, detailFields, true)}}})
-	case vars["query"] == detailQuery && (vars["q"] == mineSearch || vars["q"] == reviewSearch):
-		all := g.mine
-		if vars["q"] == reviewSearch {
-			all = g.review
-		}
+		return json.Marshal(node{"data": node{"mine": node{"nodes": only(g.mine, detailFields, true)}, "review": node{"nodes": only(g.review, detailFields, true)},
+			"reviewed": node{"nodes": only(g.reviewed, detailFields, true)}}})
+	case vars["query"] == detailQuery && (vars["q"] == mineSearch || vars["q"] == reviewSearch || vars["q"] == reviewedSearch):
+		all := map[string][]node{mineSearch: g.mine, reviewSearch: g.review, reviewedSearch: g.reviewed}[vars["q"]]
 		from, _ := strconv.Atoi(vars["after"])
 		to := min(from+10, len(all))
 		return json.Marshal(node{"data": node{"search": node{
@@ -282,6 +280,38 @@ func TestFeedListsReviewRequests(t *testing.T) {
 	}
 }
 
+func TestFeedListsWhatYouReviewed(t *testing.T) {
+	g := &github{mine: []node{own(nil)},
+		review: []node{asked(nil)},
+		reviewed: []node{
+			asked(nil),
+			asked(both(set("number", 20), set("mergeable", "CONFLICTING"), reviews("CHANGES_REQUESTED"))),
+			asked(both(set("number", 21), set("isDraft", true))),
+			asked(func(p node) { clear(p) }),
+		}}
+	got, err := GitHub(g.run).Feed(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Items) != 2 || got.Items[1].Key != "Acme/Widgets#9:review-requested" {
+		t.Fatalf("items = %+v; want what you reviewed to raise nothing of its own", got.Items)
+	}
+	if len(got.PullRequests) != 4 {
+		t.Fatalf("listed %+v; want yours, the one you are asked to review once, and the two you reviewed", got.PullRequests)
+	}
+	again, reviewed, draft := got.PullRequests[1], got.PullRequests[2], got.PullRequests[3]
+	if again.Number != 9 || again.Reviewed || again.Needs != "Your review is requested." {
+		t.Errorf("asked to review again = %+v; want it listed as a request", again)
+	}
+	if reviewed.Number != 20 || !reviewed.Reviewed || reviewed.Mine || reviewed.OnYou || reviewed.Urgency != "" || reviewed.Needs != "You reviewed it. Waiting on its author." ||
+		!reviewed.Conflicts || reviewed.ChangesRequested != 1 || reviewed.Author != "sam" {
+		t.Errorf("reviewed = %+v; want it listed in full, as waiting on its author", reviewed)
+	}
+	if draft.Number != 21 || !draft.Reviewed || !draft.Draft || draft.Needs != "You reviewed it, and it is a draft again." {
+		t.Errorf("reviewed draft = %+v", draft)
+	}
+}
+
 func TestFeedListsYourPullRequestsAndWhoseMoveItIs(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -376,7 +406,7 @@ func TestFeedMakesOnlyFixedReadOnlyRequests(t *testing.T) {
 		}
 	}
 
-	g := &github{mine: []node{own(nil)}, review: requested(23)}
+	g := &github{mine: []node{own(nil)}, review: requested(23), reviewed: []node{asked(both(set("number", 99), set("mergeable", "CONFLICTING")))}}
 	found, err := GitHub(g.run).Feed(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -388,7 +418,7 @@ func TestFeedMakesOnlyFixedReadOnlyRequests(t *testing.T) {
 		}
 		return argv
 	}
-	want := [][]string{list, detail("q=" + mineSearch), detail("q=" + reviewSearch), detail("q="+reviewSearch, "after=10"), detail("q="+reviewSearch, "after=20")}
+	want := [][]string{list, detail("q=" + mineSearch), detail("q=" + reviewSearch), detail("q="+reviewSearch, "after=10"), detail("q="+reviewSearch, "after=20"), detail("q=" + reviewedSearch)}
 	if !reflect.DeepEqual(g.calls, want) {
 		t.Errorf("ran\n%q, want the listing and then the details a page at a time", g.calls)
 	}
@@ -403,7 +433,7 @@ func TestFeedMakesOnlyFixedReadOnlyRequests(t *testing.T) {
 			t.Errorf("not a plain query: %s", q)
 		}
 	}
-	for _, scope := range []string{"is:open author:@me", "is:open review-requested:@me"} {
+	for _, scope := range []string{"is:open author:@me", "is:open review-requested:@me", "is:open reviewed-by:@me -author:@me"} {
 		if !strings.Contains(listQuery, scope) {
 			t.Errorf("the listing does not ask for %q", scope)
 		}

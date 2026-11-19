@@ -111,6 +111,7 @@ func GitHub(run Runner) Integration {
 		Feed:    githubFeed(run),
 		Watches: githubWatches,
 		Clones:  clones,
+		Discuss: githubDiscussion(run),
 		Tools: []Tool{
 			{
 				Name:        "github_pr",

@@ -286,6 +286,44 @@ func TestBackfillingASession(t *testing.T) {
 	}
 }
 
+func TestAPullRequestCanBeReadWithItsDiscussion(t *testing.T) {
+	f := newFixture(t)
+	at := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	f.hub.SetFeed("fake", nil, []integrations.PullRequest{{Repo: "Acme/Widgets", Number: 7, Title: "Add a thing", Mine: true, At: at}}, nil)
+
+	if code, _ := f.do("GET", "/api/pulls/fake/8?repo=Acme/Widgets", "", nil); code != http.StatusNotFound {
+		t.Errorf("a pull request nothing lists = %d, want 404", code)
+	}
+	if code, _ := f.do("GET", "/api/pulls/fake/seven?repo=Acme/Widgets", "", nil); code != http.StatusNotFound {
+		t.Errorf("a number that is none = %d, want 404", code)
+	}
+	if f.feeds.rescans != 0 {
+		t.Errorf("asking after what is not listed woke the poller %d times", f.feeds.rescans)
+	}
+	code, body := f.do("GET", "/api/pulls/fake/7?repo=acme%2Fwidgets", "", nil)
+	if code != http.StatusOK || !strings.Contains(body, `"discussion":null`) || !strings.Contains(body, `"title":"Add a thing"`) || f.feeds.rescans != 1 {
+		t.Fatalf("before it is read = %d %s, having woken the poller %d times; want the pull request alone, and its discussion asked for", code, body, f.feeds.rescans)
+	}
+	ref := f.hub.Undiscussed(1)
+	if len(ref) != 1 {
+		t.Fatal("nothing is waiting to be read")
+	}
+	f.hub.SetDiscussion(ref[0], integrations.Discussion{Viewer: "me", Body: "What it does.", Comments: []integrations.Comment{{Author: "sam", Body: "Why?", At: at}}}, nil)
+	code, body = f.do("GET", "/api/pulls/fake/7?repo=Acme/Widgets", "", nil)
+	for _, want := range []string{`"discussion":{"viewer":"me","body":"What it does."`, `"comments":[{"author":"sam","body":"Why?"`, `"points":[{"id":"comment@2026-11-17T12:00:00Z","kind":"comment","who":"sam"`, `"behind":true`} {
+		if code != http.StatusOK || !strings.Contains(body, want) {
+			t.Errorf("once read = %d, lacking %s, which the page reads: %s", code, want, body)
+		}
+	}
+	if f.feeds.rescans != 2 {
+		t.Errorf("woke the poller %d times; want once more, while the model has yet to write", f.feeds.rescans)
+	}
+	f.hub.SetBrief(ref[0], hub.PullBrief{Stands: "Sam asks why."}, nil)
+	if _, body := f.do("GET", "/api/pulls/fake/7?repo=Acme/Widgets", "", nil); !strings.Contains(body, `"brief":{"stands":"Sam asks why."`) || f.feeds.rescans != 2 {
+		t.Errorf("once written about: woke the poller %d times, %s; want the brief, and nothing more asked for", f.feeds.rescans, body)
+	}
+}
+
 func TestAClosedSessionCanBeReadBack(t *testing.T) {
 	f := newFixture(t)
 	f.connect("s1")
@@ -852,7 +890,7 @@ func TestFeedItemsOverHTTP(t *testing.T) {
 
 	_, body := f.do("GET", "/api/sessions", "", nil)
 	for _, field := range []string{`"pullRequests":[{"repo":"Acme/Widgets","number":7,"title":"Add a thing","url":"https://example.com/7","author":"sam","mine":false,"draft":false,`,
-		`"approvals":2,"changesRequested":0,"awaiting":1,"checks":"passing","conflicts":false,"onYou":false,"urgency":"","needs":"Waiting on review.","source":"fake","effort":""}]`,
+		`"approvals":2,"changesRequested":0,"awaiting":1,"checks":"passing","conflicts":false,"onYou":false,"urgency":"","needs":"Waiting on review.","source":"fake","effort":"","points":[]}]`,
 		`"id":"fake-1"`, `"source":"fake"`, `"url":"https://example.com/1"`, `"repo":"Acme/Widgets"`, `"effort":""`, `"replies":[]`, `"feeds":{"fake":{"at":"`, `"count":1`} {
 		if !strings.Contains(body, field) {
 			t.Errorf("state lacks %s, which the page reads: %s", field, body)

@@ -16,6 +16,7 @@ import (
 type Source interface {
 	Feeds(ctx context.Context) []integrations.Feed
 	Clones(dirs []string) map[string][]string
+	Discuss(ctx context.Context, id, repo string, number int) (integrations.Discussion, error)
 }
 
 type Poller struct {
@@ -27,13 +28,16 @@ type Poller struct {
 	Every time.Duration
 	// Tick is how often the poller looks for something to do.
 	Tick time.Duration
+	// Discussions is how many pull requests' discussions are read each
+	// time it looks.
+	Discussions int
 
 	kick, nudge chan struct{}
 	polled      map[string]time.Time
 }
 
 func New(h *hub.Hub, src Source, dirs func() []string) *Poller {
-	return &Poller{Hub: h, Source: src, Dirs: dirs, Every: 5 * time.Minute, Tick: 15 * time.Second,
+	return &Poller{Hub: h, Source: src, Dirs: dirs, Every: 5 * time.Minute, Tick: 15 * time.Second, Discussions: 3,
 		kick: make(chan struct{}, 1), nudge: make(chan struct{}, 1), polled: map[string]time.Time{}}
 }
 
@@ -74,8 +78,9 @@ func (p *Poller) Run(ctx context.Context) {
 }
 
 // Step searches the efforts' directories and the sessions', collects the
-// feeds that are due, or every feed when now is true, and drops those that
-// have been turned off.
+// feeds that are due, or every feed when now is true, drops those that have
+// been turned off, and reads a few of the discussions of the pull requests
+// listed that have changed since theirs was last read.
 func (p *Poller) Step(ctx context.Context, now bool) {
 	p.Hub.SetClones(p.Source.Clones(p.Dirs()))
 	p.Hub.SetCheckouts(p.Source.Clones(p.Hub.Cwds()))
@@ -97,5 +102,9 @@ func (p *Poller) Step(ctx context.Context, now bool) {
 				Ask: it.Ask, Summary: it.Summary, URL: it.URL, Repo: it.Repo, At: it.At}
 		}
 		p.Hub.SetFeed(f.ID, items, found.PullRequests, err)
+	}
+	for _, ref := range p.Hub.Undiscussed(p.Discussions) {
+		d, err := p.Source.Discuss(ctx, ref.Source, ref.Repo, ref.Number)
+		p.Hub.SetDiscussion(ref, d, err)
 	}
 }

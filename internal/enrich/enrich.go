@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -171,11 +172,28 @@ func (e *Enricher) step(ctx context.Context) {
 }
 
 // next picks one piece of work: what the user asked for comes first, a day
-// to wrap up and then a session's earlier exchanges to fill in; then
-// describing a session, filing it under an effort, guessing its role, and
-// rewriting an effort's note.
+// to wrap up, then a session's earlier exchanges to fill in, then the pull
+// request they are looking at; then describing a session, filing it under
+// an effort, guessing its role, rewriting an effort's note, and briefing
+// the other pull requests.
 func (e *Enricher) next() (key, what string, job func(context.Context, string) error) {
 	ready := func(key string) bool { return time.Since(e.failed[key]) > retryAfter }
+	briefs := e.Hub.Unbriefed()
+	briefing := func(wanted bool) (key, what string, job func(context.Context, string) error) {
+		for _, w := range briefs {
+			name := w.Ref.Repo + "#" + strconv.Itoa(w.Ref.Number)
+			if k := "brief:" + w.Ref.Source + ":" + name + ":" + w.Ref.Key; w.Wanted == wanted && ready(k) {
+				return k, "brief " + name, func(ctx context.Context, model string) error {
+					b, sorts, err := e.brief(ctx, model, w)
+					if err == nil {
+						e.Hub.SetBrief(w.Ref, b, sorts)
+					}
+					return err
+				}
+			}
+		}
+		return "", "", nil
+	}
 	for _, w := range e.Hub.Unwrapped() {
 		return "wrapup:" + w.Key, "wrap up " + w.Day.Format("2 January"), func(ctx context.Context, model string) error {
 			headline, efforts, err := e.wrapup(ctx, model, w)
@@ -195,6 +213,9 @@ func (e *Enricher) next() (key, what string, job func(context.Context, string) e
 			e.Hub.SetFilled(u, lines)
 			return err
 		}
+	}
+	if key, what, job := briefing(true); job != nil {
+		return key, what, job
 	}
 	for _, w := range e.Hub.Undescribed() {
 		if ready(w.Key) {
@@ -240,7 +261,7 @@ func (e *Enricher) next() (key, what string, job func(context.Context, string) e
 			}
 		}
 	}
-	return "", "", nil
+	return briefing(false)
 }
 
 const routeSystem = `You file a developer's AI coding agent sessions under the work efforts they have declared. You are given the efforts and one session. Return the id of the effort the session clearly belongs to, or "none". Prefer "none" over a weak match: a wrong filing is worse than an unsorted session.

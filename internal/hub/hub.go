@@ -315,6 +315,17 @@ type PullRequest struct {
 	Source    string `json:"source"`
 	Effort    string `json:"effort"`
 	EffortVia string `json:"effortVia,omitempty"`
+	// Points are the things in its discussion that wait on the user, the
+	// latest first; empty until the discussion has been read, which ReadAt
+	// says when it was.
+	Points []PullPoint `json:"points"`
+	ReadAt time.Time   `json:"readAt,omitzero"`
+	// Brief is the model's account of the discussion, nil until it has
+	// written one.
+	Brief *PullBrief `json:"brief,omitempty"`
+	// Behind is true while the discussion, or what the model wrote of it,
+	// is older than the listing.
+	Behind bool `json:"behind,omitempty"`
 }
 
 // Limit is how much of one of the user's usage windows with an agent's
@@ -633,6 +644,12 @@ type Hub struct {
 	limits map[string][]Limit
 	// wrapups is what has been written, or asked to be, about each day.
 	wrapups map[string]Wrapup
+	// discussed is what is kept of each pull request's discussion, by the
+	// id of its PullRef, and discussFailed when one last could not be read.
+	discussed     map[string]*pullDoc
+	discussFailed map[string]time.Time
+	// wantedPull is the id of the pull request the user is looking at.
+	wantedPull string
 	// archive holds the sessions that have closed. unsettled holds those
 	// that were open when Slorp last stopped, until their agent's open
 	// sessions are known.
@@ -660,7 +677,14 @@ type note struct {
 func New(k *kb.Store, c Cache) *Hub {
 	h := &Hub{sessions: map[string]*Session{}, subs: map[chan struct{}]struct{}{}, kb: k, notes: map[string]note{},
 		cache: c, settings: Settings{AnswerPermissions: true}, waiters: map[string]chan Decision{}, feeds: map[string]*feed{}, wrapups: map[string]Wrapup{},
-		archive: map[string]sessionDoc{}, unsettled: map[string]sessionDoc{}, started: time.Now(), origins: map[string]string{}, plugins: map[string]Plugin{}}
+		archive: map[string]sessionDoc{}, unsettled: map[string]sessionDoc{}, started: time.Now(), origins: map[string]string{}, plugins: map[string]Plugin{},
+		discussed: map[string]*pullDoc{}, discussFailed: map[string]time.Time{}}
+	h.warn(c.Each("pull", func(id string, body []byte) {
+		var d pullDoc
+		if json.Unmarshal(body, &d) == nil {
+			h.discussed[id] = &d
+		}
+	}))
 	h.warn(c.Each("session", func(id string, body []byte) {
 		var d sessionDoc
 		switch {
@@ -1075,6 +1099,7 @@ func (h *Hub) SetFeed(source string, found []Item, pulls []integrations.PullRequ
 			f.items[i] = it
 		}
 		f.pulls = pulls
+		h.forget(source, pulls)
 	}
 	f.Count = len(f.items)
 	h.last = ""
@@ -1199,6 +1224,7 @@ func (h *Hub) pulls() []PullRequest {
 		for _, p := range f.pulls {
 			pr := PullRequest{PullRequest: p, Source: id}
 			pr.Effort, pr.EffortVia = h.fileRepo(p.Repo)
+			h.discuss(&pr)
 			out = append(out, pr)
 		}
 	}

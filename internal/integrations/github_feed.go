@@ -24,8 +24,9 @@ const (
 
 // The pull requests the feed is about, as GitHub's search names them.
 const (
-	mineSearch   = "is:pr is:open author:@me archived:false"
-	reviewSearch = "is:pr is:open review-requested:@me archived:false"
+	mineSearch     = "is:pr is:open author:@me archived:false"
+	reviewSearch   = "is:pr is:open review-requested:@me archived:false"
+	reviewedSearch = "is:pr is:open reviewed-by:@me -author:@me archived:false"
 )
 
 // listQuery asks, in one read-only request, which pull requests those are,
@@ -33,6 +34,7 @@ const (
 const listQuery = `query {
   mine: search(query: "` + mineSearch + `", type: ISSUE, first: 50) { nodes { ...pr } }
   review: search(query: "` + reviewSearch + `", type: ISSUE, first: 50) { nodes { ...pr } }
+  reviewed: search(query: "` + reviewedSearch + `", type: ISSUE, first: 50) { nodes { ...pr } }
 }
 fragment pr on PullRequest { number title url isDraft updatedAt reviewDecision headRefOid headRefName baseRefName
   author { login __typename }
@@ -124,17 +126,19 @@ func githubFeed(run Runner) func(ctx context.Context) (Found, error) {
 	return func(ctx context.Context) (Found, error) {
 		var listed struct {
 			Data struct {
-				Mine   struct{ Nodes []feedPR } `json:"mine"`
-				Review struct{ Nodes []feedPR } `json:"review"`
+				Mine     struct{ Nodes []feedPR } `json:"mine"`
+				Review   struct{ Nodes []feedPR } `json:"review"`
+				Reviewed struct{ Nodes []feedPR } `json:"reviewed"`
 			} `json:"data"`
 		}
 		if err := ask(ctx, run, &listed, listQuery); err != nil {
 			return Found{}, err
 		}
-		mine, review := listed.Data.Mine.Nodes, listed.Data.Review.Nodes
+		mine, review, reviewed := listed.Data.Mine.Nodes, listed.Data.Review.Nodes, listed.Data.Reviewed.Nodes
 		detail(ctx, run, mineSearch, mine)
 		detail(ctx, run, reviewSearch, review)
-		return survey(mine, review), nil
+		detail(ctx, run, reviewedSearch, reviewed)
+		return survey(mine, review, reviewed), nil
 	}
 }
 
@@ -145,6 +149,12 @@ func ask(ctx context.Context, run Runner, v any, query string, vars ...string) e
 	for _, kv := range vars {
 		argv = append(argv, "-f", kv)
 	}
+	return answer(ctx, run, v, argv)
+}
+
+// answer runs one gh command, a second time if the first fails, and decodes
+// what it prints into v.
+func answer(ctx context.Context, run Runner, v any, argv []string) error {
 	out, err := run(ctx, "", argv...)
 	if err != nil {
 		out, err = run(ctx, "", argv...)
@@ -196,10 +206,11 @@ func detail(ctx context.Context, run Runner, search string, listed []feedPR) {
 }
 
 // survey lists every pull request and picks out, as items, those waiting on
-// the user. Drafts, and a pull request of the user's still waiting on
-// someone else, are listed but are not items. Nothing is concluded from
-// checks or mergeability GitHub did not report.
-func survey(mine, review []feedPR) Found {
+// the user. Drafts, a pull request of the user's still waiting on someone
+// else, and one the user has reviewed and is not asked to again, are listed
+// but are not items. Nothing is concluded from checks or mergeability GitHub
+// did not report.
+func survey(mine, review, reviewed []feedPR) Found {
 	found := Found{Items: []FeedItem{}, PullRequests: []PullRequest{}}
 	for _, p := range mine {
 		if p.Number == 0 {
@@ -270,6 +281,21 @@ func survey(mine, review []feedPR) Found {
 		found.PullRequests = append(found.PullRequests, pr)
 		it.Key += ":" + it.Kind
 		found.Items = append(found.Items, it)
+	}
+	asked := map[string]bool{}
+	for _, p := range review {
+		asked[p.key()] = true
+	}
+	for _, p := range reviewed {
+		if p.Number == 0 || asked[p.key()] {
+			continue
+		}
+		pr := p.pull(false)
+		pr.Reviewed, pr.Needs = true, "You reviewed it. Waiting on its author."
+		if p.IsDraft {
+			pr.Needs = "You reviewed it, and it is a draft again."
+		}
+		found.PullRequests = append(found.PullRequests, pr)
 	}
 	return found
 }

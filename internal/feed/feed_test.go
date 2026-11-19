@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"regexp"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -30,6 +31,22 @@ type source struct {
 	fetched map[string]int
 	clones  map[string][]string
 	scanned [][]string
+	// discussions are what each pull request's discussion reads as, by
+	// "id repo#number", and discussed the order they were asked for in.
+	discussions map[string]integrations.Discussion
+	discussed   []string
+}
+
+func (s *source) Discuss(_ context.Context, id, repo string, number int) (integrations.Discussion, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := id + " " + repo + "#" + strconv.Itoa(number)
+	s.discussed = append(s.discussed, key)
+	d, ok := s.discussions[key]
+	if !ok {
+		return integrations.Discussion{}, errors.New("HTTP 502: Bad Gateway")
+	}
+	return d, nil
 }
 
 func newSource(ids ...string) *source {
@@ -334,5 +351,57 @@ func TestDefaultsAreGentle(t *testing.T) {
 	p, _, _ := newPoller(t, newSource())
 	if p.Every < time.Minute || p.Tick < time.Second || p.Tick >= p.Every {
 		t.Errorf("Every = %v, Tick = %v; want feeds collected minutes apart", p.Every, p.Tick)
+	}
+}
+
+func TestStepReadsAFewDiscussionsAtATime(t *testing.T) {
+	src := newSource("github")
+	day := func(d int) time.Time { return time.Date(2026, 11, d, 0, 0, 0, 0, time.UTC) }
+	var listed []integrations.PullRequest
+	src.discussions = map[string]integrations.Discussion{}
+	for n := 1; n <= 5; n++ {
+		listed = append(listed, integrations.PullRequest{Repo: "acme/widgets", Number: n, At: day(n)})
+		src.discussions["github acme/widgets#"+strconv.Itoa(n)] = integrations.Discussion{Body: "about " + strconv.Itoa(n)}
+	}
+	delete(src.discussions, "github acme/widgets#4")
+	src.pulls = map[string][]integrations.PullRequest{"github": listed}
+	p, h, _ := newPoller(t, src)
+	if p.Discussions < 1 || p.Discussions > 5 {
+		t.Fatalf("Discussions = %d; want a few read each time it looks", p.Discussions)
+	}
+	p.Discussions = 2
+
+	p.Step(ctx, false)
+	if want := []string{"github acme/widgets#5", "github acme/widgets#4"}; !reflect.DeepEqual(src.discussed, want) {
+		t.Fatalf("read %v, want the two latest changed", src.discussed)
+	}
+	read := func() map[int]bool {
+		out := map[int]bool{}
+		for _, pr := range h.State().PullRequests {
+			out[pr.Number] = !pr.ReadAt.IsZero()
+		}
+		return out
+	}
+	if got := read(); !got[5] || got[4] || got[3] {
+		t.Errorf("read = %v; want the one that could be read recorded, and the one that failed not", got)
+	}
+	if d, ok := h.Pull("github", "acme/widgets", 5); !ok || d.Discussion == nil || d.Discussion.Body != "about 5" {
+		t.Errorf("Pull = %+v; want the discussion that was read", d)
+	}
+
+	p.Step(ctx, false)
+	p.Step(ctx, false)
+	p.Step(ctx, false)
+	if want := []string{"github acme/widgets#5", "github acme/widgets#4", "github acme/widgets#3", "github acme/widgets#2", "github acme/widgets#1"}; !reflect.DeepEqual(src.discussed, want) {
+		t.Errorf("read %v; want each read once, and the one that failed left for later", src.discussed)
+	}
+	if src.count("github") != 1 {
+		t.Errorf("the feed was collected %d times; want discussions read without collecting it again", src.count("github"))
+	}
+
+	src.set(func() { src.on["github"] = false })
+	p.Step(ctx, false)
+	if len(src.discussed) != 5 {
+		t.Errorf("read %v after the feed was turned off", src.discussed)
 	}
 }

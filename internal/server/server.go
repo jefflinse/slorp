@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -548,6 +549,23 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			return
 		}
 		edited(w, k.AssignRepo(in.Repo, in.Effort))
+	})
+
+	// One listed pull request with its discussion. Asking says the user is
+	// looking at it, so what is still to be read or written of it comes
+	// first.
+	mux.HandleFunc("GET /api/pulls/{source}/{number}", func(w http.ResponseWriter, r *http.Request) {
+		source, repo := r.PathValue("source"), r.URL.Query().Get("repo")
+		number, _ := strconv.Atoi(r.PathValue("number"))
+		p, ok := h.Pull(source, repo, number)
+		if !ok {
+			http.Error(w, "no such pull request", http.StatusNotFound)
+			return
+		}
+		if h.WantPull(source, repo, number) {
+			feeds.Rescan()
+		}
+		writeJSON(w, http.StatusOK, p)
 	})
 
 	mux.HandleFunc("POST /api/feed/check", func(w http.ResponseWriter, r *http.Request) {

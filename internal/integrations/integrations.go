@@ -8,6 +8,7 @@ package integrations
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"time"
 )
@@ -44,6 +45,9 @@ type Integration struct {
 	// Clones names the repositories, as feed items name them, checked out at
 	// dir or directly inside it.
 	Clones func(dir string) []string
+	// Discuss reads the discussion of one pull request the feed listed. Nil
+	// when the tool has none to read.
+	Discuss func(ctx context.Context, repo string, number int) (Discussion, error)
 }
 
 // FeedItem is one thing in a tool that needs the user.
@@ -78,10 +82,13 @@ type PullRequest struct {
 	// into.
 	Branch string `json:"branch,omitempty"`
 	Base   string `json:"base,omitempty"`
-	// Mine is true when the user wrote it.
-	Mine  bool      `json:"mine"`
-	Draft bool      `json:"draft"`
-	At    time.Time `json:"at"`
+	// Mine is true when the user wrote it, and Reviewed when they have
+	// reviewed it and are not asked to again.
+	Mine     bool `json:"mine"`
+	Reviewed bool `json:"reviewed,omitempty"`
+	Draft    bool `json:"draft"`
+	// At is when anything about it last changed.
+	At time.Time `json:"at"`
 	// Approvals and ChangesRequested count reviewers by their latest verdict.
 	Approvals        int `json:"approvals"`
 	ChangesRequested int `json:"changesRequested"`
@@ -227,6 +234,17 @@ func (m *Manager) Feeds(ctx context.Context) []Feed {
 		}
 	}
 	return out
+}
+
+// Discuss reads the discussion of one pull request from the integration
+// with that ID, which must be turned on and usable.
+func (m *Manager) Discuss(ctx context.Context, id, repo string, number int) (Discussion, error) {
+	for _, in := range m.list {
+		if in.ID == id && in.Discuss != nil && m.Enabled()[id] && m.check(ctx, in).ok {
+			return in.Discuss(ctx, repo, number)
+		}
+	}
+	return Discussion{}, errors.New("that integration has no discussions to read")
 }
 
 // Clones maps each of dirs to the repositories checked out there, as the

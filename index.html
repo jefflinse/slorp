@@ -88,6 +88,26 @@ h1, h2, h3, p { margin: 0; }
 .facts dt { color: var(--ink3); }
 .facts dd { margin: 0; overflow-wrap: anywhere; }
 .facts .mono { font-size: 12px; }
+.facts .bad { color: var(--err); }
+.pt { padding: 12px 0; border-top: 1px solid var(--line); }
+.label + .pt { margin-top: 10px; }
+.pt .pth { display: flex; align-items: baseline; gap: 9px; }
+.pt .pth .tag { flex: none; }
+.pt .ptl { font-size: 15px; font-weight: 500; line-height: 1.4; }
+.pt .said { margin: 8px 0 0; }
+.pt .ptm { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-top: 7px; color: var(--ink3); font-size: 12.5px; }
+.conv { margin-bottom: 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
+.conv.resolved { opacity: .75; }
+.convh { display: flex; align-items: baseline; gap: 12px; width: 100%; padding: 8px 14px; border-bottom: 1px solid var(--line); color: var(--ink3); font-size: 12.5px; text-align: left; }
+.convh .mono { color: var(--ink2); font-size: 12px; }
+.convh .chev { margin-left: auto; }
+.conv > .convh:last-child { border-bottom: 0; }
+.msg { padding: 10px 14px; }
+.msg + .msg { border-top: 1px solid var(--line); }
+.msg .by { display: flex; align-items: baseline; gap: 10px; color: var(--ink3); font-size: 12.5px; }
+.msg .by b { color: var(--ink); font-size: 13.5px; font-weight: 600; }
+.msg .tx { margin-top: 4px; font-size: 14px; overflow-wrap: anywhere; }
+.msg .tx > :first-child { margin-top: 0; } .msg .tx > :last-child { margin-bottom: 0; }
 .lim { color: var(--ink3); font-size: 12px; }
 .lim .meter { width: 44px; }
 .pr { display: inline-flex; align-items: center; white-space: nowrap; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--ink2); font-size: 11.5px; font-weight: 500; line-height: 1.5; text-decoration: none; }
@@ -696,7 +716,7 @@ const NAV = VIEWS.slice(0, 5);
 const VIEW_NAMES = { pulls: 'PRs' };
 const fresh = () => ({ view: 'attention', sel: null, effortSel: 'snap', kbSel: 'watch', setSel: 'general', groupBy: 'effort', srcFilter: 'all', pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto',
   handled: {}, moved: {}, sessMoved: {}, extra: [], arrived: {}, collapsed: {}, showHandled: false, variant: {}, rawOpen: {},
-  actSel: null, expanded: {}, kb: structuredClone(KB_SEED), seq: 100 });
+  actSel: null, pullSel: null, pullTab: 'talk', expanded: {}, kb: structuredClone(KB_SEED), seq: 100 });
 let state = fresh();
 try { Object.assign(state, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch (e) { /* storage unavailable: run in memory */ }
 /* The view a name leads to, whether it is one or what one used to be called. */
@@ -807,7 +827,7 @@ function resolve(id, how, note, opts = {}) {
 }
 
 /* What is selected in each view, kept with a history entry so Back restores it. */
-const place = () => ({ sel: state.sel, effortSel: state.effortSel, kbSel: state.kbSel, actSel: state.actSel, setSel: state.setSel });
+const place = () => ({ sel: state.sel, effortSel: state.effortSel, kbSel: state.kbSel, actSel: state.actSel, setSel: state.setSel, pullSel: state.pullSel });
 
 function go(view) {
   if (view === state.view) return;
@@ -1105,11 +1125,12 @@ function pullChip(s, linked) {
    that fills the reply box named by box and sends nothing. */
 function pullAsks(p, box) {
   if (!p) return '';
-  const where = /^https:\/\//.test(p.url || '') ? p.url : pullKey(p), whose = p.mine ? 'your' : 'the';
+  const where = /^https:\/\//.test(p.url || '') ? p.url : pullKey(p), whose = p.mine ? 'your' : 'the', open = openPoints(p);
   const asks = [
     p.checks === 'failing' && ['Fix the failing checks', `The checks are failing on ${whose} pull request ${where}. Look at what failed and fix it.`],
     p.conflicts && ['Resolve the conflicts', `${cap(whose)} pull request ${where} conflicts with ${p.base || 'its base branch'}. Bring the branch up to date and resolve the conflicts.`],
     p.changesRequested && ['Address the review', `A reviewer asked for changes on ${whose} pull request ${where}. Read the review and address it.`],
+    open.length && ['Look at what is open', `These are waiting on me in the discussion of ${whose} pull request ${where}:\n${open.map((x, i) => `${i + 1}. ${x.who}${fileLine(x) ? ` on ${fileLine(x)}` : ''}: ${clip(x.text, 300)}`).join('\n')}\nLook into each and tell me what you would answer or change. Change nothing yet.`],
   ].filter(Boolean);
   return asks.map(([label, text]) => `<button class="btn" data-act="fill" data-box="${box}" data-text="${esc(text)}" title="From GitHub: fills the box, sends nothing"><i class="kd" style="${kindColor('github')}"></i>${label}</button>`).join('');
 }
@@ -1426,8 +1447,9 @@ const alsoIn = (effort, except) => `<div class="sec"><div class="label"><span>Al
 /* A feed item: nothing to reply to, only somewhere to go. Moving it files its
    whole repository, since that is what the next items from there go by. */
 /* The sessions working on the branch a pull request's item is about, each with a box to tell it so. */
-function onBranch(it) {
-  const p = pulls.find(x => x.url && x.url === it.url), on = p ? sessionsOn(p) : [];
+const onBranch = it => branchSessions(pulls.find(x => x.url && x.url === it.url));
+function branchSessions(p) {
+  const on = p ? sessionsOn(p) : [];
   if (!on.length) return '';
   return `<div class="sec"><div class="label"><span>${on.length === 1 ? 'A session is' : `${cap(num(on.length))} sessions are`} on this branch</span></div>
     ${on.map(s => `<div class="srow"><span class="dot ${(LIVE_STATUS[s.status] || LIVE_STATUS.idle)[0]}"></span>
@@ -1448,6 +1470,7 @@ function feedItemDetail(it) {
     <div class="titled"><h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>${menu}</div>
     <div class="need"><div class="label">What's needed from you</div><p class="ask">${esc(it.ask)}</p>
       ${/^https:\/\//.test(it.url || '') ? `<div class="replies"><a class="btn go" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">Open on ${esc(it.src)} ↗</a>
+        ${pulls.some(x => x.url === it.url) ? `<button class="btn" data-act="pullOpen" data-id="${esc(pullKey(pulls.find(x => x.url === it.url)))}">Its discussion, under PRs ›</button>` : ''}
         <span class="none" style="align-self:center">Slorp only reads ${esc(it.src)}. Anything you do there, you do there.</span></div>` : ''}</div>
     ${onBranch(it)}
     <div class="sec"><div class="label"><span>What's going on</span></div><p class="prose">${esc(it.summary)}</p>
@@ -1852,71 +1875,234 @@ function viewSessionsLive() {
 
 /* ───────────────────────── Pull requests ───────────────────────── */
 
+const minsAgo = m => new Date(Date.now() - m * 60000).toISOString();
 const MOCK_PULLS = [
-  { repo: 'go-estoria/estoria', number: 61, title: 'Postgres snapshot store with pruning', url: 'https://github.com/go-estoria/estoria/pull/61', author: 'you', mine: true, draft: false, age: 190,
-    approvals: 1, changesRequested: 1, awaiting: 0, checks: 'passing', conflicts: false, onYou: true, urgency: 'awaiting', needs: 'A reviewer asked for changes.', source: 'github', effort: 'snap' },
-  { repo: 'acme/estoria-fork', number: 212, title: 'Catch up to upstream v0.14', url: 'https://github.com/acme/estoria-fork/pull/212', author: 'you', mine: true, draft: false, age: 45,
-    approvals: 0, changesRequested: 0, awaiting: 2, checks: 'running', conflicts: true, onYou: true, urgency: 'awaiting', needs: 'It conflicts with its base branch.', source: 'github', effort: 'fork' },
-  { repo: 'acme/platform', number: 1408, title: 'Stream iterator: bound the read-ahead buffer', url: 'https://github.com/acme/platform/pull/1408', author: 'priya', mine: false, draft: false, age: 320,
-    approvals: 1, changesRequested: 0, awaiting: 1, checks: 'failing', conflicts: false, onYou: true, urgency: 'blocking', needs: 'Your review is requested.', source: 'github', effort: 'fork' },
-  { repo: 'go-estoria/go-estoria.github.io', number: 33, title: 'Rewrite the concept pages', url: 'https://github.com/go-estoria/go-estoria.github.io/pull/33', author: 'you', mine: true, draft: false, age: 1500,
-    approvals: 0, changesRequested: 0, awaiting: 1, checks: 'passing', conflicts: false, onYou: false, needs: 'Waiting on review.', source: 'github', effort: 'docs' },
-  { repo: 'go-estoria/estoria', number: 64, title: 'Sketch: retention as an option on the store', url: 'https://github.com/go-estoria/estoria/pull/64', author: 'you', mine: true, draft: true, age: 2900,
-    approvals: 0, changesRequested: 0, awaiting: 0, checks: 'none', conflicts: false, onYou: false, needs: 'Still a draft.', source: 'github', effort: 'snap' },
+  { repo: 'acme/platform', number: 1408, title: 'Stream iterator: bound the read-ahead buffer', url: 'https://github.com/acme/platform/pull/1408', author: 'priya', branch: 'iter-readahead', base: 'main', mine: false, draft: false, age: 320,
+    approvals: 1, changesRequested: 0, awaiting: 1, checks: 'failing', conflicts: false, onYou: true, urgency: 'blocking', needs: 'Your review is requested.', source: 'github', effort: 'fork', readAt: minsAgo(4),
+    brief: { stands: 'Priya bounded the read-ahead buffer at 256 events and Tomas has approved. She asks you in particular whether the fork\'s replay job depends on the old unbounded behaviour before she merges.', next: 'Yours: answer her question about the replay job, then review.' },
+    points: [{ id: 'm1', kind: 'mention', who: 'priya', at: minsAgo(320), url: 'https://github.com/acme/platform/pull/1408#issuecomment-1', text: '@you does the replay job in the fork rely on read-ahead being unbounded? If it does I\'ll keep the old path behind an option rather than break you.', sort: 'question', gist: 'Priya asks whether the fork\'s replay job needs unbounded read-ahead' }] },
+  { repo: 'go-estoria/estoria', number: 61, title: 'Postgres snapshot store with pruning', url: 'https://github.com/go-estoria/estoria/pull/61', author: 'you', branch: 'snapshot-store', base: 'main', mine: true, draft: false, age: 190,
+    approvals: 1, changesRequested: 1, awaiting: 0, checks: 'passing', conflicts: false, onYou: true, urgency: 'awaiting', needs: 'A reviewer asked for changes.', source: 'github', effort: 'snap', readAt: minsAgo(3),
+    brief: { stands: 'Marta approved after the first round. Devon asked for changes: he wants pruning to run in the same transaction as the snapshot write, and disagrees with keeping three snapshots by default. You have answered neither, and nothing was pushed since his review.', next: 'Yours: settle the transaction question with Devon, then push.' },
+    points: [
+      { id: 't1', kind: 'thread', who: 'devon', at: minsAgo(190), url: 'https://github.com/go-estoria/estoria/pull/61#discussion_r1', path: 'snapshotstore/postgres/store.go', line: 142, text: 'If the prune runs after the commit and the process dies in between, we keep one more snapshot than configured forever. Why not do both in one transaction?', sort: 'question', gist: 'Devon asks why pruning is not in the snapshot\'s transaction' },
+      { id: 't2', kind: 'thread', who: 'devon', at: minsAgo(196), url: 'https://github.com/go-estoria/estoria/pull/61#discussion_r2', path: 'snapshotstore/postgres/options.go', line: 31, text: 'I don\'t think 3 is a defensible default. Either keep 1, which is what the interface promises, or make the caller choose. A default nobody picked is the worst of both.', sort: 'pushback', gist: 'Devon disputes keeping three snapshots by default' },
+      { id: 't3', kind: 'thread', who: 'marta', at: minsAgo(1500), url: 'https://github.com/go-estoria/estoria/pull/61#discussion_r3', path: 'snapshotstore/postgres/store_test.go', line: 88, text: 'Thanks, that reads much better now.', sort: 'settled', gist: 'Marta thanks you for the test rewrite' }] },
+  { repo: 'acme/platform', number: 1391, title: 'Projection lag metric per partition', url: 'https://github.com/acme/platform/pull/1391', author: 'tomas', branch: 'lag-metric', base: 'main', mine: false, reviewed: true, draft: false, age: 75,
+    approvals: 0, changesRequested: 1, awaiting: 0, checks: 'passing', conflicts: false, onYou: false, needs: 'You reviewed it. Waiting on its author.', source: 'github', effort: 'fork', readAt: minsAgo(2),
+    brief: { stands: 'You asked Tomas to drop the per-partition label for cardinality and to move the gauge update out of the hot loop. He moved the gauge and pushed, but declines to drop the label, saying the dashboards need it and partitions are capped at 64.', next: 'Yours: accept the label with the cap, or say why not.' },
+    points: [
+      { id: 't4', kind: 'thread', who: 'tomas', at: minsAgo(75), url: 'https://github.com/acme/platform/pull/1391#discussion_r4', path: 'projection/metrics.go', line: 57, text: 'I\'d rather keep the label. We cap partitions at 64, so cardinality is bounded, and without it the lag dashboard can\'t tell which partition is stuck, which is the whole point.', sort: 'pushback', gist: 'Tomas declines to drop the partition label, citing the 64 cap' },
+      { id: 'c1', kind: 'commits', who: 'tomas', at: minsAgo(80), text: '2 commits, the latest: Update the gauge once per batch', sort: 'done', gist: 'Tomas moved the gauge update out of the hot loop' }] },
+  { repo: 'acme/estoria-fork', number: 212, title: 'Catch up to upstream v0.14', url: 'https://github.com/acme/estoria-fork/pull/212', author: 'you', branch: 'upstream-0.14', base: 'main', mine: true, draft: false, age: 45,
+    approvals: 0, changesRequested: 0, awaiting: 2, checks: 'running', conflicts: true, onYou: true, urgency: 'awaiting', needs: 'It conflicts with its base branch.', source: 'github', effort: 'fork', readAt: minsAgo(5), points: [],
+    brief: { stands: 'Nobody has reviewed it yet. Two reviewers are asked, and nothing has been said since you opened it.', next: 'Yours: resolve the conflict with main so the reviewers can start.' } },
+  { repo: 'go-estoria/go-estoria.github.io', number: 33, title: 'Rewrite the concept pages', url: 'https://github.com/go-estoria/go-estoria.github.io/pull/33', author: 'you', branch: 'concepts', base: 'main', mine: true, draft: false, age: 1500,
+    approvals: 0, changesRequested: 0, awaiting: 1, checks: 'passing', conflicts: false, onYou: false, needs: 'Waiting on review.', source: 'github', effort: 'docs', readAt: minsAgo(6), points: [],
+    brief: { stands: 'Marta is asked to review and has not started. Nothing has been said on it.', next: 'Marta\'s: review it.' } },
+  { repo: 'go-estoria/estoria', number: 64, title: 'Sketch: retention as an option on the store', url: 'https://github.com/go-estoria/estoria/pull/64', author: 'you', branch: 'retention-sketch', base: 'main', mine: true, draft: true, age: 2900,
+    approvals: 0, changesRequested: 0, awaiting: 0, checks: 'none', conflicts: false, onYou: false, needs: 'Still a draft.', source: 'github', effort: 'snap', points: [] },
 ];
-const PULL_FILTERS = [['all', 'Everything', () => true], ['blocking', 'Blocking', p => p.urgency === 'blocking'], ['you', 'Awaiting you', p => p.urgency === 'awaiting'], ['mine', 'Yours', p => p.mine], ['review', 'To review', p => !p.mine]];
+const saidBy = (author, age, body, url) => ({ author, at: minsAgo(age), body, url });
+const MOCK_DISCUSSIONS = {
+  'go-estoria/estoria#61': { viewer: 'you', additions: 612, deletions: 48, files: 9, commitCount: 7, requested: [], failing: [],
+    body: 'Adds a Postgres snapshot store.\n\n- Snapshots are written to `snapshots`, keyed by aggregate and version.\n- `WithRetention(n)` keeps the latest *n* per aggregate and prunes the rest after each write. The default is 3.\n\nPruning is best-effort: a failure is logged and the write still succeeds.',
+    comments: [saidBy('marta', 1700, 'Nice to finally have this. Reviewing today.')],
+    reviews: [{ ...saidBy('marta', 1500, 'Looks good after the test changes.'), state: 'approved' }, { ...saidBy('devon', 190, 'Two things I\'d like settled before this merges, both inline.'), state: 'changes requested' }],
+    threads: [
+      { path: 'snapshotstore/postgres/store.go', line: 142, resolved: false, comments: [saidBy('devon', 190, 'If the prune runs after the commit and the process dies in between, we keep one more snapshot than configured forever. Why not do both in one transaction?', 'https://github.com/go-estoria/estoria/pull/61#discussion_r1')] },
+      { path: 'snapshotstore/postgres/options.go', line: 31, resolved: false, comments: [saidBy('devon', 196, 'I don\'t think 3 is a defensible default. Either keep 1, which is what the interface promises, or make the caller choose. A default nobody picked is the worst of both.', 'https://github.com/go-estoria/estoria/pull/61#discussion_r2')] },
+      { path: 'snapshotstore/postgres/store_test.go', line: 88, resolved: false, comments: [saidBy('marta', 1650, 'This test asserts on row counts, which will break the moment retention changes. Can it assert on versions instead?'), saidBy('you', 1560, 'Rewritten to check the surviving versions.'), saidBy('marta', 1500, 'Thanks, that reads much better now.', 'https://github.com/go-estoria/estoria/pull/61#discussion_r3')] },
+      { path: 'snapshotstore/postgres/schema.sql', line: 12, resolved: true, comments: [saidBy('marta', 1660, 'Index on (aggregate_id, version DESC)?'), saidBy('you', 1570, 'Added.')] }],
+    commits: [{ id: '4be19a2', headline: 'Add the Postgres snapshot store', author: 'you', at: minsAgo(2900) }, { id: '9c03d7e', headline: 'Prune beyond the retention after each write', author: 'you', at: minsAgo(2400) }, { id: 'e41f6b0', headline: 'Assert on surviving versions, and index for the prune', author: 'you', at: minsAgo(1565) }] },
+  'acme/platform#1408': { viewer: 'you', additions: 141, deletions: 37, files: 4, commitCount: 3, requested: ['you'], failing: ['integration / replay'],
+    body: 'The iterator read ahead without bound when the consumer was slow, which is how we got the 3 GB heap last week. This caps it at 256 events and applies backpressure to the reader.',
+    comments: [saidBy('priya', 320, '@you does the replay job in the fork rely on read-ahead being unbounded? If it does I\'ll keep the old path behind an option rather than break you.', 'https://github.com/acme/platform/pull/1408#issuecomment-1')],
+    reviews: [{ ...saidBy('tomas', 400, ''), state: 'approved' }], threads: [],
+    commits: [{ id: '77a0c1d', headline: 'Bound the iterator\'s read-ahead at 256 events', author: 'priya', at: minsAgo(900) }, { id: 'b2e8f44', headline: 'Backpressure the reader when the buffer is full', author: 'priya', at: minsAgo(480) }] },
+  'acme/platform#1391': { viewer: 'you', additions: 96, deletions: 12, files: 3, commitCount: 4, requested: [], failing: [],
+    body: 'Exports projection lag as a gauge, labelled by partition, so the dashboard can show which partition is behind.',
+    comments: [], reviews: [{ ...saidBy('you', 600, 'Two things inline.'), state: 'changes requested' }],
+    threads: [
+      { path: 'projection/metrics.go', line: 57, resolved: false, comments: [saidBy('you', 600, 'A label per partition will blow up cardinality. Can this be one gauge for the worst partition?'), saidBy('tomas', 75, 'I\'d rather keep the label. We cap partitions at 64, so cardinality is bounded, and without it the lag dashboard can\'t tell which partition is stuck, which is the whole point.', 'https://github.com/acme/platform/pull/1391#discussion_r4')] },
+      { path: 'projection/loop.go', line: 203, resolved: true, comments: [saidBy('you', 600, 'This updates the gauge for every event. Once per batch is plenty.'), saidBy('tomas', 82, 'Done in the next commit.')] }],
+    commits: [{ id: '1d9e3aa', headline: 'Export projection lag per partition', author: 'tomas', at: minsAgo(1300) }, { id: '6f2b9c0', headline: 'Update the gauge once per batch', author: 'tomas', at: minsAgo(80) }] },
+};
+const PULL_FILTERS = [['all', 'Everything', () => true], ['mine', 'Yours', p => p.mine], ['review', 'To review', p => !p.mine && !p.reviewed], ['reviewed', 'Reviewed', p => p.reviewed]];
 const plural = (n, one, many = one + 's') => `${num(n)} ${n === 1 ? one : many}`;
 
-function pullReviews(p) {
-  const parts = [];
-  if (p.approvals) parts.push(`${p.approvals} approved`);
-  if (p.changesRequested) parts.push(`<span class="bad">${p.changesRequested} asked for changes</span>`);
-  if (p.awaiting) parts.push(`${p.awaiting} still to review`);
-  return parts.join('<br>') || 'none yet';
+/* What the model takes a point of a discussion for, as its tag says it and how loudly. */
+const SORTS = { question: ['question', 'awaiting'], pushback: ['pushback', 'blocking'], request: ['request', 'awaiting'], done: ['said done', 'whenever'], settled: ['needs nothing', 'whenever'] };
+const POINT_KINDS = { mention: 'named you', comment: 'commented', review: 'in a review', commits: 'pushed since your review' };
+const allPulls = () => live ? pulls : MOCK_PULLS;
+const pullAt = p => p.at ? minsSince(p.at) : p.age;
+/* The points of a pull request's discussion still open for the user: all but those the model reads as needing nothing. */
+const openPoints = p => (p.points || []).filter(x => x.sort !== 'settled');
+const yourMove = p => p.onYou || openPoints(p).length > 0;
+const fileLine = x => x.path ? `${x.path.split('/').pop()}${x.line ? `:${x.line}` : ''}` : '';
+const who = (name, d) => d && name && name.toLowerCase() === (d.viewer || '').toLowerCase() ? 'you' : name || 'someone';
+
+/* The whole of a pull request's discussion is fetched when its page is opened, and again when it has been read afresh. */
+let pullDocs = {}, pullAsked = {};
+function fetchPull(p) {
+  const key = pullKey(p), stamp = `${p.readAt || ''}`;
+  if (!live || pullAsked[key] === stamp) return;
+  pullAsked[key] = stamp;
+  fetch(`/api/pulls/${encodeURIComponent(p.source)}/${p.number}?repo=${encodeURIComponent(p.repo)}`).then(r => r.ok ? r.json() : null)
+    .then(doc => { if (doc) { pullDocs[key] = doc.discussion; render(); } }).catch(() => { delete pullAsked[key]; });
+}
+const discussionOf = p => live ? pullDocs[pullKey(p)] : MOCK_DISCUSSIONS[pullKey(p)];
+
+/* The pull requests as their list shows them: those where the next move is the user's, those waiting on someone else, and drafts. */
+function pullGroups() {
+  const test = (PULL_FILTERS.find(([k]) => k === state.pullFilter) || PULL_FILTERS[0])[2], shown = allPulls().filter(test);
+  return [['you', 'Your move', shown.filter(yourMove)], ['others', 'Waiting on others', shown.filter(p => !yourMove(p) && !p.draft)], ['drafts', 'Drafts', shown.filter(p => !yourMove(p) && p.draft)]];
+}
+const pullsShown = () => pullGroups().flatMap(([key, , list]) => state.collapsed['pr:' + key] ? [] : list);
+
+function pullRow(p) {
+  const [word, tone] = pullState(p), open = openPoints(p).length, next = state.fluent && p.brief?.next;
+  return `<button class="row ${pullKey(p) === state.pullSel ? 'sel' : ''}" data-act="pullSel" data-id="${esc(pullKey(p))}" style="${kindColor('github')}">
+    <span class="h"><span class="t">${esc(clip(p.title, 90))}</span><span class="w"><span>${ago(pullAt(p))}</span>${p.urgency === 'blocking' || p.urgency === 'awaiting' ? `<span class="tag ${p.urgency}">${p.urgency}</span>` : ''}</span></span>
+    <span class="st">${next ? spark + esc(next) : esc(p.needs)}</span>
+    ${state.rows === 'short' ? '' : `<span class="m"><span class="mono">${esc(p.repo.split('/').pop())}#${p.number}</span><span>${p.mine ? 'yours' : `by ${esc(p.author || 'someone')}`}${p.reviewed ? ', reviewed' : ''}</span>
+      <span class="pr ${tone}">${word}</span>${open ? `<span class="pr warn" title="Things in its discussion that wait on you">${open} for you</span>` : ''}</span>`}
+  </button>`;
+}
+
+/* One point of a discussion that waits on the user: what the model made of it, who said it where, and what was said. */
+function pointHtml(p, x) {
+  const [word, tone] = SORTS[x.sort] || [], open = state.expanded['pt:' + x.id], where = fileLine(x);
+  return `<div class="pt">
+    <div class="pth">${word ? `<span class="tag ${tone}">${word}</span>` : ''}<span class="ptl">${x.gist ? spark + esc(x.gist) : `${esc(x.who)} ${where ? `on ${esc(where)}` : POINT_KINDS[x.kind] || 'spoke last'}`}</span></div>
+    <div class="said ${open ? 'open' : ''}"><div class="tx">${esc(x.text)}</div><button class="link" data-act="expand" data-id="pt:${esc(x.id)}" hidden>${open ? 'Show less' : 'Show all of it'}</button></div>
+    <div class="ptm"><span>${esc(x.who)}</span>${where ? `<span class="mono" title="${esc(x.path)}">${esc(where)}</span>` : `<span>${POINT_KINDS[x.kind] || ''}</span>`}<span title="${esc(new Date(x.at).toLocaleString())}">${ago(minsSince(x.at))}</span>
+      ${/^https:\/\//.test(x.url || '') ? `<a class="link" href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">Answer on GitHub ↗</a>` : ''}</div>
+  </div>`;
+}
+
+/* What a pull request's page leads with: the points open for the user, or failing any, what it waits on. */
+function pullNeeds(p) {
+  const open = openPoints(p), rest = (p.points || []).filter(x => x.sort === 'settled'), more = state.expanded['settled:' + pullKey(p)];
+  const sorted = (p.points || []).some(x => x.sort), link = /^https:\/\//.test(p.url || '') ? `<a class="btn ${open.length ? '' : 'go'}" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a>` : '';
+  const reading = live && !p.readAt ? '<div class="none">Reading its discussion…</div>' : '';
+  return `<div class="need"><div class="label">${open.length ? `${sorted ? spark : ''}Open for you (${open.length})` : p.onYou ? "What's needed from you" : 'Nothing is waiting on you'}</div>
+    ${open.length ? '' : `<p class="ask">${esc(p.needs)}</p>`}${open.map(x => pointHtml(p, x)).join('')}${reading}
+    ${open.length && !sorted ? `<div class="none">${modelless() ? `${NO_MODEL}, so these are everything where someone else spoke last, unsorted.` : 'Not sorted by the model yet: these are everything where someone else spoke last.'}</div>` : ''}
+    ${rest.length ? `<button class="link" data-act="expand" data-id="settled:${esc(pullKey(p))}">${more ? 'Hide' : 'Show'} ${plural(rest.length, 'more')} the model reads as needing nothing</button>${more ? rest.map(x => pointHtml(p, x)).join('') : ''}` : ''}
+    <div class="replies" style="margin-top:14px">${link}<span class="none" style="align-self:center">Slorp only reads GitHub. Anything you do there, you do there.</span></div></div>`;
+}
+
+/* A pull request's discussion as conversations, the latest spoken in first: each thread on a line of the change, and each comment or review on its own. */
+function pullTalk(p, d) {
+  const msg = (c, state) => `<div class="msg"><div class="by"><b>${esc(who(c.author, d))}</b>${state ? `<span>${esc(state)}</span>` : ''}<span title="${esc(new Date(c.at).toLocaleString())}">${ago(minsSince(c.at))}</span>
+      ${/^https:\/\//.test(c.url || '') ? `<a class="link" href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">↗</a>` : ''}</div>${c.body ? `<div class="tx">${md(c.body)}</div>` : ''}</div>`;
+  const convs = d.threads.filter(t => t.comments.length).map(t => {
+    const key = `th:${pullKey(p)}:${t.path}:${t.line}:${t.comments[0].at}`, shut = t.resolved && !state.expanded[key];
+    return { at: t.comments.at(-1).at, html: `<div class="conv ${t.resolved ? 'resolved' : ''}"><button class="convh" data-act="${t.resolved ? 'expand' : 'noop'}" data-id="${esc(key)}"><span class="mono" title="${esc(t.path)}">${esc(fileLine(t))}</span>
+        <span>${t.resolved ? 'resolved' : 'unresolved'}${t.outdated ? ', on a line since changed' : ''}</span><span>${plural(t.comments.length, 'comment')}</span>${t.resolved ? `<span class="chev ${shut ? 'shut' : ''}">▼</span>` : ''}</button>
+        ${shut ? '' : t.comments.map(c => msg(c)).join('')}</div>` };
+  }).concat(d.comments.map(c => ({ at: c.at, html: `<div class="conv">${msg(c, 'commented')}</div>` })),
+    d.reviews.filter(r => r.body || r.state !== 'commented').map(r => ({ at: r.at, html: `<div class="conv">${msg(r, r.state === 'commented' ? 'reviewed' : r.state)}</div>` })));
+  return convs.sort((a, b) => new Date(b.at) - new Date(a.at)).map(c => c.html).join('') || '<div class="none">Nothing has been said on it yet.</div>';
+}
+
+function pullTabs(p, d) {
+  const on = ['commits', 'about'].includes(state.pullTab) ? state.pullTab : 'talk';
+  const tab = (key, name) => `<button class="label ${on === key ? 'on' : ''}" data-act="pullTab" data-t="${key}">${name}</button>`;
+  if (!d) return `<div class="tabs" role="tablist">${tab('talk', 'Discussion')}</div><div class="tabbody"><div class="none">${live && p.readAt ? 'Fetching its discussion…' : live ? 'Its discussion has not been read yet. Pull requests are read a few at a time, this one next.' : 'No discussion in this demo.'}</div></div>`;
+  const commits = () => `${d.commitCount > d.commits.length ? `<div class="none">The latest ${num(d.commits.length)} of ${num(d.commitCount)}.</div>` : ''}${d.commits.slice().reverse().map(c => `<div class="srow"><span class="mono" style="font-size:12px">${esc(c.id)}</span>
+      <div class="body"><div class="ttl">${esc(c.headline)}</div></div><span class="side">${esc(who(c.author, d))} · ${ago(minsSince(c.at))}</span></div>`).join('') || '<div class="none">No commits were listed.</div>'}`;
+  return `<div class="tabs" role="tablist">${tab('talk', 'Discussion')}${tab('commits', `Commits<span class="n">${d.commitCount || d.commits.length}</span>`)}${tab('about', 'Description')}</div>
+    <div class="tabbody">${on === 'commits' ? commits() : on === 'about' ? (d.body ? md(d.body) : '<div class="none">It has no description.</div>') : pullTalk(p, d)}</div>`;
+}
+
+/* The model's account of a pull request, or why there is none. */
+function pullStands(p) {
+  const b = p.brief;
+  if (b) return `<p class="prose">${esc(b.stands)}</p>${b.next ? `<p class="prose" style="margin-top:8px"><b>Next.</b> ${esc(b.next)}</p>` : ''}
+    ${p.behind && !modelless() ? '<div class="none" style="margin-top:8px">Written before its latest changes. It is being written again.</div>' : p.behind ? `<div class="none" style="margin-top:8px">Written before its latest changes, and ${NO_MODEL.toLowerCase()} to write it again.</div>` : ''}`;
+  return `<p class="prose"><span class="none">${!live ? 'Not written for this one.' : modelless() ? `${NO_MODEL}, so this is not summarized. What is waiting on you is still picked out, by who spoke last.` : p.readAt ? 'Being written…' : 'Its discussion has not been read yet.'}</span></p>`;
+}
+
+/* What is known of a pull request that its page does not otherwise say. */
+function aboutPull(p, d) {
+  const on = live ? sessionsOn(p) : [], real = p.effort && p.effort !== 'unsorted';
+  const reviews = [p.approvals && `${num(p.approvals)} approved`, p.changesRequested && `<span class="bad">${num(p.changesRequested)} asked for changes</span>`,
+    d && d.requested.length ? `still to review: ${esc(listOf(d.requested.map(n => who(n, d))))}` : p.awaiting && `${num(p.awaiting)} still to review`].filter(Boolean);
+  const facts = [
+    ['Repository', `<span class="mono">${esc(p.repo)}#${p.number}</span>`],
+    ['Author', p.mine ? 'you' : esc(p.author || 'someone')],
+    p.branch && ['Branch', `<span class="mono">${esc(p.branch)}</span>${p.base ? ` into <span class="mono">${esc(p.base)}</span>` : ''}`],
+    ['Reviews', reviews.join(', ') || 'none yet'],
+    ['Checks', `<span class="${p.checks === 'failing' ? 'bad' : ''}">${esc(p.checks)}</span>${d && d.failing.length ? `: ${esc(listOf(d.failing))}` : ''}`],
+    ['Merge', p.conflicts ? '<span class="bad">conflicts with its base</span>' : p.draft ? 'a draft' : 'no conflicts reported'],
+    d && ['Size', `+${d.additions} −${d.deletions} in ${plural(d.files, 'file')}, ${plural(d.commitCount, 'commit')}`],
+    ['Filed under', real ? `<button class="link" data-act="effort" data-id="${p.effort}">${esc(effortById(p.effort).name)}</button>` : 'Unsorted'],
+    on.length && ['Sessions', on.map(s => `<button class="link" data-act="openSession" data-id="${s.id}">${esc(clip(s.label, 40))}</button>`).join(', ')],
+    ['Changed', `<span title="${esc(p.at ? new Date(p.at).toLocaleString() : '')}">${ago(pullAt(p))}</span>`],
+    p.readAt && ['Read', `<span title="When Slorp last read its discussion from GitHub">${ago(minsSince(p.readAt))}</span>`],
+  ].filter(Boolean);
+  return `<div class="label tlhead"><span>Details</span></div><dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`;
+}
+
+/* What has been said and done on a pull request, newest first, a line each. */
+function pullTimeline(d) {
+  if (!d) return '';
+  const did = { approved: 'approved', 'changes requested': 'asked for changes', commented: 'reviewed', dismissed: 'had a review dismissed' };
+  const ev = d.comments.map(c => ({ at: c.at, line: `${who(c.author, d)} commented`, text: c.body }))
+    .concat(d.reviews.map(r => ({ at: r.at, line: `${who(r.author, d)} ${did[r.state] || 'reviewed'}`, text: r.body })),
+      d.threads.flatMap(t => t.comments.map(c => ({ at: c.at, line: `${who(c.author, d)} on ${fileLine(t)}`, text: c.body }))),
+      d.commits.map(c => ({ at: c.at, line: `${who(c.author, d)} pushed`, text: c.headline })))
+    .sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, 40);
+  return `<div class="label tlhead"><span>Timeline</span></div>${ev.length ? '' : '<div class="none">Nothing has happened on it yet.</div>'}<ol class="tl">${ev.map(e => `<li><span class="when" title="${esc(new Date(e.at).toLocaleString())}">${minsSince(e.at) < 1 ? 'now' : span(minsSince(e.at))}</span>
+    <div><div class="line">${esc(e.line)}</div>${e.text ? `<div class="you" title="${esc(clip(e.text, 600))}">${esc(clip(e.text, 200))}</div>` : ''}</div></li>`).join('')}</ol>`;
+}
+
+function pullPage(p, d) {
+  const real = p.effort && p.effort !== 'unsorted', [word, tone] = pullState(p), on = live ? sessionsOn(p) : [];
+  return `<div class="inner">
+    <div class="crumb">${real ? `<button class="eff" data-act="effort" data-id="${p.effort}">${esc(effortById(p.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${kindBadge('github')}
+      ${p.urgency === 'blocking' || p.urgency === 'awaiting' ? `<span class="tag ${p.urgency}">${p.urgency}</span>` : ''}<span class="mono">${esc(p.repo)}#${p.number}</span><span>${p.mine ? 'yours' : `by ${esc(p.author || 'someone')}`}</span><span class="pr ${tone}">${word}</span><span>changed ${ago(pullAt(p))}</span></div>
+    <div class="titled"><h1>${esc(p.title)}</h1></div>
+    <p class="subt">${esc(p.needs)}</p>
+    ${pullNeeds(p)}
+    ${on.length ? branchSessions(p) : ''}
+    <div class="sec going"><div class="label"><span>${p.brief ? spark : ''}Where it stands</span></div>${pullStands(p)}</div>
+    ${pullTabs(p, d)}
+    <div class="going">${aboutPull(p, d)}${pullTimeline(d)}</div>
+  </div>`;
 }
 
 function viewPulls() {
-  const all = live ? pulls : MOCK_PULLS, github = integrations.find(i => i.id === 'github'), feed = feeds.github;
-  if (!PULL_FILTERS.some(([k]) => k === state.pullFilter)) state.pullFilter = 'all';
-  const test = PULL_FILTERS.find(([k]) => k === state.pullFilter)[2];
-  const mine = all.filter(p => p.mine).length, blocking = all.filter(p => p.urgency === 'blocking').length, awaiting = all.filter(p => p.urgency === 'awaiting').length;
-  const some = n => n ? num(n) : 'none';
-  let lede = all.length
-    ? `${cap(plural(all.length, 'open pull request'))} involve${all.length === 1 ? 's' : ''} you: ${some(mine)} of yours and ${some(all.length - mine)} to review. ${cap(some(blocking))} ${blocking === 1 ? 'is' : 'are'} blocking someone, and ${some(awaiting)} ${awaiting === 1 ? 'is' : 'are'} awaiting you.`
-    : 'No open pull request is yours or waiting on your review.';
-  let status = '';
-  if (live && !(github && github.enabled && github.available)) {
-    lede = 'Pull requests come from GitHub, which is turned off or unavailable.';
-    status = `<button class="link" data-act="setGo" data-s="integrations">Open integrations ›</button>`;
-  } else if (live) {
-    status = `${!feed ? 'Checking GitHub now…' : feed.error ? `The last check, ${ago(minsSince(feed.at))}, failed: ${esc(feed.error)}` : `As GitHub reported them ${ago(minsSince(feed.at))}.`}
-      <button class="link" data-act="feedCheck">Check now</button>`;
-  }
+  const all = allPulls(), github = integrations.find(i => i.id === 'github'), feed = feeds.github, groups = pullGroups();
+  if (!all.some(p => pullKey(p) === state.pullSel)) state.pullSel = pullsShown().map(pullKey)[0] || null;
+  const sel = all.find(p => pullKey(p) === state.pullSel), d = sel && discussionOf(sel);
+  if (sel) fetchPull(sel);
+  const off = live && !(github && github.enabled && github.available);
+  const status = off ? `Pull requests come from GitHub, which is turned off or unavailable. <button class="link" data-act="setGo" data-s="integrations">Open integrations ›</button>`
+    : live ? `${!feed ? 'Checking GitHub now…' : feed.error ? `The last check, ${ago(minsSince(feed.at))}, failed: ${esc(feed.error)}` : `As GitHub listed them ${ago(minsSince(feed.at))}.`} <button class="link" data-act="feedCheck">Check now</button>` : '';
   const chips = PULL_FILTERS.map(([k, name, t]) => `<button class="chip ${state.pullFilter === k ? 'on' : ''}" data-act="pullFilter" data-f="${k}">${name} <span class="n">${all.filter(t).length}</span></button>`).join('');
-  const rows = all.filter(test).map(p => {
-    const standing = p.urgency === 'blocking' || p.urgency === 'awaiting' ? `<span class="tag ${p.urgency}">${p.urgency}</span>`
-      : p.onYou ? '<span class="dot waiting"></span>your move, whenever'
-      : `<span class="dot ${p.draft ? 'done' : 'idle'}"></span>${p.draft ? 'draft' : 'waiting on others'}`;
-    const name = /^https:\/\//.test(p.url || '')
-      ? `<a class="ttl" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.title)} ↗</a>` : `<span class="ttl">${esc(p.title)}</span>`;
-    return `<tr>
-        <td class="st">${standing}</td>
-        <td><div>${name}</div><div class="doing">${esc(p.needs)}</div>
-          <div class="dim mono" style="margin-top:3px">${esc(p.repo)}#${p.number} · ${p.mine ? 'yours' : `by ${esc(p.author || 'someone')}`}${live && sessionsOn(p).length ? ` · session: ${esc(sessionsOn(p).map(s => clip(s.label, 40)).join(', '))}` : ''}</div></td>
-        <td class="dim">${pullReviews(p)}</td>
-        <td class="dim ${p.checks === 'failing' ? 'bad' : ''}">${esc(p.checks)}</td>
-        <td class="dim ${p.conflicts ? 'bad' : ''}">${p.conflicts ? 'conflicts' : '—'}</td>
-        <td class="dim hide">${p.effort ? esc(effortById(p.effort).name) : 'Unsorted'}</td>
-        <td class="dim">${ago(p.at ? minsSince(p.at) : p.age)}</td>
-      </tr>`;
+  const rows = ['long', 'short'].map(as => `<button class="${(state.rows || 'long') === as ? 'on' : ''}" data-act="rows" data-as="${as}">${cap(as)}</button>`).join('');
+  const points = all.reduce((n, p) => n + openPoints(p).length, 0), blocking = all.filter(p => p.urgency === 'blocking').length;
+  const lines = { you: `${blocking ? `${cap(num(blocking))} ${blocking === 1 ? 'is' : 'are'} blocking someone. ` : ''}${points ? `${cap(plural(points, 'thing'))} in their discussions ${points === 1 ? 'waits' : 'wait'} on you.` : ''}` };
+  const list = groups.map(([key, name, items]) => {
+    const shut = state.collapsed['pr:' + key];
+    return !items.length && key !== 'you' ? '' : `<div class="ghead"><button class="name" data-act="collapse" data-key="pr:${key}"><span class="chev ${shut ? 'shut' : ''}">▼</span> ${name}</button><span class="n">${items.length}</span></div>
+      ${shut ? '' : `${lines[key] ? `<div class="gline">${lines[key]}</div>` : ''}${items.map(pullRow).join('') || (key === 'you' ? '<div class="gline">Nothing here is yours to move.</div>' : '')}`}`;
   }).join('');
-  return `<div class="page">
-    <h1>Pull requests</h1>
-    <p class="prose" style="margin-top:10px">${esc(lede)}</p>
-    ${status ? `<p class="none" style="margin-top:6px">${status}</p>` : ''}
-    <div class="chips">${chips}</div>
-    ${rows ? `<table class="tbl"><thead><tr><th class="label">Status</th><th class="label">What</th><th class="label">Reviews</th><th class="label">Checks</th><th class="label">Merge</th><th class="label hide">Effort</th><th class="label">Updated</th></tr></thead>
-    <tbody>${rows}</tbody></table>` : `<div class="none">${all.length ? 'Nothing here under this filter.' : ''}</div>`}
+  const side = !sel ? '' : state.sideShut
+    ? `<aside class="pane side"><button class="rail" data-act="side" title="Show where it stands" aria-expanded="false"><span>‹</span><span class="label">${sel.brief ? spark : ''}Where it stands</span></button></aside>`
+    : `<aside class="pane side" data-scroll="pr-side"><div class="head"><span class="label">${sel.brief ? spark : ''}Where it stands</span><button data-act="side" title="Hide this panel" aria-expanded="true">›</button></div>${pullStands(sel)}${aboutPull(sel, d)}${pullTimeline(d)}</aside>`;
+  return `<div class="split ${side ? 'sided' : ''} ${side && state.sideShut ? 'shut' : ''}">
+    <section class="pane list" data-scroll="pr-list">
+      <div class="listbar"><span class="label">Pull requests</span><span class="segs"><span class="seg" role="group" aria-label="How much each row shows">${rows}</span></span></div>
+      <div class="chips">${chips}</div>
+      ${status ? `<div class="gline" style="padding-top:8px">${status}</div>` : ''}
+      ${off ? '' : list}
+    </section>
+    <section class="pane detail" data-scroll="pr-${esc(state.pullSel || '')}">${sel ? pullPage(sel, d) : `<div class="empty">${off ? 'Nothing is listed while GitHub is off.' : all.length ? 'No pull request is selected.' : 'No open pull request is yours, or waiting on your review, or reviewed by you.'}</div>`}</section>
+    ${side}
   </div>`;
 }
 
@@ -2113,7 +2299,7 @@ function modelBody() {
     </form>`;
 }
 
-const KEYS = [['1 – 5', 'Attention, Efforts, Sessions, PRs, Knowledge'], [',', 'Settings'], ['j  k', 'Next and previous in the Attention and Sessions lists'], ['e', 'Dismiss the selected item'], ['s', 'Snooze the selected item for an hour'],
+const KEYS = [['1 – 5', 'Attention, Efforts, Sessions, PRs, Knowledge'], [',', 'Settings'], ['j  k', 'Next and previous in the Attention, Sessions and PRs lists'], ['e', 'Dismiss the selected item'], ['s', 'Snooze the selected item for an hour'],
   ['r', 'Fluent or raw'], ['/  ⌘K', 'Search sessions'], ['w', 'Wrap up the day'], ['⌘↵', 'Send what is in a message box'], ['Esc', 'Close a menu, the search, or a rename']];
 
 const SETTINGS_LEDE = {
@@ -2293,6 +2479,10 @@ const actions = {
   },
   expand: d => { state.expanded[d.id] = !state.expanded[d.id]; },
   actSel: d => { state.actSel = d.id; },
+  openSession: d => { state.actSel = d.id; go('sessions'); },
+  pullSel: d => { state.pullSel = d.id; },
+  pullOpen: d => { state.pullSel = d.id; go('pulls'); },
+  pullTab: d => { state.pullTab = d.t; },
   backfill: d => {
     fetch(`/api/sessions/${encodeURIComponent(d.id)}/backfill`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
       .then(res => res.ok ? res.json().then(r => toast(r.queued ? `Read ${plural(r.exchanges, 'exchange')}; the local model will fill in ${num(r.queued)}` : `Read ${plural(r.exchanges, 'exchange')}; nothing was left to fill in`))
@@ -2537,6 +2727,9 @@ document.addEventListener('keydown', e => {
   else if (state.view === 'sessions' && (e.key === 'j' || e.key === 'k')) {
     const order = actShown(...(live ? liveSessions() : mockSessions())).map(x => x.id), i = order.indexOf(state.actSel) + (e.key === 'j' ? 1 : -1);
     if (order[i]) state.actSel = order[i];
+  } else if (state.view === 'pulls' && (e.key === 'j' || e.key === 'k')) {
+    const order = pullsShown().map(pullKey), i = order.indexOf(state.pullSel) + (e.key === 'j' ? 1 : -1);
+    if (order[i]) state.pullSel = order[i];
   }
   else if (att && state.sel && e.key === 'e') actions.dismiss({ id: state.sel });
   else if (att && state.sel && e.key === 's') actions.snooze({ id: state.sel, for: 'hour' });

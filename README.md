@@ -41,6 +41,6 @@ OpenCode sessions are supported through [a plugin of their own](integrations/ope
 - **Start, stop and reopen.** Claude Code background sessions can be started under an effort, stopped, and reopened from the page.
 - **One conversation, one session.** A Claude Code conversation keeps its name, effort, role and timeline when it is cleared, handed off or moved to the background.
 - **Subagents.** The agents a Claude Code session starts to do parts of its work: when each ran, how long it took, what it used, and what it was asked and reported.
-- **Pull requests.** With the GitHub integration turned on, your pull requests and review requests are listed, matched to the sessions working on them, and raised when one needs you.
+- **Pull requests.** With the GitHub integration turned on, your pull requests, the ones you are asked to review and the ones you have reviewed are listed, matched to the sessions working on them, and raised when one needs you. Each has a page of its discussion, where the local model says where it stands and sorts what waits on you: a question, pushback on your review, a request, or word that something was done.
 - **Usage.** Tokens, estimated cost and your usage limits, as the agents report them.
 - **Local.** Slorp listens only on this machine and keeps what it knows in `~/.slorp`.
