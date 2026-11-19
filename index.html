@@ -1447,7 +1447,8 @@ const alsoIn = (effort, except) => `<div class="sec"><div class="label"><span>Al
 /* A feed item: nothing to reply to, only somewhere to go. Moving it files its
    whole repository, since that is what the next items from there go by. */
 /* The sessions working on the branch a pull request's item is about, each with a box to tell it so. */
-const onBranch = it => branchSessions(pulls.find(x => x.url && x.url === it.url));
+const pullOfItem = it => pulls.find(x => it.pull ? pullKey(x) === it.pull : x.url && x.url === it.url);
+const onBranch = it => branchSessions(pullOfItem(it));
 function branchSessions(p) {
   const on = p ? sessionsOn(p) : [];
   if (!on.length) return '';
@@ -1462,19 +1463,21 @@ function branchSessions(p) {
 }
 
 function feedItemDetail(it) {
-  const real = it.effort !== 'unsorted';
+  const real = it.effort !== 'unsorted', p = pullOfItem(it), point = p && it.point && (p.points || []).find(x => x.id === it.point);
   const menu = itemMenu(it, `<button data-act="livePark" data-id="${it.id}">Park as open question</button>
     ${menuPart('move', `File ${esc(it.repo)} under`, menuTo('repoMoveTo', it.id, effortsBut(it.effort)))}`);
   return `<div class="inner">
     <div class="crumb">${real ? `<button class="eff" data-act="effort" data-id="${it.effort}">${esc(effortById(it.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${real && VIA_REPO[it.effortVia] ? `<span>${VIA_REPO[it.effortVia]}</span>` : ''}${kindBadge(it.kind, it.src)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span><span class="mono">${esc(it.repo)}</span></div>
     <div class="titled"><h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>${menu}</div>
-    <div class="need"><div class="label">What's needed from you</div><p class="ask">${esc(it.ask)}</p>
-      ${/^https:\/\//.test(it.url || '') ? `<div class="replies"><a class="btn go" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">Open on ${esc(it.src)} ↗</a>
-        ${pulls.some(x => x.url === it.url) ? `<button class="btn" data-act="pullOpen" data-id="${esc(pullKey(pulls.find(x => x.url === it.url)))}">Its discussion, under PRs ›</button>` : ''}
+    <div class="need"><div class="label">${it.point ? spark : ''}What's needed from you</div>${point ? pointHtml(p, point) : `<p class="ask">${esc(it.ask)}</p>`}
+      ${/^https:\/\//.test(it.url || '') ? `<div class="replies" ${point ? 'style="margin-top:14px"' : ''}>${point ? '' : `<a class="btn go" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">Open on ${esc(it.src)} ↗</a>`}
+        ${p ? `<button class="btn" data-act="pullOpen" data-id="${esc(pullKey(p))}">Its discussion, under PRs ›</button>` : ''}
         <span class="none" style="align-self:center">Slorp only reads ${esc(it.src)}. Anything you do there, you do there.</span></div>` : ''}</div>
     ${onBranch(it)}
-    <div class="sec"><div class="label"><span>What's going on</span></div><p class="prose">${esc(it.summary)}</p>
-      <div class="none" style="margin-top:8px">As ${esc(it.src)} reported it ${ago(minsSince((feeds[it.source] || {}).at || it.at))}. No model wrote any of this.</div></div>
+    ${it.point && p ? `<div class="sec"><div class="label"><span>${p.brief ? spark : ''}Where it stands</span></div>${pullStands(p)}
+        <div class="none" style="margin-top:8px">${spark}The local model picked this out of the discussion of <span class="mono">${esc(it.pull)}</span>, as ${esc(it.src)} had it ${ago(minsSince(p.readAt || it.at))}.</div></div>`
+      : `<div class="sec"><div class="label"><span>What's going on</span></div><p class="prose">${esc(it.summary)}</p>
+      <div class="none" style="margin-top:8px">As ${esc(it.src)} reported it ${ago(minsSince((feeds[it.source] || {}).at || it.at))}. No model wrote any of this.</div></div>`}
     ${alsoIn(it.effort, '')}
   </div>`;
 }
@@ -1890,7 +1893,8 @@ const MOCK_PULLS = [
       { id: 't3', kind: 'thread', who: 'marta', at: minsAgo(1500), url: 'https://github.com/go-estoria/estoria/pull/61#discussion_r3', path: 'snapshotstore/postgres/store_test.go', line: 88, text: 'Thanks, that reads much better now.', sort: 'settled', gist: 'Marta thanks you for the test rewrite' }] },
   { repo: 'acme/platform', number: 1391, title: 'Projection lag metric per partition', url: 'https://github.com/acme/platform/pull/1391', author: 'tomas', branch: 'lag-metric', base: 'main', mine: false, reviewed: true, draft: false, age: 75,
     approvals: 0, changesRequested: 1, awaiting: 0, checks: 'passing', conflicts: false, onYou: false, needs: 'You reviewed it. Waiting on its author.', source: 'github', effort: 'fork', readAt: minsAgo(2),
-    brief: { stands: 'You asked Tomas to drop the per-partition label for cardinality and to move the gauge update out of the hot loop. He moved the gauge and pushed, but declines to drop the label, saying the dashboards need it and partitions are capped at 64.', next: 'Yours: accept the label with the cap, or say why not.' },
+    brief: { stands: 'You asked Tomas to drop the per-partition label for cardinality and to move the gauge update out of the hot loop. He moved the gauge and pushed, but declines to drop the label, saying the dashboards need it and partitions are capped at 64.', next: 'Yours: accept the label with the cap, or say why not.',
+      since: 'The gauge is now set once per batch in loop.go, from the highest offset the batch reached, which is what you asked for. metrics.go still labels the gauge by partition; the only change there is a guard that panics at startup if more than 64 partitions are configured.' },
     points: [
       { id: 't4', kind: 'thread', who: 'tomas', at: minsAgo(75), url: 'https://github.com/acme/platform/pull/1391#discussion_r4', path: 'projection/metrics.go', line: 57, text: 'I\'d rather keep the label. We cap partitions at 64, so cardinality is bounded, and without it the lag dashboard can\'t tell which partition is stuck, which is the whole point.', sort: 'pushback', gist: 'Tomas declines to drop the partition label, citing the 64 cap' },
       { id: 'c1', kind: 'commits', who: 'tomas', at: minsAgo(80), text: '2 commits, the latest: Update the gauge once per batch', sort: 'done', gist: 'Tomas moved the gauge update out of the hot loop' }] },
@@ -1922,6 +1926,7 @@ const MOCK_DISCUSSIONS = {
     commits: [{ id: '77a0c1d', headline: 'Bound the iterator\'s read-ahead at 256 events', author: 'priya', at: minsAgo(900) }, { id: 'b2e8f44', headline: 'Backpressure the reader when the buffer is full', author: 'priya', at: minsAgo(480) }] },
   'acme/platform#1391': { viewer: 'you', additions: 96, deletions: 12, files: 3, commitCount: 4, requested: [], failing: [],
     body: 'Exports projection lag as a gauge, labelled by partition, so the dashboard can show which partition is behind.',
+    since: { from: '1d9e3aa', to: '6f2b9c0', url: 'https://github.com/acme/platform/compare/1d9e3aa...6f2b9c0', commits: 2, files: [{ path: 'projection/loop.go', status: 'modified', additions: 9, deletions: 4 }, { path: 'projection/metrics.go', status: 'modified', additions: 6, deletions: 0 }] },
     comments: [], reviews: [{ ...saidBy('you', 600, 'Two things inline.'), state: 'changes requested' }],
     threads: [
       { path: 'projection/metrics.go', line: 57, resolved: false, comments: [saidBy('you', 600, 'A label per partition will blow up cardinality. Can this be one gauge for the worst partition?'), saidBy('tomas', 75, 'I\'d rather keep the label. We cap partitions at 64, so cardinality is bounded, and without it the lag dashboard can\'t tell which partition is stuck, which is the whole point.', 'https://github.com/acme/platform/pull/1391#discussion_r4')] },
@@ -2025,6 +2030,21 @@ function pullStands(p) {
   return `<p class="prose"><span class="none">${!live ? 'Not written for this one.' : modelless() ? `${NO_MODEL}, so this is not summarized. What is waiting on you is still picked out, by who spoke last.` : p.readAt ? 'Being written…' : 'Its discussion has not been read yet.'}</span></p>`;
 }
 
+/* What was pushed to a pull request since the user reviewed it: the model's account, and the files that changed. */
+function pullSince(p, d) {
+  const c = d && d.since, told = p.brief && p.brief.since;
+  if (!c) return '';
+  const lines = c.files.reduce((n, f) => [n[0] + f.additions, n[1] + f.deletions], [0, 0]), open = state.expanded['since:' + pullKey(p)];
+  const files = c.files.map(f => `<div class="srow"><div class="body"><span class="mono" style="font-size:12px">${esc(f.path)}</span></div><span class="side">${f.status === 'modified' ? '' : `${esc(f.status)} · `}+${f.additions} −${f.deletions}</span></div>`).join('');
+  return `<div class="sec"><div class="label"><span>${told ? spark : ''}Since you reviewed</span></div>
+    <p class="prose">${told ? esc(told) : `<span class="none">${modelless() ? `${NO_MODEL}, so what was pushed is not summarized.` : 'Not summarized yet.'}</span>`}</p>
+    ${c.rebuilt ? '<div class="none" style="margin-top:8px">The branch was rebuilt since, so this covers everything it now changes, not only what is new.</div>' : ''}
+    <div class="none" style="margin-top:8px">${cap(plural(c.commits, 'commit'))} since <span class="mono">${esc(c.from)}</span>, changing ${plural(c.files.length + (c.more || 0), 'file')} of the pull request${c.files.length ? ` by +${lines[0]} −${lines[1]}` : ''}.
+      ${c.files.length ? `<button class="link" data-act="expand" data-id="since:${esc(pullKey(p))}">${open ? 'Hide them' : 'List them'}</button>` : ''}
+      ${/^https:\/\//.test(c.url || '') ? `<a class="link" href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">See the changes on GitHub ↗</a>` : ''}</div>
+    ${open ? `${files}${c.more ? `<div class="none">And ${plural(c.more, 'more')}.</div>` : ''}` : ''}</div>`;
+}
+
 /* What is known of a pull request that its page does not otherwise say. */
 function aboutPull(p, d) {
   const on = live ? sessionsOn(p) : [], real = p.effort && p.effort !== 'unsorted';
@@ -2067,6 +2087,7 @@ function pullPage(p, d) {
     <div class="titled"><h1>${esc(p.title)}</h1></div>
     <p class="subt">${esc(p.needs)}</p>
     ${pullNeeds(p)}
+    ${pullSince(p, d)}
     ${on.length ? branchSessions(p) : ''}
     <div class="sec going"><div class="label"><span>${p.brief ? spark : ''}Where it stands</span></div>${pullStands(p)}</div>
     ${pullTabs(p, d)}

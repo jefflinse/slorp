@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -580,6 +581,44 @@ func TestBrief(t *testing.T) {
 	}
 	if err := json.Unmarshal(llm.request.ResponseFormat.JSONSchema.Schema, &schema); err != nil || schema.Properties.Points.MinItems != 2 || schema.Properties.Points.MaxItems != 2 {
 		t.Errorf("the reply is not held to one entry for each of the two points: %s", llm.request.ResponseFormat.JSONSchema.Schema)
+	}
+}
+
+func TestBriefSaysWhatWasPushedSinceAReview(t *testing.T) {
+	llm := &fakeLLM{content: `{"stands":"It stands.","next":"Yours.","since":" The gauge moved out of the loop. ","points":[]}`}
+	w := hub.Unbriefed{Pull: hub.PullRequest{PullRequest: integrations.PullRequest{Repo: "acme/widgets", Number: 8, Title: "Lag", Author: "sam", Reviewed: true}}}
+	if b, _, err := llm.enricher(t).brief(ctx, "m", w); err != nil || b.Since != "" || strings.Contains(llm.user(), "Pushed since") || strings.Contains(string(llm.request.ResponseFormat.JSONSchema.Schema), `"since"`) {
+		t.Errorf("with nothing pushed since: since %q, %v; want none asked for and none taken\n%s", b.Since, err, llm.user())
+	}
+
+	w.Discussion.Since = &integrations.Changes{From: "aaaaaaa", To: "bbbbbbb", Commits: 2, More: 4, Files: []integrations.FileChange{
+		{Path: "loop.go", Status: "modified", Additions: 9, Deletions: 4, Patch: "@@ -1 +1 @@\n-old\n+new"}, {Path: "big.go", Status: "added", Additions: 900}}}
+	b, _, err := llm.enricher(t).brief(ctx, "m", w)
+	if err != nil || b.Since != "The gauge moved out of the loop." {
+		t.Errorf("since = %q, %v", b.Since, err)
+	}
+	u := llm.user()
+	for _, want := range []string{"Pushed since you reviewed, 2 commits from aaaaaaa to bbbbbbb:", "loop.go (modified, 9 lines added and 4 removed)\n<<<\n@@ -1 +1 @@\n-old\n+new\n>>>",
+		"big.go (added, 900 lines added and 0 removed)\n(its changes are not shown)", "(4 more files changed and are not shown)"} {
+		if !strings.Contains(u, want) {
+			t.Errorf("prompt lacks %q:\n%s", want, u)
+		}
+	}
+	if strings.Contains(u, "rebuilt") || strings.Contains(u, "no file the pull request changes") {
+		t.Errorf("prompt says the branch was rebuilt, or that nothing of it changed:\n%s", u)
+	}
+	var schema struct{ Required []string }
+	if json.Unmarshal(llm.request.ResponseFormat.JSONSchema.Schema, &schema); !slices.Contains(schema.Required, "since") {
+		t.Errorf("the reply need not say what was pushed: %s", llm.request.ResponseFormat.JSONSchema.Schema)
+	}
+	if !strings.Contains(llm.system(), "since:") {
+		t.Error("system prompt does not say what to write of what was pushed")
+	}
+
+	w.Discussion.Since = &integrations.Changes{From: "aaaaaaa", To: "bbbbbbb", Commits: 1, Rebuilt: true}
+	llm.enricher(t).brief(ctx, "m", w)
+	if u := llm.user(); !strings.Contains(u, "The branch was rebuilt since") || !strings.Contains(u, "(no file the pull request changes was touched)") || strings.Contains(u, "more files changed") {
+		t.Errorf("prompt for a rebuilt branch with none of its files changed:\n%s", u)
 	}
 }
 

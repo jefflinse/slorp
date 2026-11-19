@@ -2,6 +2,7 @@ package hub
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -152,7 +153,7 @@ func TestBriefs(t *testing.T) {
 		t.Errorf("my own, with points waiting: needs %q; want it left as listed", p.Needs)
 	}
 
-	h.SetBrief(w.Ref, PullBrief{Stands: "Sam asks why.", Next: "Yours."}, map[string]Sorted{w.Points[0].ID: {Sort: SortQuestion, Gist: "Sam asks why"}})
+	h.SetBrief(w.Ref, PullBrief{Stands: "Sam asks why.", Next: "Yours.", Since: "It moved."}, map[string]Sorted{w.Points[0].ID: {Sort: SortQuestion, Gist: "Sam asks why"}})
 	p := listed(t, h, 1)
 	if p.Brief == nil || p.Brief.Stands != "Sam asks why." || p.Brief.Next != "Yours." || time.Since(p.Brief.At) > time.Minute || p.Behind {
 		t.Errorf("once written about: %+v (%+v); want the brief, timed, and nothing behind", p, p.Brief)
@@ -216,7 +217,7 @@ func TestBriefs(t *testing.T) {
 	h2 := New(k, st)
 	h2.SetFeed("github", nil, feed, nil)
 	h2.SetFeed("elsewhere", nil, []integrations.PullRequest{other}, nil)
-	if p := listed(t, h2, 1); p.Brief == nil || p.Brief.Stands != "Sam asks why." || len(p.Points) != 1 || p.Points[0].Text != "and another thing" || p.ReadAt.IsZero() {
+	if p := listed(t, h2, 1); p.Brief == nil || p.Brief.Stands != "Sam asks why." || p.Brief.Since != "It moved." || len(p.Points) != 1 || p.Points[0].Text != "and another thing" || p.ReadAt.IsZero() {
 		t.Errorf("after a restart: %+v; want what was last read, and what was written, kept", p)
 	}
 	if p := listed(t, h2, 2); p.Brief == nil || p.Points[0].Sort != SortSettled || p.Behind {
@@ -237,5 +238,87 @@ func TestBriefs(t *testing.T) {
 	}
 	if p := listed(t, h3, 2); p.Brief != nil || len(p.Points) != 0 || !p.ReadAt.IsZero() {
 		t.Errorf("listed again after going: %+v; want it read afresh", p)
+	}
+}
+
+func TestQuestionsAndPushbackAreRaised(t *testing.T) {
+	h, k, _ := newHub(t)
+	a := effort(t, k, "A")
+	must(t, k.AddDir(a, "/work/a"))
+	h.SetClones(map[string][]string{"/work/a": {"acme/widgets"}})
+	at := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	said := func(who string, mins int, body string) integrations.Comment {
+		return integrations.Comment{Author: who, Body: body, At: at.Add(time.Duration(mins) * time.Minute), URL: "https://example.com/" + body}
+	}
+	mine := pull("acme/widgets", 1, false, at)
+	mine.Mine, mine.Title, mine.URL = true, "Add retention", "https://example.com/pull/1"
+	theirs := pull("acme/gadgets", 2, false, at)
+	theirs.Title, theirs.Author = "Lag metric", "tomas"
+	h.SetFeed("github", []Item{{ID: "github-listed", Kind: "changes-requested", Title: "Changes requested: Add retention"}}, []integrations.PullRequest{mine, theirs}, nil)
+	var one, two PullRef
+	for _, r := range h.Undiscussed(9) {
+		if r.Number == 1 {
+			one = r
+		} else {
+			two = r
+		}
+	}
+	h.SetDiscussion(one, integrations.Discussion{Viewer: "me", Comments: []integrations.Comment{said("sam", 1, "why"), said("sam", 2, "no"), said("sam", 3, "please"), said("sam", 4, "did it"), said("sam", 5, "thanks"), said("sam", 6, "unsorted")}}, nil)
+	late := said("tomas", 9, "I would rather not")
+	late.URL = ""
+	h.SetDiscussion(two, integrations.Discussion{Viewer: "me", Threads: []integrations.Thread{{Path: "m.go", Line: 5, Comments: []integrations.Comment{said("me", 1, "drop it"), late}}}}, nil)
+
+	raised := func() []Item {
+		var out []Item
+		for _, it := range h.State().Items {
+			if it.Point != "" {
+				out = append(out, it)
+			}
+		}
+		return out
+	}
+	if got := raised(); len(got) != 0 {
+		t.Fatalf("raised %+v before the model sorted anything", got)
+	}
+	point := func(body string) string { return "https://example.com/" + body }
+	h.SetBrief(one, PullBrief{Stands: "s"}, map[string]Sorted{point("why"): {Sort: SortQuestion, Gist: "Sam asks why"}, point("no"): {Sort: SortPushback, Gist: "Sam disagrees"},
+		point("please"): {Sort: SortRequest, Gist: "x"}, point("did it"): {Sort: SortDone, Gist: "x"}, point("thanks"): {Sort: SortSettled, Gist: "x"}})
+	var id string
+	for _, w := range h.Unbriefed() {
+		id = w.Points[0].ID
+	}
+	h.SetBrief(two, PullBrief{Stands: "s"}, map[string]Sorted{id: {Sort: SortPushback}})
+
+	got := raised()
+	if len(got) != 3 {
+		t.Fatalf("raised %+v; want the question, and the pushback on each pull request", got)
+	}
+	if all := h.State().Items; len(all) != 4 || all[0].ID != "github-listed" {
+		t.Errorf("items = %+v; want what the feed listed kept, and first", all)
+	}
+	pushback, question, other := got[0], got[1], got[2]
+	if question.Kind != KindPullQuestion || question.Title != "Question: Add retention" || question.Ask != "Sam asks why." || question.Subtitle != "Sam asks why" || question.Urgency != "awaiting" ||
+		question.URL != point("why") || question.Pull != "acme/widgets#1" || question.Point != point("why") || question.Repo != "acme/widgets" || question.Source != "github" ||
+		!question.At.Equal(at.Add(time.Minute)) || question.Effort != a || question.Replies == nil || question.Summary != "acme/widgets#1, opened by you. sam wrote: why" {
+		t.Errorf("question = %+v; want it to say what is asked, where, and to hold up my own work", question)
+	}
+	if pushback.Kind != KindPullPushback || pushback.Title != "Pushback: Add retention" || pushback.Point != point("no") {
+		t.Errorf("pushback = %+v", pushback)
+	}
+	if other.Title != "Pushback: Lag metric" || other.Urgency != "blocking" || other.Ask != "tomas spoke last." || other.URL != "" || other.Effort != "" || other.Pull != "acme/gadgets#2" ||
+		other.Summary != "acme/gadgets#2, opened by tomas. tomas wrote: I would rather not" {
+		t.Errorf("pushback on another's = %+v; want it to hold up its author, and to make do without a gist or a link", other)
+	}
+	if question.ID == pushback.ID || !strings.HasPrefix(question.ID, "github-") || len(question.ID) != len("github-")+12 {
+		t.Errorf("ids %q and %q; want each its own, under the integration's name", question.ID, pushback.ID)
+	}
+	again := raised()
+	if again[1].ID != question.ID {
+		t.Errorf("id was %q and is now %q; want it to stay while the same point waits", question.ID, again[1].ID)
+	}
+	theirs.Number = 3
+	h.SetFeed("github", nil, []integrations.PullRequest{mine}, nil)
+	if got := raised(); len(got) != 2 {
+		t.Errorf("raised %+v once a pull request is no longer listed", got)
 	}
 }

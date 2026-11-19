@@ -278,7 +278,8 @@ type Item struct {
 	// act, and "whenever" when nothing is stopped.
 	Urgency string `json:"urgency"`
 	Title   string `json:"title"`
-	// Subtitle is the model's line on what a session is doing right now.
+	// Subtitle is the model's line on what a session is doing right now,
+	// or on what a point of a discussion says.
 	Subtitle string    `json:"subtitle,omitempty"`
 	Ask      string    `json:"ask"`
 	Summary  string    `json:"summary"`
@@ -289,6 +290,10 @@ type Item struct {
 	URL    string `json:"url,omitempty"`
 	// Repo is the repository a feed item belongs to, which is what it is filed by.
 	Repo string `json:"repo,omitempty"`
+	// Pull and Point name the pull request, as "owner/name#number", and
+	// the point of its discussion an item was raised for.
+	Pull  string `json:"pull,omitempty"`
+	Point string `json:"point,omitempty"`
 	// Effort is the effort the item is filed under, empty when unsorted.
 	Effort    string `json:"effort"`
 	EffortVia string `json:"effortVia,omitempty"`
@@ -1197,8 +1202,9 @@ func (h *Hub) pullOn(s *Session, pulls []PullRequest) string {
 	return ""
 }
 
-// fed returns every feed's items, each filed under the effort its
-// repository belongs to.
+// fed returns every feed's items, and one for each question or pushback
+// the model found in the discussions of its pull requests, each filed under
+// the effort its repository belongs to.
 func (h *Hub) fed() []Item {
 	sources := make([]string, 0, len(h.feeds))
 	for id := range h.feeds {
@@ -1210,6 +1216,12 @@ func (h *Hub) fed() []Item {
 		for _, it := range h.feeds[id].items {
 			it.Effort, it.EffortVia = h.fileRepo(it.Repo)
 			out = append(out, it)
+		}
+		for _, p := range h.feeds[id].pulls {
+			pr := PullRequest{PullRequest: p, Source: id}
+			pr.Effort, pr.EffortVia = h.fileRepo(p.Repo)
+			h.discuss(&pr)
+			out = append(out, raised(pr)...)
 		}
 	}
 	return out

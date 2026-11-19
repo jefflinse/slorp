@@ -33,6 +33,39 @@ type Discussion struct {
 	Requested []string `json:"requested"`
 	// Failing names the checks that failed on the newest commit.
 	Failing []string `json:"failing"`
+	// Since is what was pushed to someone else's pull request after the
+	// user last reviewed it, nil when nothing was or they never have.
+	Since *Changes `json:"since,omitempty"`
+}
+
+// Changes is how a pull request's code differs between two of its commits.
+type Changes struct {
+	// From and To are the commits, abbreviated: the one the user reviewed
+	// and the newest.
+	From string `json:"from"`
+	To   string `json:"to"`
+	URL  string `json:"url,omitempty"`
+	// Commits counts those pushed between the two.
+	Commits int `json:"commits"`
+	// Rebuilt is true when the branch no longer holds the commit reviewed,
+	// as after a rebase. The files are then everything the branch changes,
+	// not only what is new.
+	Rebuilt bool `json:"rebuilt,omitempty"`
+	// Files are the files of the pull request that changed, and More how
+	// many were left out for there being too many.
+	Files []FileChange `json:"files"`
+	More  int          `json:"more,omitempty"`
+}
+
+// FileChange is how one file differs: "added", "removed", "modified" or
+// "renamed", by how many lines, and the start of the difference itself,
+// which is empty for a file too large or too far down a long list.
+type FileChange struct {
+	Path      string `json:"path"`
+	Status    string `json:"status"`
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
+	Patch     string `json:"patch,omitempty"`
 }
 
 // Comment is one thing someone said.

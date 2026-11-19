@@ -1,6 +1,10 @@
 package hub
 
 import (
+	"cmp"
+	"crypto/sha1"
+	"encoding/hex"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -21,6 +25,12 @@ const (
 	SortDone = "done"
 	// SortSettled needs nothing from the user.
 	SortSettled = "settled"
+)
+
+// Kinds of item raised from a pull request's discussion.
+const (
+	KindPullQuestion = "pr-question"
+	KindPullPushback = "pr-pushback"
 )
 
 // discussRetry is how long a discussion that could not be read is left
@@ -45,9 +55,12 @@ func (r PullRef) id() string {
 // discussion.
 type PullBrief struct {
 	// Stands says where it stands, and Next whose move it is.
-	Stands string    `json:"stands"`
-	Next   string    `json:"next"`
-	At     time.Time `json:"at"`
+	Stands string `json:"stands"`
+	Next   string `json:"next"`
+	// Since says what the code pushed since the user reviewed does, empty
+	// when nothing was.
+	Since string    `json:"since,omitempty"`
+	At    time.Time `json:"at"`
 }
 
 // Sorted is what the model made of one point: which sort it is, and the
@@ -124,6 +137,42 @@ func (h *Hub) discuss(p *PullRequest) {
 	if p.Reviewed && open {
 		p.Needs = "You reviewed it, and its author has answered."
 	}
+}
+
+// raised returns an item for each point of p's discussion the model took
+// for a question or for pushback. One on the user's own pull request holds
+// up their own work, and one on another's holds up its author.
+func raised(p PullRequest) []Item {
+	var out []Item
+	for _, pt := range p.Points {
+		kind, word := KindPullQuestion, "Question"
+		switch pt.Sort {
+		case SortQuestion:
+		case SortPushback:
+			kind, word = KindPullPushback, "Pushback"
+		default:
+			continue
+		}
+		ref := pullRef(p)
+		sum := sha1.Sum([]byte(ref.id() + "\x00" + pt.ID))
+		it := Item{ID: p.Source + "-" + hex.EncodeToString(sum[:6]), Kind: kind, Urgency: "blocking", Title: word + ": " + p.Title, Subtitle: pt.Gist,
+			Ask: cmp.Or(pt.Gist, pt.Who+" spoke last") + ".", Summary: fmt.Sprintf("%s#%d, %s. %s wrote: %s", p.Repo, p.Number, whose(p), pt.Who, pt.Text),
+			Replies: []string{}, At: pt.At, Source: p.Source, URL: cmp.Or(pt.URL, p.URL), Repo: p.Repo, Pull: p.Repo + "#" + strconv.Itoa(p.Number), Point: pt.ID,
+			Effort: p.Effort, EffortVia: p.EffortVia}
+		if p.Mine {
+			it.Urgency = "awaiting"
+		}
+		out = append(out, it)
+	}
+	return out
+}
+
+// whose says whose pull request p is, as an item's summary puts it.
+func whose(p PullRequest) string {
+	if p.Mine {
+		return "opened by you"
+	}
+	return "opened by " + cmp.Or(p.Author, "someone")
 }
 
 // ranked orders pull requests for work on their discussions: the one the

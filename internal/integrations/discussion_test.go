@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -280,5 +281,123 @@ func TestManagerDiscuss(t *testing.T) {
 	on["talks"] = false
 	if _, err := m.Discuss(context.Background(), "talks", "a/b", 7); err == nil || asked != 1 {
 		t.Errorf("an integration that is turned off was asked: %v, %d times in all", err, asked)
+	}
+}
+
+// reviewing stands in for gh on a pull request the user reviewed: it gives
+// the discussion pr describes, and compared when asked how two commits
+// differ.
+type reviewing struct {
+	pr       string
+	compared string
+	fail     bool
+	calls    [][]string
+}
+
+func (r *reviewing) run(_ context.Context, dir string, argv ...string) ([]byte, error) {
+	r.calls = append(r.calls, argv)
+	if len(argv) > 2 && argv[2] == "graphql" {
+		return []byte(`{"data":{"viewer":{"login":"me"},"repository":{"pullRequest":{` + r.pr + `}}}}`), nil
+	}
+	if r.fail {
+		return nil, errors.New("HTTP 404: Not Found")
+	}
+	return []byte(r.compared), nil
+}
+
+const (
+	seen = "aaaaaaa111111111111111111111111111111111"
+	head = "bbbbbbb222222222222222222222222222222222"
+)
+
+// reviewedAt is a pull request by who, now at head, that the user reviewed
+// at the commit at.
+func reviewedAt(who, at string) string {
+	return `"headRefOid":"` + head + `","author":{"login":"` + who + `"},"files":{"totalCount":3,"nodes":[{"path":"a.go"},{"path":"b.go"},{"path":"c.go"}]},
+	 "reviews":{"nodes":[{"state":"COMMENTED","submittedAt":"2026-11-17T10:00:00Z","author":{"login":"Me"},"commit":{"oid":"0000000000"}},
+	   {"state":"APPROVED","submittedAt":"2026-11-17T11:00:00Z","author":{"login":"kim"},"commit":{"oid":"cccccccccc"}},
+	   {"state":"CHANGES_REQUESTED","submittedAt":"2026-11-17T12:00:00Z","author":{"login":"me"},"commit":{"oid":"` + at + `"}},
+	   {"state":"PENDING","author":{"login":"me"},"commit":{"oid":"dddddddddd"}}]}`
+}
+
+func TestGitHubDiscussionSaysWhatWasPushedSinceAReview(t *testing.T) {
+	compared := `{"html_url":"https://github.com/a/b/compare/x...y","status":"ahead","total_commits":2,"files":[
+	  {"filename":"a.go","status":"modified","additions":3,"deletions":1,"patch":"@@ a"},
+	  {"filename":"merged/from/main.go","status":"added","additions":90,"deletions":0,"patch":"@@ noise"},
+	  {"filename":"c.go","status":"removed","additions":0,"deletions":7}]}`
+	gh := &reviewing{pr: reviewedAt("sam", seen), compared: compared}
+	d, err := githubDiscussion(gh.run)(context.Background(), "a/b", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"gh", "api", "repos/a/b/compare/" + seen + "..." + head}; len(gh.calls) != 2 || !reflect.DeepEqual(gh.calls[1], want) {
+		t.Fatalf("asked %q; want the discussion, and then one read of how the commit I last reviewed differs from the newest", gh.calls)
+	}
+	want := &Changes{From: "aaaaaaa", To: "bbbbbbb", URL: "https://github.com/a/b/compare/x...y", Commits: 2,
+		Files: []FileChange{{Path: "a.go", Status: "modified", Additions: 3, Deletions: 1, Patch: "@@ a"}, {Path: "c.go", Status: "removed", Deletions: 7}}}
+	if !reflect.DeepEqual(d.Since, want) {
+		t.Errorf("since = %+v\nwant %+v, without the file the pull request does not change", d.Since, want)
+	}
+
+	none := []struct{ name, pr string }{
+		{"my own pull request", reviewedAt("ME", seen)},
+		{"nothing pushed since", reviewedAt("sam", head)},
+		{"a commit id that is none", reviewedAt("sam", "HEAD~1")},
+		{"no review of mine", `"headRefOid":"` + head + `","author":{"login":"sam"},"reviews":{"nodes":[{"state":"APPROVED","author":{"login":"kim"},"commit":{"oid":"` + seen + `"}}]}`},
+		{"only a review I have not sent", `"headRefOid":"` + head + `","author":{"login":"sam"},"reviews":{"nodes":[{"state":"PENDING","author":{"login":"me"},"commit":{"oid":"` + seen + `"}}]}`},
+		{"no newest commit", strings.Replace(reviewedAt("sam", seen), head, "", 1)},
+	}
+	for _, tt := range none {
+		gh := &reviewing{pr: tt.pr, compared: compared}
+		if d, err := githubDiscussion(gh.run)(context.Background(), "a/b", 7); err != nil || d.Since != nil || len(gh.calls) != 1 {
+			t.Errorf("%s: since %+v, %v, after %d requests; want nothing compared", tt.name, d.Since, err, len(gh.calls))
+		}
+	}
+
+	gh = &reviewing{pr: reviewedAt("sam", seen), fail: true}
+	if d, err := githubDiscussion(gh.run)(context.Background(), "a/b", 7); err != nil || d.Since != nil || d.Viewer != "me" || len(d.Reviews) != 3 {
+		t.Errorf("when the commits cannot be compared: %+v, %v; want the discussion without it", d, err)
+	}
+
+	gh = &reviewing{pr: strings.Replace(reviewedAt("sam", seen), `"totalCount":3`, `"totalCount":4`, 1),
+		compared: `{"html_url":"javascript:alert(1)","status":"diverged","total_commits":5,"files":[{"filename":"elsewhere.go","status":"added","additions":1}]}`}
+	d, _ = githubDiscussion(gh.run)(context.Background(), "a/b", 7)
+	if d.Since == nil || !d.Since.Rebuilt || d.Since.URL != "" || len(d.Since.Files) != 1 || d.Since.Commits != 5 {
+		t.Errorf("since = %+v; want a branch rebuilt since to be told as one, every file kept when not all the pull request's are known, and no link that is not https", d.Since)
+	}
+}
+
+func TestChangesAreCutToSize(t *testing.T) {
+	var files []string
+	for i := range changedFiles + 3 {
+		patch := strings.Repeat("é", 10)
+		switch i {
+		case 0:
+			patch = strings.Repeat("é", patchRunes+500)
+		case 2:
+			patch = strings.Repeat("x", patchesRunes)
+		}
+		files = append(files, `{"filename":"f`+strconv.Itoa(i)+`.go","status":"modified","additions":1,"deletions":1,"patch":"`+patch+`"}`)
+	}
+	gh := &reviewing{compared: `{"status":"ahead","total_commits":1,"files":[` + strings.Join(files, ",") + `]}`}
+	c, err := githubChanges(context.Background(), gh.run, "a/b", seen, head, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Files) != changedFiles || c.More != 3 || c.Files[changedFiles-1].Path != "f"+strconv.Itoa(changedFiles-1)+".go" {
+		t.Fatalf("kept %d files and counted %d more; want the first %d kept and the rest counted", len(c.Files), c.More, changedFiles)
+	}
+	if got := c.Files[0].Patch; got != strings.Repeat("é", patchRunes)+"…" {
+		t.Errorf("a long difference is kept as %d runes; want it cut to %d and marked", len([]rune(got)), patchRunes)
+	}
+	if c.Files[1].Patch == "" || c.Files[2].Patch != "" || c.Files[2].Additions != 1 || c.Files[3].Patch == "" {
+		t.Errorf("patches kept: %v, %v, %v; want a difference there is no room for left out, and smaller ones after it kept", c.Files[1].Patch != "", c.Files[2].Patch != "", c.Files[3].Patch != "")
+	}
+	total := 0
+	for _, f := range c.Files {
+		total += len([]rune(f.Patch))
+	}
+	if total > patchesRunes+changedFiles {
+		t.Errorf("kept %d runes of differences in all; want at most %d", total, patchesRunes)
 	}
 }
