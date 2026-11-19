@@ -22,6 +22,19 @@ type Effort struct {
 	// Shelved marks an effort the user has put aside: it keeps everything
 	// filed under it, and the model is no longer offered it.
 	Shelved bool `json:"shelved,omitempty"`
+	// Color is one of Colors and Glyph a character or two, which the page
+	// marks the effort with. An effort is given the colour the fewest
+	// others have until the user chooses one; Glyph is empty until they do.
+	Color string `json:"color,omitempty"`
+	Glyph string `json:"glyph,omitempty"`
+}
+
+// Colors are the colours an effort can be marked with.
+var Colors = []string{"red", "orange", "olive", "green", "teal", "blue", "violet", "pink"}
+
+// Changes are what Edit gives an effort; whatever is nil is left alone.
+type Changes struct {
+	Name, About, Color, Glyph *string
 }
 
 // How a session came to be filed under an effort.
@@ -71,7 +84,27 @@ func Open(p Persistence) (*Store, error) {
 	if s.f.Assignments == nil {
 		s.f.Assignments = map[string]string{}
 	}
+	// Efforts made before they had colours are given one each.
+	uncoloured := false
+	for i := range s.f.Efforts {
+		if s.f.Efforts[i].Color == "" {
+			s.f.Efforts[i].Color, uncoloured = s.spareColor(), true
+		}
+	}
+	if uncoloured {
+		return s, s.save()
+	}
 	return s, nil
+}
+
+// spareColor returns the colour the fewest efforts have, the first of them
+// in Colors.
+func (s *Store) spareColor() string {
+	used := map[string]int{}
+	for _, e := range s.f.Efforts {
+		used[e.Color]++
+	}
+	return slices.MinFunc(Colors, func(a, b string) int { return used[a] - used[b] })
 }
 
 func (s *Store) Efforts() []Effort {
@@ -105,31 +138,68 @@ func (s *Store) Create(name, about string) (Effort, error) {
 	for n := 2; s.index(id) >= 0; n++ {
 		id = base + "-" + strconv.Itoa(n)
 	}
-	e := Effort{ID: id, Name: strings.TrimSpace(name), About: strings.TrimSpace(about), Dirs: []string{}}
+	e := Effort{ID: id, Name: strings.TrimSpace(name), About: strings.TrimSpace(about), Dirs: []string{}, Color: s.spareColor()}
 	s.f.Efforts = append(s.f.Efforts, e)
 	s.f.Revision++
 	return e, s.save()
 }
 
-// Edit gives an effort another name or description, leaving alone whichever
-// is nil. Its ID stays as it was made.
-func (s *Store) Edit(id string, name, about *string) error {
+// Edit gives an effort another name, description, colour or glyph. Its ID
+// stays as it was made.
+func (s *Store) Edit(id string, c Changes) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	i := s.index(id)
 	if i < 0 {
 		return errors.New("no such effort")
 	}
-	e := &s.f.Efforts[i]
-	if name != nil {
-		if strings.TrimSpace(*name) == "" {
+	e := s.f.Efforts[i]
+	if c.Name != nil {
+		if e.Name = strings.TrimSpace(*c.Name); e.Name == "" {
 			return errors.New("an effort needs a name")
 		}
-		e.Name = strings.TrimSpace(*name)
 	}
-	if about != nil {
-		e.About = strings.TrimSpace(*about)
+	if c.About != nil {
+		e.About = strings.TrimSpace(*c.About)
 	}
+	if c.Color != nil {
+		if e.Color = strings.TrimSpace(*c.Color); e.Color != "" && !slices.Contains(Colors, e.Color) {
+			return errors.New("no such colour")
+		}
+	}
+	if c.Glyph != nil {
+		if e.Glyph = strings.TrimSpace(*c.Glyph); len([]rune(e.Glyph)) > 8 {
+			return errors.New("a glyph is a character or two")
+		}
+	}
+	if e.Name != s.f.Efforts[i].Name || e.About != s.f.Efforts[i].About {
+		s.f.Revision++
+	}
+	s.f.Efforts[i] = e
+	return s.save()
+}
+
+// Merge moves everything filed under one effort to another and removes the
+// first: what the user filed, its directories, its open questions and what
+// it watches.
+func (s *Store) Merge(from, into string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i, j := s.index(from), s.index(into)
+	if i < 0 || j < 0 {
+		return errors.New("no such effort")
+	}
+	if i == j {
+		return errors.New("an effort cannot be merged into itself")
+	}
+	s.f.Efforts[j].Dirs = append(s.f.Efforts[j].Dirs, s.f.Efforts[i].Dirs...)
+	for key, effort := range s.f.Assignments {
+		if effort == from {
+			s.f.Assignments[key] = into
+		}
+	}
+	s.f.Knowledge.move(from, into)
+	s.f.Efforts = slices.Delete(s.f.Efforts, i, i+1)
 	s.f.Revision++
 	return s.save()
 }

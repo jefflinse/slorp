@@ -14,6 +14,7 @@
   --k-worker: #5f8a8b; --k-local: #6a9a23; --k-kb: #b8930f; --k-github: #1f6feb;
   --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --e-red: #cf5a44; --e-orange: #d28a2c; --e-olive: #8a972c; --e-green: #3f9d6c; --e-teal: #2e95a3; --e-blue: #4a7fd6; --e-violet: #8566cf; --e-pink: #c95c97;
   --top: 52px;
   --notice: 0px;
 }
@@ -398,6 +399,22 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
 .split.efx .pane.detail { padding: 26px 36px 28px 8px; }
 .ebig { min-height: 100%; padding: 26px 32px 40px; border: 1px solid var(--line); border-radius: 14px; background: var(--raised); container-type: inline-size; }
 .ebig.loose { background: transparent; border-style: dashed; }
+/* An effort's mark: its glyph, or else its initial, on its colour */
+.emark { display: inline-grid; place-items: center; flex: none; width: 22px; height: 22px; border-radius: 6px; font-size: 12px; font-weight: 700; line-height: 1; letter-spacing: 0;
+  background: color-mix(in srgb, var(--ec) 24%, transparent); color: color-mix(in srgb, var(--ec) 60%, var(--ink)); }
+.emark.s { width: 16px; height: 16px; border-radius: 4px; font-size: 10px; }
+.emark.l { width: 32px; height: 32px; border-radius: 9px; font-size: 16px; }
+.echip { display: inline-flex; align-items: center; gap: 5px; }
+.crumb .eff, .ghead .name, .jr h3 button { display: inline-flex; align-items: center; gap: 6px; }
+.ghead .name { display: flex; }
+.titled > h1 .emark { margin-right: 10px; vertical-align: 4px; }
+.ecard.mini .emark { width: 18px; height: 18px; border-radius: 5px; font-size: 11px; margin-top: 1px; }
+.eedit .marks { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.eedit .marks input { width: 76px; text-align: center; }
+.eedit .sw { width: 20px; height: 20px; border-radius: 50%; background: var(--ec); }
+.eedit .sw.on { box-shadow: 0 0 0 2px var(--raised), 0 0 0 4px var(--ink); }
+.srow input[type="checkbox"] { flex: none; width: 16px; height: 16px; margin: 0; align-self: center; accent-color: var(--accent); }
+.ebig .tabbody .add { padding: 14px 0 0; border-top: 0; }
 .shelf { margin-top: 34px; }
 .shelf .ghead { padding: 0 0 10px; }
 .shelf .ghead .name { flex: none; }
@@ -964,7 +981,7 @@ function briefing(items) {
 
 function rowHtml(it, act = 'select') {
   const grouped = act === 'select' ? state.groupBy : 'effort';
-  const chips = `${grouped === 'source' ? '' : kindBadge(it.kind)}${it.live && it.session ? roleChip(it.session) + pullChip(it.session) + subChip(it.session) : ''}${grouped === 'effort' ? '' : `<span>${esc(effortById(effortOf(it)).name)}</span>`}`;
+  const chips = `${grouped === 'source' ? '' : kindBadge(it.kind)}${it.live && it.session ? roleChip(it.session) + pullChip(it.session) + subChip(it.session) : ''}${grouped === 'effort' ? '' : `${effortChip(effortOf(it))}`}`;
   /* The short form keeps the title, its age and urgency, and the description. */
   const long = state.rows !== 'short';
   return `<button class="row ${it.urgency} ${state.view === 'attention' && it.id === state.sel ? 'sel' : ''} ${it.id === freshId ? 'fresh' : ''}" data-act="${act}" data-id="${it.id}" style="${kindColor(it.kind)}">
@@ -1013,7 +1030,7 @@ function itemDetail(it) {
       <button class="btn ${quick ? '' : 'go'}" data-act="send" data-id="${it.id}">Send</button></div>`;
   }
   return `<div class="inner">
-    <div class="crumb"><button class="eff" data-act="effort" data-id="${eff.id}">${esc(eff.name)} ›</button>${kindBadge(it.kind, it.src)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span></div>
+    <div class="crumb"><button class="eff" data-act="effort" data-id="${eff.id}">${effortMark(eff, 's')}${esc(eff.name)} ›</button>${kindBadge(it.kind, it.src)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span></div>
     <div class="titled"><h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>${itemMenu(it, `<button data-act="park" data-id="${it.id}">Park as open question</button>
       ${menuPart('move', 'Move to', menuTo('moveTo', it.id, EFFORTS.concat(UNSORTED).filter(e => e.id !== eff.id).map(e => [e.id, e.name])))}`)}</div>
     <div class="need"><div class="label">${spark}What's needed from you</div><p class="ask">${esc(it.ask)}</p>${answer}</div>
@@ -1036,7 +1053,7 @@ function viewAttention() {
     : '';
   const groups = groupItems(items).map(g => {
     const shut = state.collapsed[g.key];
-    const name = g.effort ? title(g.effort) : esc(g.name);
+    const name = g.effort ? effortMark(g.effort, 's') + title(g.effort) : esc(g.name);
     return `<div class="ghead">
         <button class="name" data-act="collapse" data-key="${g.key}"><span class="chev ${shut ? 'shut' : ''}">▼</span> ${name}</button>
         <span class="n">${g.items.length}</span>
@@ -1073,14 +1090,14 @@ function effortDetail(e) {
   const watch = state.kb.watch.filter(w => w.efforts.includes(e.id));
   return `<div class="epage"><div>
     <div class="crumb"><span class="mono">${esc(e.raw)}</span></div>
-    <h1>${esc(e.name)}</h1>
+    <div class="titled"><h1>${effortMark(e, 'l')}${esc(e.name)}</h1></div>
     <div class="sec"><div class="label"><span>${spark}Where this stands</span></div><p class="prose">${esc(e.stands)}</p></div>
     <div class="sec"><div class="label"><span>Needs you (${needs.length})</span></div>
       ${needs.length ? `<div style="margin:0 -18px">${needs.map(i => rowHtml(i, 'openItem')).join('')}</div>` : '<div class="none">Nothing. This effort is moving without you.</div>'}</div>
     ${effortTabs([
       ['sessions', 'Sessions', sess.length, sess.length ? `<div class="rows plain">${sess.map(sessionRow).join('')}</div>` : '<div class="none">Nothing running.</div>'],
       effortPulls(e),
-      ['questions', 'Open questions', qs.length, qs.length ? `<div class="rows plain">${qs.map(q => `<div class="srow"><div class="body">${esc(q.text)}</div><span class="side">${ago(q.age)}</span></div>`).join('')}</div>` : '<div class="none">None recorded.</div>', manage('questions')],
+      effortQuestions(e, qs),
       effortDays(e, pastOf(e).days),
     ])}
   </div><aside>
@@ -1246,11 +1263,12 @@ function startForm(e) {
   </form>`;
 }
 /* What an effort has behind it: the days of the journal it moved on, and its closed sessions with what they
-   used. It is fetched when the effort is opened, and again whenever the journal or the closed sessions change. */
+   used. It is fetched when the effort is opened, and again whenever the journal, the closed sessions or the
+   efforts there are change. */
 let pasts = {};
 const pastAsked = {};
 function fetchPast(id) {
-  const stamp = JSON.stringify([journal.map(d => [d.day, d.at]), archive.length, archive[0]?.id, archive[0]?.endedAt]);
+  const stamp = JSON.stringify([journal.map(d => [d.day, d.at]), archive.length, archive[0]?.id, archive[0]?.endedAt, liveEfforts.map(e => e.id)]);
   if (pastAsked[id] === stamp) return;
   pastAsked[id] = stamp;
   fetch(`/api/efforts/${encodeURIComponent(id)}/past`).then(r => r.ok ? r.json() : null).then(p => { if (p) { pasts[id] = p; render(); } }).catch(() => { delete pastAsked[id]; });
@@ -1268,6 +1286,13 @@ function effortTabs(parts) {
     <div class="tabbody" role="tabpanel">${on[3]}</div>`;
 }
 const manage = sec => `<button class="btn" data-act="kbGo" data-s="${sec}">Manage</button>`;
+/* What the user has left undecided about an effort: each with a box to tick once it is settled, and a place to write another. */
+function effortQuestions(e, qs) {
+  return ['questions', 'Open questions', qs.length, `${qs.length ? `<div class="rows plain">${qs.map(q => `<div class="srow"><input type="checkbox" data-change="kbResolve" data-id="${q.id}" title="Mark resolved" aria-label="Mark resolved">
+        <div class="body">${esc(q.text)}${q.origin ? `<div class="sub">${esc(q.origin)}</div>` : ''}</div><span class="side">${ago(q.at ? minsSince(q.at) : q.age)}</span></div>`).join('')}</div>` : ''}
+      <form class="add" data-form="questions"><input name="text" data-keep="eq-text-${e.id}" placeholder="Something about this you haven't decided yet" required aria-label="An open question">
+        <input type="hidden" name="effort" value="${e.id}"><button class="btn go">Add</button></form>`, manage('questions')];
+}
 /* The pull requests filed under an effort, each a way to its page. There is no such part while there is nowhere for them to come from. */
 function effortPulls(e) {
   if (pullsOff()) return null;
@@ -1309,7 +1334,7 @@ function effortUsage(sess, past) {
 }
 
 /* The effort whose name and description are being edited, and whether its box still wants the cursor. */
-let editing = null, editFocus = false;
+let editing = null, editFocus = false, editColor = '';
 function effortDetailLive(e) {
   const sess = live.filter(s => (s.effort || 'unsorted') === e.id);
   const needs = activeItems().filter(i => i.effort === e.id).sort(byUrgency);
@@ -1320,15 +1345,21 @@ function effortDetailLive(e) {
   const qs = knowledge.questions.filter(q => q.effort === e.id), watch = knowledge.watch.filter(w => w.efforts.includes(e.id));
   if (real) fetchPast(e.id);
   const past = real ? pasts[e.id] : null;
-  const menu = real ? actsMenu(e.id, 'Rename, shelve or delete', `<button data-act="effortEdit" data-id="${e.id}">Rename or describe</button>
+  const others = openEfforts().filter(x => x.id !== e.id).map(x => [x.id, x.name]);
+  const menu = real ? actsMenu(e.id, 'Rename, shelve, merge or delete', `<button data-act="effortEdit" data-id="${e.id}">Rename or describe</button>
       <button data-act="effortShelve" data-id="${e.id}" data-to="${e.shelved ? 0 : 1}">${e.shelved ? 'Bring it back' : 'Shelve it'}</button>
+      ${others.length ? menuPart('merge', 'Merge into', menuTo('effortMergeTo', e.id, others)) : ''}
       <button data-act="effortDelete" data-id="${e.id}">Delete…</button>`) : '';
   const head = editing === e.id ? `<form class="eedit" data-form="effortEdit" data-id="${e.id}">
       <input class="nm" name="name" data-keep="eedit-name-${e.id}" value="${esc(e.name)}" maxlength="80" required aria-label="Name of the effort">
       <input name="about" data-keep="eedit-about-${e.id}" value="${esc(e.about || '')}" maxlength="300" placeholder="One line on what it covers" aria-label="What it covers">
+      <div class="marks" role="group" aria-label="Its mark">${effortMark(e, '', editColor)}
+        ${EFFORT_COLORS.map(c => `<button type="button" class="sw ${c === editColor ? 'on' : ''}" data-act="editColor" data-c="${c}" style="--ec:var(--e-${c})" title="${cap(c)}" aria-label="${cap(c)}" aria-pressed="${c === editColor}"></button>`).join('')}
+        <input name="glyph" data-keep="eedit-glyph-${e.id}" value="${esc(e.glyph || '')}" maxlength="8" placeholder="${esc(effortGlyph({ ...e, glyph: '' }))}" title="A character or emoji to mark it with, in place of its initial" aria-label="A character or emoji to mark it with">
+        <input type="hidden" name="color" value="${editColor}"></div>
       <div class="send"><span>The description is what the model reads when it files sessions.</span>
         <span><button type="button" class="btn" data-act="effortEditCancel">Cancel</button><button class="btn go">Save</button></span></div></form>`
-    : `<div class="titled"><h1>${esc(e.name)}${real ? `<button class="pen" data-act="effortEdit" data-id="${e.id}" title="Rename or describe this effort" aria-label="Rename or describe this effort">✎</button>` : ''}</h1>${menu}</div>
+    : `<div class="titled"><h1>${effortMark(e, 'l')}${esc(e.name)}${real ? `<button class="pen" data-act="effortEdit" data-id="${e.id}" title="Rename or describe this effort" aria-label="Rename or describe this effort">✎</button>` : ''}</h1>${menu}</div>
     ${e.about ? `<p class="lede" style="margin-bottom:0">${esc(e.about)}</p>` : real ? `<p class="lede" style="margin-bottom:0"><button class="link" data-act="effortEdit" data-id="${e.id}">Say what it covers</button>, so the model knows what to file here.</p>` : ''}`;
   return `<div class="epage"><div>
     <div class="crumb"><span class="mono">${esc(e.raw)}</span></div>
@@ -1346,7 +1377,7 @@ function effortDetailLive(e) {
           ${roleChip(x)}${moveSelect(x)}</div>`).join('')}</div>` : '<div class="none">None are open.</div>'}
         ${effortClosed(e, past)}`, starting === e.id ? '' : `<button class="btn" data-act="startOpen" data-id="${e.id}">Start one</button>`],
       effortPulls(e),
-      real && ['questions', 'Open questions', qs.length, qs.length ? `<div class="rows plain">${qs.map(q => `<div class="srow"><div class="body">${esc(q.text)}</div><span class="side">${ago(minsSince(q.at))}</span></div>`).join('')}</div>` : '<div class="none">None recorded.</div>', manage('questions')],
+      real && effortQuestions(e, qs),
       real && effortDays(e, past?.days),
     ])}
   </div>${real ? `<aside>
@@ -1357,6 +1388,25 @@ function effortDetailLive(e) {
       ${e.dirs.length ? e.dirs.map(d => `<div class="srow"><div class="body mono">${esc(tilde(d))}</div><button class="x" data-act="dirRemove" data-id="${e.id}" data-dir="${esc(d)}" title="Stop filing sessions in this directory here" aria-label="Stop filing ${esc(tilde(d))} here">×</button></div>`).join('')
         : '<div class="none">None yet. Move a session here and choose to remember its directory.</div>'}</div>
   </aside>` : ''}</div>`;
+}
+
+/* Asks before one effort is merged into another, saying what moves and what is dropped. */
+let modalInto = null;
+function mergeModal() {
+  const e = liveEfforts.find(x => x.id === modalId), into = liveEfforts.find(x => x.id === modalInto);
+  if (!e || !into) { modal = null; return ''; }
+  const open = live.filter(s => s.effort === e.id).length, closed = pasts[e.id]?.closedCount || 0, days = pasts[e.id]?.days.length || 0;
+  const qs = knowledge.questions.filter(q => q.effort === e.id).length, watch = knowledge.watch.filter(w => w.efforts.includes(e.id)).length;
+  const moves = [open && plural(open, 'open session'), closed && plural(closed, 'closed session'), e.dirs.length && plural(e.dirs.length, 'directory', 'directories'),
+    qs && plural(qs, 'open question'), watch && plural(watch, 'thing', 'things') + ' it watches', days && `its part of ${plural(days, 'day')} of the journal`].filter(Boolean);
+  return `<div class="veil" data-act="modalClose"><div class="modal" data-act="noop" role="alertdialog" aria-label="Merge this effort into another">
+    <h2>Merge ${esc(e.name)} into ${esc(into.name)}?</h2>
+    <ul><li>${moves.length ? `${cap(listOf(moves))} ${moves.length === 1 && /^one /.test(moves[0]) ? 'moves' : 'move'} to ${esc(into.name)}, with any repository you filed here.` : `Nothing is filed under ${esc(e.name)} yet, so nothing moves.`}</li>
+      <li>${esc(e.name)} itself is removed: its name, its description, and what the model wrote of where it stands.</li></ul>
+    <p class="prose" style="margin-top:14px">This cannot be undone.</p>
+    <div class="mfoot"><button class="btn" data-act="modalClose">Cancel</button>
+      <span class="bar"><button class="btn go" data-act="effortMergeYes" data-id="${e.id}" data-to="${into.id}">Merge them</button></span></div>
+  </div></div>`;
 }
 
 /* Asks before an effort is deleted, saying what goes with it and offering to shelve it instead. */
@@ -1383,36 +1433,48 @@ function deleteModal() {
   </div></div>`;
 }
 
+/* The colours an effort can be marked with, and its mark: the glyph the user gave it, or else its initial,
+   on its colour, which the service gives every effort and the demo's efforts take from their place. */
+const EFFORT_COLORS = ['red', 'orange', 'olive', 'green', 'teal', 'blue', 'violet', 'pink'];
+const effortColor = e => e.color || (e.id === 'unsorted' ? '' : EFFORT_COLORS[(SEED_ORDER.includes(e.id) ? SEED_ORDER.indexOf(e.id) * 3 : [...e.id].reduce((n, c) => n + c.charCodeAt(0), 0)) % EFFORT_COLORS.length]);
+const effortGlyph = e => e.glyph || (e.id === 'unsorted' ? '?' : [...(e.name || '').trim()][0]?.toUpperCase() || '·');
+const effortMark = (e, size = '', color = effortColor(e)) => `<span class="emark ${size}" style="--ec:${color ? `var(--e-${color})` : 'var(--ink3)'}" aria-hidden="true">${esc(effortGlyph(e))}</span>`;
+/* An effort by its mark and name, for a row filed under it. */
+const effortChip = id => { const e = effortById(id); return `<span class="echip">${effortMark(e, 's')}${esc(e.name)}</span>`; };
+
 /* The efforts there are cards for, in the user's order, with Unsorted last where anything is. */
 const cardEfforts = () => !live ? EFFORTS.concat(UNSORTED)
   : openEfforts().concat(live.some(s => !s.effort) || liveItems.some(i => i.effort === 'unsorted') || !openEfforts().length ? [LIVE_UNSORTED] : []);
-/* What a card says of an effort: the things in it that need the user, the most pressing first, and its
-   sessions, each as its status and what to say of it. */
+/* What a card says of an effort: the things in it that need the user, the most pressing first, its sessions,
+   each as its status and what to say of it, and how many minutes it is since anything filed under it was
+   active, null when nothing ever was. */
 function effortFacts(e) {
-  if (!live) return { needs: activeMockItems().filter(i => effortOf(i) === e.id).sort(byUrgency),
-    dots: SESSIONS.filter(s => sessEffort(s) === e.id).map(s => [s.status, `${s.title || s.name || s.id}: ${STATUS[s.status]}`]) };
-  return { needs: activeItems().filter(i => i.effort === e.id).sort(byUrgency),
-    dots: live.filter(s => (s.effort || 'unsorted') === e.id).map(s => [statusOf(s)[0], `${clip(s.label, 60)}: ${statusOf(s)[1]}`]) };
+  const sess = live ? live.filter(s => (s.effort || 'unsorted') === e.id) : SESSIONS.filter(s => sessEffort(s) === e.id);
+  if (!live) return { needs: activeMockItems().filter(i => effortOf(i) === e.id).sort(byUrgency), idle: sess.length ? Math.min(...sess.map(s => s.last)) : null,
+    dots: sess.map(s => [s.status, `${s.title || s.name || s.id}: ${STATUS[s.status]}`]) };
+  const idle = Math.min(e.activeAt ? minsSince(e.activeAt) : Infinity, ...sess.map(s => minsSince(s.activeAt)));
+  return { needs: activeItems().filter(i => i.effort === e.id).sort(byUrgency), idle: isFinite(idle) ? idle : null,
+    dots: sess.map(s => [statusOf(s)[0], `${clip(s.label, 60)}: ${statusOf(s)[1]}`]) };
 }
 /* The name a card keeps on the board and in the column. */
 const cardName = e => `view-transition-name:effort-${e.id}`;
 
 /* An effort as a card: what it is, where it stands, the first things in it that need the user, and its
-   sessions as dots. A mini card is one collapsed in the column beside the effort that is open, and keeps only
-   the name, how many things need the user, and the dots; sel marks the one that is open. Unsorted, which the
+   sessions as dots with when it was last active. A mini card is one collapsed in the column beside the effort that is open, and keeps only
+   the name, how many things need the user, the dots and the time; sel marks the one that is open. Unsorted, which the
    user did not declare, and a shelved effort stay where they are put. */
 function effortCard(e, mini, sel) {
-  const { needs, dots } = effortFacts(e), n = needs.length, shown = needs.slice(0, 2), loose = e.id === 'unsorted' || !!e.shelved;
+  const { needs, dots, idle } = effortFacts(e), n = needs.length, shown = needs.slice(0, 2), loose = e.id === 'unsorted' || !!e.shelved;
   const line = state.fluent && e.line && (!live || dots.length) ? `<p class="l">${spark}${esc(e.line)}</p>` : e.about ? `<p class="l">${esc(e.about)}</p>` : '';
   const about = `${e.name}: ${n ? `${num(n)} need${n === 1 ? 's' : ''} you` : 'nothing needs you'}, ${plural(dots.length, 'session')}`;
   return `<div class="ecard ${mini ? 'mini' : ''} ${sel ? 'sel' : ''} ${loose ? 'loose' : ''}" role="button" tabindex="0" ${sel ? 'aria-current="true"' : ''} ${loose ? '' : `draggable="true" aria-keyshortcuts="${mini ? 'Shift+ArrowUp Shift+ArrowDown' : 'Shift+ArrowLeft Shift+ArrowRight'}"`} data-act="effort" data-id="${e.id}" style="${cardName(e)}" aria-label="${esc(about)}">
-    <div class="eh">${title(e, 't')}${n ? `<span class="count" title="${n} need${n === 1 ? 's' : ''} you">${n}</span>` : ''}${loose || mini ? '' : '<span class="grip" aria-hidden="true" title="Drag to rearrange">⠿</span>'}</div>
+    <div class="eh">${effortMark(e)}${title(e, 't')}${n ? `<span class="count" title="${n} need${n === 1 ? 's' : ''} you">${n}</span>` : ''}${loose || mini ? '' : '<span class="grip" aria-hidden="true" title="Drag to rearrange">⠿</span>'}</div>
     ${mini ? '' : line}
     ${n && !mini ? `<div class="ens">${shown.map(i => `<button class="en" data-act="openItem" data-id="${i.id}" style="${kindColor(i.kind)}">${title(i, 'nt')}
         <span class="w">${i.urgency === 'whenever' ? '' : `<span class="tag ${i.urgency}">${i.urgency}</span>`}<span>${ago(ageOf(i))}</span></span></button>`).join('')}
       ${n > shown.length ? `<span class="more">and ${num(n - shown.length)} more</span>` : ''}</div>` : ''}
     <div class="ef">${dots.length ? `<span class="dots">${dots.slice(0, 12).map(([status, tip]) => `<span class="dot ${status}" title="${esc(tip)}"></span>`).join('')}</span>` : ''}
-      <span>${dots.length ? plural(dots.length, 'session') : 'No open sessions'}${n || mini ? '' : ' · nothing needs you'}</span></div>
+      <span>${dots.length ? plural(dots.length, 'session') : 'No open sessions'}${idle == null ? '' : ` · ${mini ? '' : 'active '}${ago(idle)}`}</span></div>
   </div>`;
 }
 
@@ -1537,12 +1599,12 @@ function viewSessions() {
   const row = s => `<button class="row ${s.id === state.actSel ? 'sel' : ''}" data-act="actSel" data-id="${s.id}" style="${kindColor(s.kind)}">
       <span class="h">${title(s, 't')}<span class="w"><span>${ago(s.last)}</span>${stat(s.status, STATUS[s.status])}</span></span>
       ${state.fluent ? `<span class="st">${esc(s.doing)}</span>` : ''}
-      ${state.rows === 'short' ? '' : `<span class="m">${kindBadge(s.kind)}<span>${esc(effortById(sessEffort(s)).name)}</span></span>`}
+      ${state.rows === 'short' ? '' : `<span class="m">${kindBadge(s.kind)}${effortChip(sessEffort(s))}</span>`}
     </button>`;
   const count = k => active.filter(s => s.status === k).length;
   const s = all.find(x => x.id === state.actSel), it = s && activeMockItems().find(i => i.session === s.id);
   const detail = s && `<div class="inner">
-    <div class="crumb"><button class="eff" data-act="effort" data-id="${sessEffort(s)}">${esc(effortById(sessEffort(s)).name)} ›</button>${kindBadge(s.kind)}${stat(s.status, STATUS[s.status])}<span>active ${ago(s.last)}</span><span>started ${ago(s.started)}</span><span class="mono">${esc(s.where)}</span></div>
+    <div class="crumb"><button class="eff" data-act="effort" data-id="${sessEffort(s)}">${effortMark(effortById(sessEffort(s)), 's')}${esc(effortById(sessEffort(s)).name)} ›</button>${kindBadge(s.kind)}${stat(s.status, STATUS[s.status])}<span>active ${ago(s.last)}</span><span>started ${ago(s.started)}</span><span class="mono">${esc(s.where)}</span></div>
     <h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? s.title : s.raw)}</h1>
     ${state.fluent ? `<p class="subt">${spark}${esc(s.doing)}</p>` : ''}
     ${it ? `<div class="need"><div class="label">${spark}What's needed from you</div><p class="ask">${esc(it.ask)}</p><div class="replies"><button class="btn go" data-act="openItem" data-id="${it.id}">Answer it under Attention ›</button></div></div>` : ''}
@@ -1735,7 +1797,7 @@ function feedItemDetail(it) {
   const menu = itemMenu(it, `<button data-act="livePark" data-id="${it.id}">Park as open question</button>
     ${menuPart('move', `File ${esc(it.repo)} under`, menuTo('repoMoveTo', it.id, effortsBut(it.effort)))}`);
   return `<div class="inner">
-    <div class="crumb">${real ? `<button class="eff" data-act="effort" data-id="${it.effort}">${esc(effortById(it.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${real && VIA_REPO[it.effortVia] ? `<span>${VIA_REPO[it.effortVia]}</span>` : ''}${kindBadge(it.kind, it.src)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span><span class="mono">${esc(it.repo)}</span></div>
+    <div class="crumb">${real ? `<button class="eff" data-act="effort" data-id="${it.effort}">${effortMark(effortById(it.effort), 's')}${esc(effortById(it.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${real && VIA_REPO[it.effortVia] ? `<span>${VIA_REPO[it.effortVia]}</span>` : ''}${kindBadge(it.kind, it.src)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span><span class="mono">${esc(it.repo)}</span></div>
     <div class="titled"><h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>${menu}</div>
     <div class="need"><div class="label">${it.point ? spark : ''}What's needed from you</div>${point ? pointHtml(p, point) : `<p class="ask">${esc(it.ask)}</p>`}
       ${/^https:\/\//.test(it.url || '') ? `<div class="replies" ${point ? 'style="margin-top:14px"' : ''}>${point ? '' : `<a class="btn go" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">Open on ${esc(it.src)} ↗</a>`}
@@ -1981,7 +2043,7 @@ function sessionPage(s, it, stands) {
     : s.pending ? `<div class="label" style="margin-bottom:10px">${s.pending.question || askedQuestions(s.pending) ? 'Waiting for your answer' : 'Waiting for your permission'}</div>`
     : s.canReply ? '<div class="label">Say something to it</div>' : '';
   return `<div class="inner">
-    <div class="crumb">${s.effort ? `<button class="eff" data-act="effort" data-id="${s.effort}">${esc(effortById(s.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${s.effortVia === 'guess' ? `<span>${spark}filed by the model</span>` : ''}${kindBadge(s.agent, srcOf(s))}${roleChip(s)}${stands}${s.branch ? `<span class="mono">${esc(s.branch)}</span>` : ''}${pullChip(s, true)}${s.model ? `<span>${runsOn(s)}</span>` : ''}${contextUse(s)}</div>
+    <div class="crumb">${s.effort ? `<button class="eff" data-act="effort" data-id="${s.effort}">${effortMark(effortById(s.effort), 's')}${esc(effortById(s.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${s.effortVia === 'guess' ? `<span>${spark}filed by the model</span>` : ''}${kindBadge(s.agent, srcOf(s))}${roleChip(s)}${stands}${s.branch ? `<span class="mono">${esc(s.branch)}</span>` : ''}${pullChip(s, true)}${s.model ? `<span>${runsOn(s)}</span>` : ''}${contextUse(s)}</div>
     <div class="titled">${renaming === s.id
       ? `<form class="rename" data-form="name" data-id="${s.id}"><input name="name" data-keep="name-${s.id}" value="${esc(s.label)}" maxlength="80" placeholder="Leave empty to go back to its own title" aria-label="Name for this session">
           <button class="btn go">Save</button><button type="button" class="btn" data-act="renameCancel">Cancel</button></form>`
@@ -2089,7 +2151,7 @@ function sessionRowLive(s) {
   return `<button class="row ${s.id === state.actSel ? 'sel' : ''}" data-act="actSel" data-id="${s.id}" style="${kindColor(s.agent)}">
     <span class="h">${name}<span class="w"><span>${ago(minsSince(s.activeAt))}</span>${stat(dot, word)}</span></span>
     ${state.fluent && sub ? `<span class="st">${esc(clip(sub, 160))}</span>` : ''}
-    ${long ? `<span class="m">${kindBadge(s.agent)}${roleChip(s)}${pullChip(s)}${subChip(s)}${s.effort ? `<span>${esc(effortById(s.effort).name)}</span>` : ''}</span>` : ''}
+    ${long ? `<span class="m">${kindBadge(s.agent)}${roleChip(s)}${pullChip(s)}${subChip(s)}${s.effort ? `${effortChip(s.effort)}` : ''}</span>` : ''}
     ${long && s.model ? `<span class="m"><span>${runsOn(s)}</span>${contextUse(s, true)}</span>` : ''}
   </button>`;
 }
@@ -2100,7 +2162,7 @@ function closedRow(a, act = 'actSel') {
   return `<${tag} class="row ${act === 'actSel' && a.id === state.actSel ? 'sel' : ''}" ${act ? `data-act="${act}" data-id="${a.id}"` : 'title="Closed too long ago to be listed under Sessions"'} style="${kindColor(a.agent)}">
     <span class="h">${name}<span class="w"><span>${ago(minsSince(a.endedAt))}</span></span></span>
     ${state.fluent && a.title ? `<span class="st">${esc(clip(a.title, 160))}</span>` : ''}
-    ${state.rows === 'short' || act !== 'actSel' ? '' : `<span class="m">${a.agent ? kindBadge(a.agent) : ''}${a.effort ? `<span>${esc(effortById(a.effort).name)}</span>` : ''}</span>`}
+    ${state.rows === 'short' || act !== 'actSel' ? '' : `<span class="m">${a.agent ? kindBadge(a.agent) : ''}${a.effort ? `${effortChip(a.effort)}` : ''}</span>`}
   </${tag}>`;
 }
 
@@ -2111,7 +2173,7 @@ function closedPage(a) {
   const doc = archiveDocs[a.id], cmd = resumeCommand(a);
   const ran = a.startedAt ? `<span>open for ${span((new Date(a.endedAt) - new Date(a.startedAt)) / 60000)}</span>` : '';
   return `<div class="inner">
-    <div class="crumb">${a.effort ? `<button class="eff" data-act="effort" data-id="${a.effort}">${esc(effortById(a.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${a.agent ? kindBadge(a.agent) : ''}${stat('done', `closed ${ago(minsSince(a.endedAt))}`)}${ran}${a.branch ? `<span class="mono">${esc(a.branch)}</span>` : ''}${a.cwd ? `<span class="mono" title="${esc(a.cwd)}">${esc(shortPath(a.cwd))}</span>` : ''}</div>
+    <div class="crumb">${a.effort ? `<button class="eff" data-act="effort" data-id="${a.effort}">${effortMark(effortById(a.effort), 's')}${esc(effortById(a.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${a.agent ? kindBadge(a.agent) : ''}${stat('done', `closed ${ago(minsSince(a.endedAt))}`)}${ran}${a.branch ? `<span class="mono">${esc(a.branch)}</span>` : ''}${a.cwd ? `<span class="mono" title="${esc(a.cwd)}">${esc(shortPath(a.cwd))}</span>` : ''}</div>
     <h1>${esc(a.label)}</h1>
     ${a.title && state.fluent ? `<p class="subt">${spark}${esc(a.title)}</p>` : ''}
     ${cmd ? `<div class="need"><div class="label">Pick it back up</div>
@@ -2351,7 +2413,7 @@ function pullTimeline(d) {
 function pullPage(p, d) {
   const real = p.effort && p.effort !== 'unsorted', [word, tone] = pullState(p), on = live ? sessionsOn(p) : [];
   return `<div class="inner">
-    <div class="crumb">${real ? `<button class="eff" data-act="effort" data-id="${p.effort}">${esc(effortById(p.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${kindBadge('github')}
+    <div class="crumb">${real ? `<button class="eff" data-act="effort" data-id="${p.effort}">${effortMark(effortById(p.effort), 's')}${esc(effortById(p.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${kindBadge('github')}
       ${p.urgency === 'blocking' || p.urgency === 'awaiting' ? `<span class="tag ${p.urgency}">${p.urgency}</span>` : ''}<span class="mono">${esc(p.repo)}#${p.number}</span><span>${p.mine ? 'yours' : `by ${esc(p.author || 'someone')}`}</span><span class="pr ${tone}">${word}</span><span>changed ${ago(pullAt(p))}</span></div>
     <div class="titled"><h1>${esc(p.title)}</h1></div>
     <p class="subt">${esc(p.needs)}</p>
@@ -2517,7 +2579,7 @@ function journalPart(e) {
 }
 function journalEffort(e) {
   const real = (live ? liveEfforts : EFFORTS).some(x => x.id === e.id);
-  return `<div class="sec"><h3>${real ? `<button data-act="effort" data-id="${esc(e.id)}">${esc(e.name)} ›</button>` : esc(e.name)}</h3>${journalPart(e)}</div>`;
+  return `<div class="sec"><h3>${real ? `<button data-act="effort" data-id="${esc(e.id)}">${effortMark(effortById(e.id), 's')}${esc(e.name)} ›</button>` : esc(e.name)}</h3>${journalPart(e)}</div>`;
 }
 
 function journalPage(d) {
@@ -2858,7 +2920,7 @@ function render() {
   document.documentElement.style.setProperty('--notice', `${44 * notices.length}px`);
   $('#notice').innerHTML = notices.join('');
   $('#main').innerHTML = main;
-  $('#modal').innerHTML = modal === 'search' ? searchModal() : modal === 'effortDelete' ? deleteModal() : '';
+  $('#modal').innerHTML = modal === 'search' ? searchModal() : modal === 'effortDelete' ? deleteModal() : modal === 'effortMerge' ? mergeModal() : '';
   if (modalFocus) { modalFocus = false; $('#q')?.focus(); }
   // The toggle shows only where there is more of what the user said to see.
   document.querySelectorAll('.said').forEach(el => {
@@ -3074,7 +3136,14 @@ const actions = {
     return false;
   },
   reopen: d => { ask(`/api/archive/${d.id}/resume`, {}, () => toast('Reopened in the background')); return false; },
-  effortEdit: d => { editing = d.id; editFocus = true; },
+  effortEdit: d => { editing = d.id; editFocus = true; editColor = effortColor(effortById(d.id)); },
+  editColor: d => { editColor = d.c; },
+  effortMergeTo: d => { modal = 'effortMerge'; modalId = d.id; modalInto = d.to; },
+  effortMergeYes: d => {
+    const name = effortById(d.id).name, into = effortById(d.to).name;
+    modal = null;
+    api('POST', `/api/efforts/${d.id}/merge`, { into: d.to }, () => { if (state.effortSel === d.id) state.effortSel = d.to; save(); toast(`Merged ${name} into ${into}`); });
+  },
   effortEditCancel: () => { editing = null; },
   effortAdd: () => { adding = addFocus = true; },
   effortAddCancel: () => { adding = false; },
@@ -3213,7 +3282,7 @@ document.addEventListener('submit', e => {
       }).catch(err => toast(err instanceof TypeError ? 'Could not reach the Slorp service' : `That did not work: ${err.message}`));
     return;
   }
-  if (sec === 'effortEdit') { api('POST', `/api/efforts/${form.dataset.id}`, { name: f.name, about: f.about }); editing = null; render(); return; }
+  if (sec === 'effortEdit') { api('POST', `/api/efforts/${form.dataset.id}`, { name: f.name, about: f.about, color: f.color, glyph: f.glyph }); editing = null; render(); return; }
   if (sec === 'tag') { tagDay(form.dataset.id, f.tag, true); clear(); if (!live) render(); return; }
   if (sec === 'model') {
     const typed = modelTyped(), chosen = { ...(summarizer.fixedUrl ? {} : { url: typed.url }), ...(summarizer.fixedModel ? {} : { name: typed.name }) };

@@ -178,3 +178,46 @@ func TestPast(t *testing.T) {
 		t.Errorf("an effort with nothing behind it: %+v, %v; want empty lists", p, ok)
 	}
 }
+
+func TestMergeEfforts(t *testing.T) {
+	h, k, st := newHub(t)
+	a, err := k.Create("A", "")
+	must(t, err)
+	b, err := k.Create("B", "")
+	must(t, err)
+	must(t, k.AddDir(a.ID, "/work/a"))
+	gone := Session{ID: "gone", Agent: agent, Status: Idle, Cwd: "/work/a", LastPrompt: "go", PromptAt: time.Now(), CostUSD: 2}
+	h.SetRoster(agent, []Session{gone, idle("guessed", "/w", "done"), idle("ruled", "/work/a", "done")})
+	describe(h, "guessed", KindReview)
+	h.SetGuess("guessed", h.Unrouted()[0].Key, a.ID)
+	h.SetRoster(agent, []Session{idle("guessed", "/w", "done"), idle("ruled", "/work/a", "done")})
+	h.wrapups["2026-11-17"] = Wrapup{Day: "2026-11-17", State: WrapupReady, Efforts: []WrapupEffort{{ID: a.ID, Name: "A", Summary: "As A.", Points: []WrapupPoint{{Text: "one"}}},
+		{ID: b.ID, Name: "B", Summary: "As B.", Points: []WrapupPoint{{Text: "two"}}}}}
+	h.notes[a.ID] = note{Key: "k", Note: Note{Line: "old"}}
+
+	must(t, h.MergeEfforts(a.ID, b.ID))
+
+	for _, id := range []string{"guessed", "ruled"} {
+		if s := session(t, h, id); s.Effort != b.ID {
+			t.Errorf("open session %s is filed under %q, want the effort merged into", id, s.Effort)
+		}
+	}
+	check := func(h *Hub) {
+		t.Helper()
+		p, ok := h.Past(b.ID)
+		if !ok || p.ClosedCount != 1 || p.Closed[0].ID != "gone" || p.CostUSD != 2 || len(p.Days) != 1 || p.Days[0].Summary != "As A. As B." || len(p.Days[0].Points) != 2 {
+			t.Errorf("the past of the effort merged into = %+v, want the other's closed session, and one part for the day both moved on", p)
+		}
+		if st := h.State(); len(st.Efforts) != 1 || st.Efforts[0].ID != b.ID || st.Efforts[0].ActiveAt.IsZero() {
+			t.Errorf("efforts = %+v, want the one merged into, active when its sessions were", st.Efforts)
+		}
+	}
+	check(h)
+	check(New(k, st))
+	if _, kept := h.notes[a.ID]; kept {
+		t.Error("the note on the effort that is gone was kept")
+	}
+	if h.MergeEfforts("nope", b.ID) == nil || h.MergeEfforts(b.ID, b.ID) == nil {
+		t.Error("a merge with an unknown effort or with itself was accepted")
+	}
+}

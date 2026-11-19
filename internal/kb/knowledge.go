@@ -3,6 +3,7 @@ package kb
 import (
 	"cmp"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -269,6 +270,23 @@ func (k *Knowledge) forget(effortID string) {
 	}
 	for i := range k.Watch {
 		k.Watch[i].Efforts, _ = without(k.Watch[i].Efforts, func(id string) bool { return id == effortID })
+	}
+}
+
+// move files under one effort what was filed under another.
+func (k *Knowledge) move(from, into string) {
+	for i := range k.Questions {
+		if k.Questions[i].Effort == from {
+			k.Questions[i].Effort = into
+		}
+	}
+	for i := range k.Watch {
+		if kept, found := without(k.Watch[i].Efforts, func(id string) bool { return id == from }); found {
+			if !slices.Contains(kept, into) {
+				kept = append(kept, into)
+			}
+			k.Watch[i].Efforts = kept
+		}
 	}
 }
 

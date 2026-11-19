@@ -880,6 +880,25 @@ func TestEffortsOverHTTP(t *testing.T) {
 	if e := f.state().Efforts[0]; e.Name != "Docs site" || e.About != "The site" || e.Shelved {
 		t.Errorf("after a second edit the effort is %+v", e)
 	}
+	if code := f.post("/api/efforts/docs", `{"color":"teal","glyph":"D"}`); code != 204 {
+		t.Fatalf("mark = %d", code)
+	}
+	if e := f.state().Efforts[0]; e.Color != "teal" || e.Glyph != "D" || e.Name != "Docs site" {
+		t.Errorf("after a colour and a glyph the effort is %+v", e)
+	}
+	if code := f.post("/api/efforts/docs", `{"color":"puce"}`); code != 400 {
+		t.Errorf("a colour that is not offered = %d, want 400", code)
+	}
+	f.post("/api/efforts", `{"name":"Spare"}`)
+	if code := f.post("/api/efforts/spare/merge", `{"into":"docs"}`); code != 204 {
+		t.Fatalf("merge = %d", code)
+	}
+	if st := f.state(); len(st.Efforts) != 2 || st.Efforts[0].ID != "docs" {
+		t.Errorf("after a merge the efforts are %+v", st.Efforts)
+	}
+	if code := f.post("/api/efforts/docs/merge", `{"into":"docs"}`); code != 400 {
+		t.Errorf("merging an effort into itself = %d, want 400", code)
+	}
 	if code := f.post("/api/efforts/docs", `{"name":" "}`); code != 400 {
 		t.Errorf("a blank name = %d, want 400", code)
 	}

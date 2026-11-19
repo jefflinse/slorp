@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -73,10 +74,21 @@ func (h *Hub) Past(effortID string) (Past, bool) {
 		if len(p.Days) == pastDays {
 			break
 		}
+		// A day has more than one part for an effort that others were merged into.
+		var part *PastDay
 		for _, e := range h.wrapups[day].Efforts {
-			if e.ID == effortID {
-				p.Days = append(p.Days, PastDay{Day: day, WrapupEffort: e})
+			switch {
+			case e.ID != effortID:
+			case part == nil:
+				part = &PastDay{Day: day, WrapupEffort: e}
+			default:
+				part.Summary = strings.TrimSpace(part.Summary + " " + e.Summary)
+				part.Points, part.Open = slices.Concat(part.Points, e.Points), slices.Concat(part.Open, e.Open)
+				part.Sessions, part.Pulls = slices.Concat(part.Sessions, e.Sessions), slices.Concat(part.Pulls, e.Pulls)
 			}
+		}
+		if part != nil {
+			p.Days = append(p.Days, *part)
 		}
 	}
 	for id, d := range h.archive {

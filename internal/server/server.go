@@ -406,12 +406,14 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		edited(w, k.Delete(r.PathValue("id")))
 	})
 
-	// Gives an effort another name or description, puts it aside or brings
-	// it back; whatever is left out stays as it is.
+	// Gives an effort another name, description, colour or glyph, puts it
+	// aside or brings it back; whatever is left out stays as it is.
 	mux.HandleFunc("POST /api/efforts/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Name    *string `json:"name"`
 			About   *string `json:"about"`
+			Color   *string `json:"color"`
+			Glyph   *string `json:"glyph"`
 			Shelved *bool   `json:"shelved"`
 		}
 		if !readJSON(w, r, &in) {
@@ -419,8 +421,8 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		}
 		id := r.PathValue("id")
 		var err error
-		if in.Name != nil || in.About != nil {
-			err = k.Edit(id, in.Name, in.About)
+		if in.Name != nil || in.About != nil || in.Color != nil || in.Glyph != nil {
+			err = k.Edit(id, kb.Changes{Name: in.Name, About: in.About, Color: in.Color, Glyph: in.Glyph})
 		}
 		if err == nil && in.Shelved != nil {
 			err = k.Shelve(id, *in.Shelved)
@@ -429,6 +431,16 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			err = errors.New("no such effort")
 		}
 		edited(w, err)
+	})
+
+	mux.HandleFunc("POST /api/efforts/{id}/merge", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Into string `json:"into"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		edited(w, h.MergeEfforts(r.PathValue("id"), in.Into))
 	})
 
 	mux.HandleFunc("GET /api/efforts/{id}/past", func(w http.ResponseWriter, r *http.Request) {

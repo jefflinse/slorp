@@ -155,26 +155,81 @@ func TestEditRenamesAndRedescribes(t *testing.T) {
 	must(t, err)
 	name, about, blank := "  Gadgets ", " Making gadgets ", "  "
 
-	must(t, k.Edit(e.ID, &name, nil))
+	must(t, k.Edit(e.ID, kb.Changes{Name: &name}))
 	if got := k.Efforts()[0]; got.ID != e.ID || got.Name != "Gadgets" || got.About != "Making widgets" {
 		t.Errorf("after a rename: %+v, want the same effort by another name", got)
 	}
-	must(t, k.Edit(e.ID, nil, &about))
+	must(t, k.Edit(e.ID, kb.Changes{About: &about}))
 	if got := k.Efforts()[0]; got.Name != "Gadgets" || got.About != "Making gadgets" {
 		t.Errorf("after a new description: %+v", got)
 	}
-	must(t, k.Edit(e.ID, nil, &blank))
+	must(t, k.Edit(e.ID, kb.Changes{About: &blank}))
 	if got := k.Efforts()[0]; got.About != "" {
 		t.Errorf("a description could not be cleared: %q", got.About)
 	}
-	if k.Edit(e.ID, &blank, nil) == nil || k.Efforts()[0].Name != "Gadgets" {
+	if k.Edit(e.ID, kb.Changes{Name: &blank}) == nil || k.Efforts()[0].Name != "Gadgets" {
 		t.Error("an effort was left without a name")
 	}
-	if k.Edit("nope", &name, nil) == nil {
+	if k.Edit("nope", kb.Changes{Name: &name}) == nil {
 		t.Error("an unknown effort was edited")
+	}
+	revision, color, glyph, garish, long := k.Revision(), "teal", " ⚙ ", "puce", "far too long"
+	must(t, k.Edit(e.ID, kb.Changes{Color: &color, Glyph: &glyph}))
+	if got := k.Efforts()[0]; got.Color != "teal" || got.Glyph != "⚙" || got.Name != "Gadgets" {
+		t.Errorf("after a colour and a glyph: %+v", got)
+	}
+	if k.Revision() != revision {
+		t.Error("marking an effort changed the filing revision, which the model does not read it for")
+	}
+	if k.Edit(e.ID, kb.Changes{Color: &garish}) == nil || k.Edit(e.ID, kb.Changes{Glyph: &long}) == nil || k.Efforts()[0].Color != "teal" || k.Efforts()[0].Glyph != "⚙" {
+		t.Errorf("a colour that is not offered or a glyph that is a word was taken: %+v", k.Efforts()[0])
+	}
+	must(t, k.Edit(e.ID, kb.Changes{Color: &blank, Glyph: &blank}))
+	if got := k.Efforts()[0]; got.Color != "" || got.Glyph != "" {
+		t.Errorf("a colour and glyph could not be cleared: %+v", got)
 	}
 	if got := testdb.KB(t, st).Efforts()[0]; got.Name != "Gadgets" {
 		t.Errorf("after reopen the effort is named %q", got.Name)
+	}
+}
+
+func TestEffortsAreGivenColoursThatDiffer(t *testing.T) {
+	st := testdb.Open(t)
+	k := testdb.KB(t, st)
+	seen := map[string]bool{}
+	for i := range kb.Colors {
+		create(t, k, "Effort "+string(rune('A'+i)))
+	}
+	for _, e := range k.Efforts() {
+		if e.Color == "" || seen[e.Color] {
+			t.Errorf("%s was given %q, which is no colour or one another effort has while some are spare", e.Name, e.Color)
+		}
+		seen[e.Color] = true
+	}
+	first := k.Efforts()[0]
+	must(t, k.Delete(first.ID))
+	if again := create(t, k, "One more"); k.Efforts()[len(kb.Colors)-1].ID != again || k.Efforts()[len(kb.Colors)-1].Color != first.Color {
+		t.Errorf("a new effort was not given the one colour left spare, %q", first.Color)
+	}
+}
+
+func TestEffortsFromBeforeColoursAreGivenThem(t *testing.T) {
+	st := testdb.Open(t)
+	must(t, st.Put("kb", "main", map[string]any{"efforts": []map[string]any{
+		{"id": "a", "name": "A", "dirs": []string{}}, {"id": "b", "name": "B", "dirs": []string{}, "color": "red"}, {"id": "c", "name": "C", "dirs": []string{}}}}))
+	colours := func() string {
+		out := ""
+		for _, e := range testdb.KB(t, st).Efforts() {
+			out += e.Color + " "
+		}
+		return out
+	}
+	first := colours()
+	if first != "orange red olive " {
+		t.Errorf("colours = %q, want the efforts without one given spare ones, and the one with a colour left alone", first)
+	}
+	if again := colours(); again != first {
+		t.Errorf("colours changed between one start and the next: %q then %q", first, again)
 	}
 }
 
@@ -226,6 +281,55 @@ func TestRemoveDir(t *testing.T) {
 	}
 	if effort, _, _ := k.Resolve("s", "/work/b"); effort != b {
 		t.Error("a refused removal took the directory from its own effort")
+	}
+}
+
+func TestMergeMovesEverythingAcross(t *testing.T) {
+	st := testdb.Open(t)
+	k := testdb.KB(t, st)
+	a, b, c := create(t, k, "A"), create(t, k, "B"), create(t, k, "C")
+	must(t, k.AddDir(a, "/work/a"))
+	must(t, k.AddDir(b, "/work/b"))
+	must(t, k.Assign("s1", a))
+	must(t, k.Assign("s2", c))
+	must(t, k.AssignRepo("Org/Repo", a))
+	must(t, k.Add(kb.SectionQuestions, kb.Entry{Text: "about a?", Effort: a}))
+	must(t, k.Add(kb.SectionWatch, kb.Entry{Type: "channel", Name: "#a", Effort: a}))
+	revision := k.Revision()
+
+	must(t, k.Merge(a, b))
+
+	check := func(k *kb.Store) {
+		t.Helper()
+		if ids := k.Efforts(); len(ids) != 2 || ids[0].ID != b || ids[1].ID != c {
+			t.Fatalf("efforts = %+v, want the merged one gone", ids)
+		}
+		if effort, via, _ := k.Resolve("s1", "/x"); effort != b || via != kb.ViaUser {
+			t.Errorf("a session the user filed went to %q via %q", effort, via)
+		}
+		for _, dir := range []string{"/work/a/x", "/work/b/x"} {
+			if effort, _, _ := k.Resolve("other", dir); effort != b {
+				t.Errorf("%s files under %q, want the effort merged into", dir, effort)
+			}
+		}
+		if effort, _, _ := k.ResolveRepo("org/repo", nil); effort != b {
+			t.Errorf("a repository the user filed went to %q", effort)
+		}
+		if effort, _, _ := k.Resolve("s2", "/x"); effort != c {
+			t.Error("merging two efforts moved what was filed under a third")
+		}
+		know := k.Knowledge()
+		if know.Questions[0].Effort != b || len(know.Watch[0].Efforts) != 1 || know.Watch[0].Efforts[0] != b {
+			t.Errorf("questions and watch entries were not moved: %+v, %+v", know.Questions, know.Watch)
+		}
+	}
+	check(k)
+	check(testdb.KB(t, st))
+	if k.Revision() == revision {
+		t.Error("the model was not told the efforts it files under have changed")
+	}
+	if k.Merge(b, b) == nil || k.Merge("nope", b) == nil || k.Merge(b, "nope") == nil || len(k.Efforts()) != 2 {
+		t.Error("a merge with itself or with an unknown effort was accepted")
 	}
 }
 
@@ -284,7 +388,8 @@ func TestRevisionsTrackWhatTheModelReads(t *testing.T) {
 		{"file a session", func() { must(t, k.Assign("s", a)) }, false, false},
 		{"directory rule", func() { must(t, k.AddDir(a, "/w")) }, false, false},
 		{"drop directory rule", func() { must(t, k.RemoveDir(a, "/w")) }, false, false},
-		{"rename effort", func() { name := "B"; must(t, k.Edit(a, &name, nil)) }, true, false},
+		{"rename effort", func() { name := "B"; must(t, k.Edit(a, kb.Changes{Name: &name})) }, true, false},
+		{"rename it the same", func() { name := "B"; must(t, k.Edit(a, kb.Changes{Name: &name})) }, false, false},
 		{"shelve effort", func() { must(t, k.Shelve(a, true)) }, true, false},
 		{"shelve it again", func() { must(t, k.Shelve(a, true)) }, false, false},
 		{"bring effort back", func() { must(t, k.Shelve(a, false)) }, true, false},

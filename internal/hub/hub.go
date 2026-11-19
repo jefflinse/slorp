@@ -197,6 +197,9 @@ type Effort struct {
 	kb.Effort
 	Line   string `json:"line"`
 	Stands string `json:"stands"`
+	// ActiveAt is when a session filed under it last did anything, or the
+	// last of them closed; zero when none ever has.
+	ActiveAt time.Time `json:"activeAt,omitzero"`
 }
 
 // Note is a model-written status for one effort.
@@ -1335,9 +1338,21 @@ func (h *Hub) State() State {
 }
 
 func (h *Hub) efforts(sessions []Session) []Effort {
+	active := map[string]time.Time{}
+	latest := func(effort string, at time.Time) {
+		if at.After(active[effort]) {
+			active[effort] = at
+		}
+	}
+	for _, d := range h.archive {
+		latest(d.Effort, d.Ended)
+	}
+	for _, s := range sessions {
+		latest(s.Effort, s.ActiveAt)
+	}
 	out := []Effort{}
 	for _, e := range h.kb.Efforts() {
-		v := Effort{Effort: e}
+		v := Effort{Effort: e, ActiveAt: active[e.ID]}
 		for _, s := range sessions {
 			if s.Effort == e.ID {
 				v.Line, v.Stands = h.notes[e.ID].Line, h.notes[e.ID].Stands
@@ -1347,6 +1362,46 @@ func (h *Hub) efforts(sessions []Session) []Effort {
 		out = append(out, v)
 	}
 	return out
+}
+
+// MergeEfforts moves everything filed under one effort to another and
+// removes the first: its filings, directories, questions and what it
+// watches, its closed sessions, and its part of each day of the journal.
+// What the model wrote of where it stood is dropped.
+func (h *Hub) MergeEfforts(from, into string) error {
+	if err := h.kb.Merge(from, into); err != nil {
+		return err
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, s := range h.sessions {
+		if s.guess == from {
+			s.guess = into
+		}
+	}
+	for id, d := range h.archive {
+		if d.Effort == from {
+			d.Effort = into
+			h.archive[id] = d
+			h.warn(h.cache.Put("session", id, d))
+		}
+	}
+	for day, w := range h.wrapups {
+		moved := false
+		for i := range w.Efforts {
+			if w.Efforts[i].ID == from {
+				w.Efforts[i].ID, moved = into, true
+			}
+		}
+		if moved {
+			h.wrapups[day] = w
+			h.warn(h.cache.Put("wrapup", day, w))
+		}
+	}
+	delete(h.notes, from)
+	h.warn(h.cache.Delete("note", from))
+	h.changed()
+	return nil
 }
 
 // Touch republishes state after the knowledge base changed.
