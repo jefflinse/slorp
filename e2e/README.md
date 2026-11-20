@@ -10,4 +10,4 @@ npx playwright install chromium
 npm test
 ```
 
-The Go HTTP tests cover bridge-to-hub behavior; `integrations/opencode` contains the plugin's SDK and reconnect tests.
+Provider-limit tests cover source attribution, status text, stale readings and time-based expiry without new server events. The Go HTTP tests cover bridge-to-hub behavior; `integrations/opencode` contains the plugin's SDK, reconnect and provider-response tests.

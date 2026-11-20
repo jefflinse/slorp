@@ -1,6 +1,6 @@
 {
   "name": "opencode-slorp",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Connects OpenCode sessions to the local Slorp service: reports what each session is doing, delivers replies written in Slorp, and lets Slorp answer permission prompts.",
   "private": true,
   "type": "module",

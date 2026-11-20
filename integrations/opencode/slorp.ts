@@ -1,11 +1,12 @@
 import type { Plugin } from '@opencode-ai/plugin'
+import { QuotaCollector } from './quotas.ts'
 import { parsePresence, presenceID, PresenceTracker, type PresenceLease } from './presence.ts'
 import { isDeepStrictEqual } from 'node:util'
 import { constants } from 'node:fs'
 import { open } from 'node:fs/promises'
 
 const AGENT = 'opencode'
-const VERSION = '0.5.0'
+const VERSION = '0.6.0'
 const DEFAULT_URL = 'http://127.0.0.1:4747'
 const POLL_MS = 2000
 const REQUEST_MS = 5000
@@ -276,6 +277,8 @@ export const Slorp: Plugin = async ({ client, directory, project }, options) => 
   let acknowledging = false
   const signal = (activity?: AbortSignal) => AbortSignal.any([stopped.signal, AbortSignal.timeout(REQUEST_MS), ...(activity ? [activity] : [])])
   const presence = new PresenceTracker()
+  const quotas = new QuotaCollector(openRoot)
+  const quotaObservations = new Map<string, number>()
   const presencePending = new Set<string>()
   const discovering = new Set<string>()
   let hookMessage = 0
@@ -373,11 +376,16 @@ export const Slorp: Plugin = async ({ client, directory, project }, options) => 
       readingControl = false
     }
     if (stopped.signal.aborted) return
-    if (id) managedRoot ??= id
+    if (id && !managedRoot) {
+      managedRoot = id
+      for (const known of sessions.keys()) if (known !== id) quotas.clear(known)
+    }
     if (!id || id !== managedRoot) {
       managedAvailable = false
       managedVerified = false
       managedActivity.abort()
+      for (const id of sessions.keys()) quotas.clear(id)
+      quotaObservations.clear()
       for (const ask of asks.values()) {
         ask.attempt = undefined
         ask.running = false
@@ -951,16 +959,19 @@ export const Slorp: Plugin = async ({ client, directory, project }, options) => 
 
   async function pollSession(id: string, s: Known) {
     if (!s.isLive || !openRoot(id) || s.polling) return
+    quotas.activate(id)
     s.polling = true
     try {
       const polled = await inOrder(async () => {
         if (!openRoot(id)) return
         const agents = childRecords(id).map(({ subagent: a }) => ({ id: a.id, status: a.status, doing: a.doing, parentId: a.parentId }))
+        const providerLimits = quotas.snapshot(id)
         const claimed = await post('/api/bridge/poll', {
           agent: AGENT, sessionId: id, cwd: s.cwd, title: s.title, branch, snapshot: snapshot(id, s),
           ...(agents.length ? { agents } : {}),
           pluginVersion: VERSION, pluginRevision: String(options?.revision ?? ''),
           pluginTui: presence.fresh(id),
+          ...(providerLimits !== undefined ? { providerLimits, ...quotas.metadata(id) } : {}),
         })
         return { claimed }
       })
@@ -1184,6 +1195,8 @@ export const Slorp: Plugin = async ({ client, directory, project }, options) => 
     dispose: async () => {
       clearInterval(timer)
       presence.dispose()
+      quotas.dispose()
+      quotaObservations.clear()
       if (managed) stopped.abort()
       for (const id of asks.keys()) settle(id)
       stopped.abort()
@@ -1237,9 +1250,14 @@ export const Slorp: Plugin = async ({ client, directory, project }, options) => 
     },
 
     'chat.params': async (input) => {
-      const [id, s] = await top(input.sessionID)
-      if (id !== input.sessionID || !localRoot(id)) return
-      s.contextWindow = input.model.limit.context
+      const observation = quotas.nextSequence(input.sessionID)
+      quotaObservations.set(input.sessionID, observation)
+      void top(input.sessionID).then(([id, s]) => {
+        if (!localRoot(id) || sessions.get(input.sessionID)?.deleted || quotaObservations.get(input.sessionID) !== observation) return
+        if (id === input.sessionID) s.contextWindow = input.model.limit.context
+        const deferred = managed && !managedActivity.signal.aborted && (managedRoot === undefined || managedAvailable && managedRoot === id)
+        quotas.observe(id, input.sessionID, input.provider, input.model, deferred, observation)
+      }).catch(() => {})
     },
 
     event: async ({ event }) => {
@@ -1261,10 +1279,13 @@ export const Slorp: Plugin = async ({ client, directory, project }, options) => 
             const deleted = new Set([id, ...descendants(id).map(child => child.id)])
             for (const [requestId, ask] of asks) if (deleted.has(ask.origin)) settle(requestId)
             for (const id of deleted) {
+              quotas.clear(id)
+              quotaObservations.delete(id)
               deletedSessions.add(id)
               const s = sessions.get(id)
               if (s) { s.deleted = true; s.isBusy = false }
             }
+            quotas.remove(...deleted)
             break
           }
           case 'message.updated': {

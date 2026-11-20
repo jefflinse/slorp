@@ -29,7 +29,7 @@ type manifest struct {
 
 func bundled(address string) (map[string][]byte, string, error) {
 	files := map[string][]byte{}
-	for _, name := range []string{"slorp.ts", "tui.ts", "presence.ts", "package.json"} {
+	for _, name := range []string{"slorp.ts", "tui.ts", "presence.ts", "quotas.ts", "package.json"} {
 		b, err := opencodeplugin.Files.ReadFile(name)
 		if err != nil {
 			return nil, "", err
@@ -293,7 +293,7 @@ func (a *Adapter) writeBundle() error {
 		return err
 	}
 	// The manifest marks a newly created directory before an interrupted write.
-	for _, name := range []string{"package.json", "slorp.ts", "tui.ts", "presence.ts", "server.ts", "revision.ts"} {
+	for _, name := range []string{"package.json", "slorp.ts", "tui.ts", "presence.ts", "quotas.ts", "server.ts", "revision.ts"} {
 		if err := atomicFile(filepath.Join(path, name), files[name], 0o600); err != nil {
 			return err
 		}
@@ -380,7 +380,7 @@ func (a *Adapter) Uninstall(ctx context.Context) error {
 // fingerprint identifies the bundled runtime, including its configured address.
 func fingerprint(files map[string][]byte) string {
 	h := sha256.New()
-	for _, name := range []string{"package.json", "slorp.ts", "tui.ts", "presence.ts", "server.ts"} {
+	for _, name := range []string{"package.json", "slorp.ts", "tui.ts", "presence.ts", "quotas.ts", "server.ts"} {
 		h.Write(files[name])
 	}
 	return hex.EncodeToString(h.Sum(nil))[:12]

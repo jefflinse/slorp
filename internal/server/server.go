@@ -861,7 +861,10 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 				PercentUsed float64 `json:"percentUsed"`
 				ResetsAt    string  `json:"resetsAt"`
 			} `json:"rateLimits"`
-			MeasuredAt int64 `json:"measuredAt"`
+			MeasuredAt             int64           `json:"measuredAt"`
+			ProviderLimits         json.RawMessage `json:"providerLimits"`
+			ProviderLimitsEpoch    json.RawMessage `json:"providerLimitsEpoch"`
+			ProviderLimitsRevision json.RawMessage `json:"providerLimitsRevision"`
 			// Agents are the session's subagents as its agent has them now;
 			// absent from a bridge that does not say.
 			Agents *[]struct {
@@ -878,6 +881,15 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			} `json:"agents"`
 		}
 		if !readJSON(w, r, &in) || in.SessionID == "" {
+			return
+		}
+		providerLimits, err := parseProviderLimitsSnapshot(in.ProviderLimits, in.ProviderLimitsEpoch, in.ProviderLimitsRevision, time.Now())
+		if err != nil {
+			http.Error(w, "invalid providerLimits", http.StatusBadRequest)
+			return
+		}
+		if r.Context().Err() != nil {
+			http.Error(w, "bridge request cancelled", http.StatusConflict)
 			return
 		}
 		agent, ok := agentOf(w, in.Agent)
@@ -899,6 +911,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			}
 		}
 		fresh := h.Apply(agent, in.SessionID, func(s *hub.Session) {
+			s.SetProviderLimits(providerLimits.epoch, providerLimits.revision, providerLimits.reports)
 			in.Snapshot.apply(s)
 			s.PluginVersion, s.PluginRevision = first(in.PluginVersion, nameLimit), first(in.PluginRevision, nameLimit)
 			s.PluginTUI = in.PluginTUI

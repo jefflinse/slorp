@@ -168,6 +168,7 @@ async function world(t: TestContext, options?: Record<string, unknown>, managedE
       hooks = await Slorp({ client, directory: '/work/proj', project: { id: 'project' } } as any, options)
     },
     params: async (sessionID: string, context: number) => hooks['chat.params']({ sessionID, model: { limit: { context } } }),
+    runtimeParams: async (sessionID: string, provider: object, model: object) => hooks['chat.params']({ sessionID, provider, model }),
     sayWith: async (input: object, message: object, ...parts: Message['parts']) => {
       await hooks['chat.message']({ sessionID: SID, ...input }, { message, parts })
       await settle()
@@ -178,6 +179,202 @@ async function world(t: TestContext, options?: Record<string, unknown>, managedE
 const text = (t: string, more: object = {}) => ({ type: 'text', text: t, ...more })
 const assistant = (...parts: Message['parts']): Message => ({ info: { role: 'assistant' }, parts })
 const user = (t: string): Message => ({ info: { role: 'user' }, parts: [text(t)] })
+
+function quotaRuntime(fetch: (url: string, init: RequestInit) => Promise<Response>) {
+  return {
+    provider: { id: 'openai', options: { apiKey: 'opencode-oauth-dummy-key', fetch }, key: 'private-runtime-reference', models: {} },
+    model: { providerID: 'openai', api: { url: 'https://api.openai.com/v1' }, limit: { context: 128000 } },
+  }
+}
+
+const quotaBody = () => ({
+  account_id: 'private-account', email: 'private-email',
+  rate_limit: { primary_window: { used_percent: 42, limit_window_seconds: 18000, reset_at: 1800000000 } },
+})
+
+test('account quotas start only at chat.params and repeat sanitized cached reports without altering ordinary limits', async t => {
+  const o = await world(t)
+  let calls = 0
+  const runtime = quotaRuntime(async (url, init) => {
+    calls++
+    assert.equal(url, 'https://chatgpt.com/backend-api/wham/usage')
+    assert.equal(init.headers, undefined)
+    assert.equal(init.redirect, 'error')
+    return Response.json(quotaBody())
+  })
+  const native = runtime.provider.options.fetch
+  await o.say(SID, text('hello'))
+  await o.tick()
+  assert.equal(calls, 0)
+  assert.ok(!('providerLimits' in o.w.to('/api/bridge/poll').at(-1)))
+  assert.ok(!('providerLimitsEpoch' in o.w.to('/api/bridge/poll').at(-1)))
+  assert.ok(!('providerLimitsRevision' in o.w.to('/api/bridge/poll').at(-1)))
+  await o.runtimeParams(SID, runtime.provider, runtime.model)
+  await o.settle()
+  await o.tick()
+  const first = o.w.to('/api/bridge/poll').at(-1)
+  assert.equal(first.snapshot.contextWindow, 128000)
+  assert.equal(first.providerLimits[0].windows[0].percentUsed, 42)
+  assert.equal(first.providerLimits[0].provider, 'openai-codex')
+  assert.equal(first.pluginVersion, '0.6.0')
+  assert.match(first.providerLimitsEpoch, /^[a-f0-9-]{36}$/)
+  assert.ok(Number.isSafeInteger(first.providerLimitsRevision) && first.providerLimitsRevision > 0)
+  assert.equal(runtime.provider.options.fetch, native)
+  await o.tick()
+  assert.equal(calls, 1)
+  assert.deepEqual(o.w.to('/api/bridge/poll').at(-1).providerLimits, first.providerLimits)
+  assert.equal(o.w.to('/api/bridge/poll').at(-1).providerLimitsEpoch, first.providerLimitsEpoch)
+  assert.equal(o.w.to('/api/bridge/poll').at(-1).providerLimitsRevision, first.providerLimitsRevision)
+  assert.doesNotMatch(JSON.stringify(o.w.posts), /private-runtime|private-account|private-email|opencode-oauth-dummy-key|ChatGPT-Account-Id/)
+  await o.tick(56_000)
+  assert.equal(calls, 2, 'refresh sixty seconds after the first observation, not on a constructor-aligned interval')
+})
+
+test('descendant runtime quotas are associated with the top root and removed as an entire snapshot', async t => {
+  const o = await world(t)
+  const child = 'ses_quota_child', grandchild = 'ses_quota_grandchild'
+  o.w.infos[child] = { id: child, parentID: SID }
+  o.w.infos[grandchild] = { id: grandchild, parentID: child }
+  await o.say(grandchild, text('child work'))
+  await o.params(SID, 32000)
+  const runtime = quotaRuntime(async () => Response.json(quotaBody()))
+  await o.runtimeParams(grandchild, runtime.provider, runtime.model)
+  await o.settle()
+  await o.tick()
+  let poll = o.w.to('/api/bridge/poll').at(-1)
+  assert.equal(poll.sessionId, SID)
+  assert.equal(poll.snapshot.contextWindow, 32000, 'child context capacity is not the root capacity')
+  assert.equal(poll.providerLimits[0].status, 'ok')
+  const revision = poll.providerLimitsRevision, epoch = poll.providerLimitsEpoch
+  assert.ok(o.w.to('/api/bridge/poll').every(p => p.sessionId === SID))
+  await o.emit('session.deleted', { info: { id: child } })
+  await o.tick()
+  poll = o.w.to('/api/bridge/poll').at(-1)
+  assert.deepEqual(poll.providerLimits, [])
+  assert.ok(poll.providerLimitsRevision > revision)
+  assert.equal(poll.providerLimitsEpoch, epoch)
+  assert.equal(poll.snapshot.contextWindow, 32000)
+})
+
+test('quota hooks do not await session lookups or providers, and superseded lookups cannot activate old contexts', async t => {
+  const o = await world(t)
+  const held = gate()
+  o.w.infoGates[SID] = held.promise
+  let calls = 0
+  const runtime = quotaRuntime(async () => { calls++; return Response.json(quotaBody()) })
+  await o.runtimeParams(SID, runtime.provider, runtime.model)
+  assert.equal(calls, 0)
+  await o.runtimeParams(SID, { id: 'unknown' }, { providerID: 'unknown', limit: { context: 1000 } })
+  held.release()
+  await o.settle()
+  assert.equal(calls, 0)
+  await o.say(SID, text('hello'))
+  await o.tick()
+  assert.equal(o.w.to('/api/bridge/poll').at(-1).snapshot.contextWindow, 1000)
+  assert.ok(!('providerLimits' in o.w.to('/api/bridge/poll').at(-1)))
+  const waiting = gate()
+  runtime.provider.options.fetch = async () => { calls++; await waiting.promise; return Response.json(quotaBody()) }
+  await o.runtimeParams(SID, runtime.provider, runtime.model)
+  await o.settle()
+  assert.equal(calls, 1)
+  await o.runtimeParams(SID, { id: 'unknown' }, { providerID: 'unknown', limit: { context: 2000 } })
+  await o.settle()
+  waiting.release()
+  await o.tick()
+  assert.deepEqual(o.w.to('/api/bridge/poll').at(-1).providerLimits, [])
+})
+
+test('quota hooks absorb failed session resolution and root deletion or disposal abort active provider reads', async t => {
+  for (const action of ['delete', 'dispose', 'lookup-error'] as const) await t.test(action, async t => {
+    const o = await world(t)
+    let signal: AbortSignal | null | undefined
+    const held = gate()
+    const runtime = quotaRuntime(async (_url, init) => { signal = init.signal; await held.promise; return Response.json(quotaBody()) })
+    if (action === 'lookup-error') o.w.infoErrors[SID] = new Error('private lookup error')
+    else await o.say(SID, text('work'))
+    await o.runtimeParams(SID, runtime.provider, runtime.model)
+    await o.settle()
+    if (action === 'lookup-error') assert.equal(signal, undefined)
+    else {
+      assert.equal(signal?.aborted, false)
+      if (action === 'delete') await o.emit('session.deleted', { info: { id: SID } })
+      else await o.dispose()
+      assert.equal(signal?.aborted, true)
+    }
+    held.release()
+    await o.tick(120_000)
+    assert.equal(o.w.to('/api/bridge/poll').length, 0)
+  })
+})
+
+test('managed control removal aborts quota reads and reopening explicitly clears the snapshot', async t => {
+  const o = await managedWorld(t)
+  o.w.infos[SID] = { id: SID }
+  await o.control()
+  await o.tick()
+  const held = gate()
+  let signal: AbortSignal | null | undefined
+  const runtime = quotaRuntime(async (_url, init) => { signal = init.signal; await held.promise; return Response.json(quotaBody()) })
+  await o.runtimeParams(SID, runtime.provider, runtime.model)
+  await o.settle()
+  await rm(o.file)
+  await o.tick()
+  assert.equal(signal?.aborted, true)
+  held.release()
+  await o.settle()
+  await o.control()
+  await o.tick()
+  assert.deepEqual(o.w.to('/api/bridge/poll').at(-1).providerLimits, [])
+})
+
+test('a first model request before managed activation is retained without calling providers before control is verified', async t => {
+  const o = await managedWorld(t)
+  o.w.infos[SID] = { id: SID }
+  let calls = 0
+  const runtime = quotaRuntime(async () => { calls++; return Response.json(quotaBody()) })
+  await o.runtimeParams(SID, runtime.provider, runtime.model)
+  await o.settle()
+  assert.equal(calls, 0)
+  await o.control()
+  await o.tick()
+  assert.equal(calls, 1)
+  await o.tick()
+  assert.equal(o.w.to('/api/bridge/poll').at(-1).providerLimits[0].status, 'ok')
+})
+
+test('quota observations use global hook-entry order, not descendant lookup completion order', async t => {
+  const o = await world(t), held = gate(), child = 'ses_slow_quota_child'
+  await o.say(SID, text('root'))
+  o.w.infos[child] = { id: child, parentID: SID }
+  o.w.infoGates[child] = held.promise
+  let olderCalls = 0, newerCalls = 0
+  const older = quotaRuntime(async () => { olderCalls++; return Response.json(quotaBody()) })
+  const newer = quotaRuntime(async () => {
+    newerCalls++
+    const body = quotaBody()
+    body.rate_limit.primary_window.used_percent = 90
+    return Response.json(body)
+  })
+  await o.runtimeParams(child, older.provider, older.model)
+  await o.runtimeParams(SID, newer.provider, newer.model)
+  await o.settle()
+  held.release()
+  await o.settle()
+  await o.tick()
+  const poll = o.w.to('/api/bridge/poll').at(-1)
+  assert.equal(poll.providerLimits[0].windows[0].percentUsed, 90)
+  assert.equal(newerCalls, 1)
+  assert.equal(olderCalls, 0)
+  await o.runtimeParams(SID, { id: 'unknown' }, { providerID: 'unknown', limit: { context: 1000 } })
+  await o.settle()
+  await o.tick()
+  assert.deepEqual(o.w.to('/api/bridge/poll').at(-1).providerLimits[0].windows, [])
+  assert.ok(o.w.to('/api/bridge/poll').at(-1).providerLimitsRevision > poll.providerLimitsRevision)
+  await o.tick(56_000)
+  assert.equal(olderCalls, 1, 'the older child context remains available as a fallback')
+  await o.tick()
+  assert.equal(o.w.to('/api/bridge/poll').at(-1).providerLimits[0].windows[0].percentUsed, 42)
+})
 
 async function timedPresenceWorld(t: TestContext) {
   const o = await world(t)
@@ -1974,7 +2171,7 @@ test('bridge version and managed revision identify the loaded installation', asy
   const manifest = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8'))
   const poll = o.w.to('/api/bridge/poll')[0]
   assert.equal(poll.pluginVersion, manifest.version)
-  assert.equal(poll.pluginVersion, '0.5.0')
+  assert.equal(poll.pluginVersion, '0.6.0')
   assert.equal(poll.pluginRevision, 'managed-build')
 })
 

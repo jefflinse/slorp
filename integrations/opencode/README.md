@@ -10,10 +10,29 @@ An OpenCode plugin that connects the sessions of an OpenCode instance to the loc
 - Offers permission prompts and structured questions, including subagents', in Slorp as well as OpenCode. Questions support single and multiple choices, custom text when allowed, and dismissal. Whichever you answer first decides it. Permissions allow one call or reject it; they never allow "always". Concurrent requests under one top-level session are presented one at a time.
 - Repeats the current state on every poll and restores outstanding prompts after Slorp restarts. Failed reply acknowledgements and prompt settlements are retried without resubmitting your reply.
 - Starts, stops and reopens conversations from Slorp, with choices drawn from the selected directory's OpenCode configuration.
+- Reports supported provider account allowances after observing their native model-request context, with percentages, reset times and reading age.
 
 OpenCode's session list includes saved conversations, rather than a roster of open sessions, so the plugin is Slorp's view of what is live. In a local terminal or `opencode attach`, a conversation appears as soon as you open or resume it, even while idle. Opening it preserves the original exchange timestamps. Conversations observed by an instance remain listed until its bridge stops reporting; they leave about 30 seconds later. Unopened saved conversations are not listed.
 
-The terminal companion announces its selected session through OpenCode's authenticated server client, supporting both local terminals and separate-process `opencode attach`. Session usage includes descendants once; each subagent's usage counts only its own work. Provider account usage limits are not reported.
+The terminal companion announces its selected session through OpenCode's authenticated server client, supporting both local terminals and separate-process `opencode attach`. Session usage includes descendants once; each subagent's usage counts only its own work.
+
+## Provider account limits
+
+Plugin **0.6.0** adds account-allowance readings for these native provider configurations:
+
+| Provider | Supported connection | Reported allowances |
+| --- | --- | --- |
+| OpenAI Codex | OpenCode's native ChatGPT OAuth transport | Primary and secondary windows, using the durations and resets reported by the provider |
+| GitHub Copilot | OpenCode's native GitHub.com OAuth transport | Finite premium-request, chat and completion quotas when the response supplies a usable entitlement |
+| OpenCode Go | API key with the official `opencode-go` endpoint | Rolling, weekly and monthly subscription windows |
+
+Collection begins after the first model request exposes the runtime provider context. An opened but idle conversation has no reading until then. Subagent contexts are attributed to their root conversation. The collector normally refreshes once a minute, backs off on errors, and honors throttling delays up to 24 hours. It does not delay model requests. Codex and Copilot use OpenCode's existing authenticated fetch functions, leaving OAuth refresh to OpenCode; Go uses its runtime API key only at the fixed Go usage endpoint.
+
+Top-bar meters identify the provider; their tooltips identify the source session, measurement age and reset time. Different sessions' readings are kept separate because Slorp does not assume they use the same account. Under one root, the latest observed context supplies each provider's reading. OAuth readings are invalidated on a new observed context because a native fetch function can change accounts without changing its identity.
+
+Unavailable, authentication-required, unsupported and throttled readings have distinct status text. They are never interpreted as zero usage or exhaustion. Readings become stale after five minutes and lose their gauges after ten minutes or when the window resets. Transient Go failures can retain a stale reading for the same key; failed OAuth rereads clear the previous windows. Credentials, account identifiers and raw responses stay out of Slorp's bridge payloads and database; normalized readings are held only for open sessions.
+
+OpenAI API keys, Copilot Enterprise, custom/proxy endpoints, Zen billing and Anthropic subscription OAuth are not supported by this collector. Unlimited or pool-backed Copilot quotas without a finite entitlement do not produce percentage gauges. These provider-specific endpoints are not a universal OpenCode quota API: unknown response shapes are treated as unavailable, including Go accounts returning an unrecognized migrated schema. No limits are inferred from token totals, estimated costs or generic rate-limit errors.
 
 ## Attached terminals
 
@@ -115,9 +134,10 @@ python3 integrations/opencode/history-smoke.py --overflow --replay-last
 python3 integrations/opencode/subagents-smoke.py
 python3 integrations/opencode/lifecycle-smoke.py
 python3 integrations/opencode/attach-smoke.py
+python3 integrations/opencode/quotas-smoke.py
 SLORP_NATIVE_TEST=1 go test -race ./internal/opencode -run Native -count=1
 ```
 
 Run these from the repository root. The first builds a standalone Slorp executable, installs the bundled plugin into isolated configuration, opens two idle conversations in pseudoterminals, and checks discovery, restart recovery and retirement. The history tests import synthetic native-format transcripts into an isolated OpenCode database, export them with the real CLI, and backfill twice through Slorp's HTTP API. They cover ordinary continuation and overflow replay, including a large export. The subagent test imports a nested task tree and uses native OpenCode API updates to verify live completion, background results, usage, restart recovery and archived reports without OpenCode running.
 
-The lifecycle smoke uses a loopback fixture provider to exercise actual prompts, replies, stop, same-ID reopening and process cleanup. The attach smoke runs an authenticated server and separate terminal processes, checking idle discovery, switching/home, independent selections, reconnect recovery, unchanged native records, and retirement when the server stops. Native Go tests compare ordinary and managed configuration behavior, including instructions, skills, custom tools and defaults. All use isolated OpenCode/Slorp data; no paid provider calls are made. Set `SLORP_SMOKE_KEEP=1` to retain Python smoke diagnostics and `TMPDIR` to choose their temporary parent.
+The lifecycle smoke uses a loopback fixture provider to exercise actual prompts, replies, stop, same-ID reopening and process cleanup. The attach smoke runs an authenticated server and separate terminal processes, checking idle discovery, switching/home, independent selections, reconnect recovery, unchanged native records, and retirement when the server stops. The quota smoke exercises OpenCode 1.19.6's actual OAuth loaders and Go key handling with synthetic credentials and loopback responses, including throttling and secret-free API/database output; it does not validate a real account's current endpoint response. Native Go tests compare ordinary and managed configuration behavior, including instructions, skills, custom tools and defaults. All use isolated OpenCode/Slorp data; no paid provider calls are made. Set `SLORP_SMOKE_KEEP=1` to retain Python smoke diagnostics and `TMPDIR` to choose their temporary parent.

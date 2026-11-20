@@ -122,7 +122,8 @@ type Session struct {
 	// work, the first started first. Used counts what they took as well.
 	Subagents []Subagent `json:"subagents,omitempty"`
 
-	bridgeSeen time.Time
+	bridgeSeen     time.Time
+	providerLimits providerLimitSnapshot
 	// live is how the session's bridge last said its subagents stand.
 	live       []Subagent
 	liveSeen   time.Time
@@ -920,6 +921,7 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 		s.live = cloneSubagents(s.live)
 		seen[s.ID] = true
 		if old, ok := h.sessions[s.ID]; ok {
+			s.providerLimits = old.providerLimits
 			s.bridgeSeen, s.live = old.bridgeSeen, old.live
 			s.liveSeen = old.liveSeen
 			s.key, s.keySince, s.insightKey, s.Insight = old.key, old.keySince, old.insightKey, old.Insight
@@ -1499,7 +1501,8 @@ type State struct {
 	// PullRequests are the open ones the integrations listed.
 	PullRequests []PullRequest `json:"pullRequests"`
 	// Limits are the user's usage windows as the agents last read them.
-	Limits []Limit `json:"limits"`
+	Limits         []Limit          `json:"limits"`
+	ProviderLimits []ProviderLimits `json:"providerLimits"`
 	// Journal lists the days that have been wrapped up or are waiting to
 	// be, the latest first.
 	Journal []JournalDay `json:"journal"`
@@ -1519,7 +1522,7 @@ func (h *Hub) State() State {
 		feeds[id] = f.FeedStatus
 	}
 	return State{Sessions: sessions, Items: append(items(sessions), h.fed()...), Efforts: h.efforts(sessions), Summarizer: h.summ,
-		Settings: h.settings, Knowledge: h.kb.Knowledge(), Lookups: append([]Lookup{}, h.lookups...), Feeds: feeds, PullRequests: h.pulls(), Limits: h.limited(), Journal: h.journal(), Archive: h.archives(), Plugins: maps.Clone(h.plugins)}
+		Settings: h.settings, Knowledge: h.kb.Knowledge(), Lookups: append([]Lookup{}, h.lookups...), Feeds: feeds, PullRequests: h.pulls(), Limits: h.limited(), ProviderLimits: h.providerLimited(time.Now()), Journal: h.journal(), Archive: h.archives(), Plugins: maps.Clone(h.plugins)}
 }
 
 func (h *Hub) efforts(sessions []Session) []Effort {
@@ -2112,7 +2115,7 @@ func (h *Hub) changed() {
 		}
 	}
 	snap := h.snapshot()
-	b, _ := json.Marshal(map[string]any{"s": snap, "i": items(snap), "f": h.fed(), "e": h.efforts(snap), "m": h.summ})
+	b, _ := json.Marshal(map[string]any{"s": snap, "i": items(snap), "f": h.fed(), "e": h.efforts(snap), "m": h.summ, "providerLimits": h.providerLimited(now)})
 	if string(b) == h.last {
 		return
 	}

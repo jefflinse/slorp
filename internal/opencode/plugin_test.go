@@ -123,7 +123,7 @@ func TestBundledPresenceAffectsRevisionAndUpdateDetection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if version != "0.5.0" || len(files["presence.ts"]) == 0 {
+	if version != "0.6.0" || len(files["presence.ts"]) == 0 {
 		t.Fatalf("missing presence runtime or version: %q", version)
 	}
 	written, err := os.ReadFile(filepath.Join(a.managedPath(), "presence.ts"))
@@ -142,6 +142,49 @@ func TestBundledPresenceAffectsRevisionAndUpdateDetection(t *testing.T) {
 	p, err := a.inspect()
 	if err != nil || !p.UpdateAvailable || p.Revision == before {
 		t.Fatalf("presence change was not detected: %+v, %v", p, err)
+	}
+}
+
+func TestBundledQuotasRuntimePackaging(t *testing.T) {
+	a := fixture(t)
+	if err := a.Install(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	files, version, err := bundled(a.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version != "0.6.0" || len(files["quotas.ts"]) == 0 || !strings.Contains(string(files["slorp.ts"]), "'./quotas.ts'") {
+		t.Fatalf("missing quotas runtime/import or version: %q", version)
+	}
+	written, err := os.ReadFile(filepath.Join(a.managedPath(), "quotas.ts"))
+	if err != nil || string(written) != string(files["quotas.ts"]) {
+		t.Fatalf("installed quotas differ from embedded runtime: %v", err)
+	}
+	before := fingerprint(files)
+	if !strings.Contains(string(files["revision.ts"]), before) {
+		t.Fatal("wrapper revision does not identify the full runtime")
+	}
+	files["quotas.ts"] = []byte("changed quota collector")
+	if fingerprint(files) == before {
+		t.Fatal("quota changes did not change the runtime revision")
+	}
+	put(t, filepath.Join(a.managedPath(), "quotas.ts"), "old collector")
+	p, err := a.inspect()
+	if err != nil || !p.UpdateAvailable || p.Revision == before {
+		t.Fatalf("quota change was not detected: %+v, %v", p, err)
+	}
+	if err := a.Update(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	p, err = a.inspect()
+	if err != nil || p.UpdateAvailable || p.Revision != before {
+		t.Fatalf("quota runtime was not restored: %+v, %v", p, err)
+	}
+	for _, name := range []string{"quotas.test.ts", "slorp.test.ts"} {
+		if _, err := os.Stat(filepath.Join(a.managedPath(), name)); !os.IsNotExist(err) {
+			t.Fatalf("development file %s installed: %v", name, err)
+		}
 	}
 }
 

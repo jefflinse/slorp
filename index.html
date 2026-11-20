@@ -165,6 +165,16 @@ h1, h2, h3, p { margin: 0; }
 .msg .tx > :first-child { margin-top: 0; } .msg .tx > :last-child { margin-bottom: 0; }
 .lim { color: var(--ink3); font-size: 12px; }
 .lim .meter { width: 44px; }
+.tools:has(.provider-limit) { min-width: 0; }
+.tools:has(.provider-limit) > :not(.provider-limits) { flex-shrink: 0; }
+.provider-limits { display: flex; align-items: center; gap: 12px; max-width: min(36vw, 520px); overflow-x: auto; scrollbar-width: thin; }
+.provider-limits:empty { display: none; }
+.provider-limit { display: inline-flex; align-items: center; gap: 6px; flex: none; white-space: nowrap; font-size: 12px; color: var(--ink3); }
+.provider-limit .provider-name { color: var(--ink2); font-weight: 500; }
+.provider-limit .window-label { max-width: 100px; overflow: hidden; text-overflow: ellipsis; }
+.provider-limit .lim { display: inline-flex; }
+.provider-limit .limit-status { padding: 1px 5px; border: 1px solid var(--line); border-radius: 5px; font-size: 11px; }
+.provider-limit.stale .meter i { background: var(--ink3); }
 .pr { display: inline-flex; align-items: center; white-space: nowrap; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--ink2); font-size: 11.5px; font-weight: 500; line-height: 1.5; text-decoration: none; }
 a.pr:hover, button.pr:hover { border-color: var(--k-github); color: var(--ink); }
 .pr.bad { color: var(--err); border-color: color-mix(in srgb, var(--err) 45%, transparent); }
@@ -1323,11 +1333,45 @@ function pullAsks(p, box) {
 const LIMITS = { five_hour: ['5h', '5-hour'], seven_day: ['7d', 'weekly'], spend_limit: ['spend', 'spend'] };
 const until = iso => { const m = Math.max(0, Math.round((new Date(iso) - Date.now()) / 60000)); return m < 60 ? `in ${m}m` : m < 1440 ? `in ${Math.floor(m / 60)}h ${m % 60}m` : `in ${Math.floor(m / 1440)}d ${Math.floor(m % 1440 / 60)}h`; };
 function limitMeters() {
-  return limits.map(l => {
-    const plain = l.kind.replace(/_/g, ' '), [short, long] = LIMITS[l.kind] || [plain, plain], pct = Math.round(l.percentUsed);
-    const about = `${KINDS[l.agent] || l.agent}: ${pct}% of your ${long} allowance is used.${l.resetsAt ? ` It starts over ${until(l.resetsAt)}.` : ''}${l.at ? ` Read ${ago(minsSince(l.at))}.` : ''}`;
-    return `<span class="ctx lim ${pct >= 90 ? 'full' : pct >= 75 ? 'high' : ''}" title="${esc(about)}">${esc(short)}<span class="meter"><i style="width:${Math.min(100, pct)}%"></i></span>${pct}%</span>`;
+  return limits.filter(l => l && typeof l.kind === 'string' && Number.isFinite(l.percentUsed)).map(l => {
+    const plain = l.kind.replace(/_/g, ' '), [short, long] = Object.hasOwn(LIMITS, l.kind) ? LIMITS[l.kind] : [plain, plain], pct = Math.round(l.percentUsed);
+    const about = `${KINDS[l.agent] || l.agent}: ${pct}% of your ${long} allowance is used.${Number.isFinite(Date.parse(l.resetsAt)) ? ` It starts over ${until(l.resetsAt)}.` : ''}${Number.isFinite(Date.parse(l.at)) ? ` Read ${ago(minsSince(l.at))}.` : ''}`;
+    return `<span class="ctx lim ${pct >= 90 ? 'full' : pct >= 75 ? 'high' : ''}" title="${esc(about)}">${esc(short)}<span class="meter"><i style="width:${Math.max(0, Math.min(100, pct))}%"></i></span>${pct}%</span>`;
   }).join('');
+}
+
+const LIMIT_PROVIDERS = { 'openai-codex': 'Codex', 'github-copilot': 'Copilot', 'opencode-go': 'OpenCode Go' };
+const LIMIT_STATUS = { ok: '', unsupported: 'Usage limits unsupported', auth_required: 'Reconnect in OpenCode', unavailable: 'Unavailable', throttled: 'Throttled' };
+const LIMIT_STALE_AGE = 5 * 60000, LIMIT_MAX_AGE = 10 * 60000;
+function providerLimitMeters() {
+  const now = Date.now();
+  return providerLimits.filter(l => l && Object.hasOwn(LIMIT_PROVIDERS, l.provider)).map(l => {
+    const provider = LIMIT_PROVIDERS[l.provider], source = typeof l.sessionLabel === 'string' && l.sessionLabel ? l.sessionLabel : 'unnamed session';
+    const status = Object.hasOwn(LIMIT_STATUS, l.status) ? l.status : 'unavailable';
+    const measured = Date.parse(l.measuredAt), checked = Date.parse(l.checkedAt);
+    // Only a successful, non-stale check can stand in for an omitted measurement time.
+    const at = Number.isFinite(measured) ? measured : l.measuredAt == null && status === 'ok' && !l.stale ? checked : NaN;
+    const expired = Number.isFinite(at) && now - at > LIMIT_MAX_AGE;
+    const windows = !expired && Number.isFinite(at) && ['ok', 'unavailable', 'throttled'].includes(status)
+      ? (Array.isArray(l.windows) ? l.windows : []).filter(w => w && Number.isFinite(w.percentUsed) && w.percentUsed >= 0 && Date.parse(w.resetsAt) > now) : [];
+    const stale = !!l.stale || (Number.isFinite(at) && now - at > LIMIT_STALE_AGE) || (windows.length > 0 && (isOffline || status !== 'ok')) || (status === 'ok' && !windows.length);
+    const age = Number.isFinite(at) ? ago(Math.max(0, (now - at) / 60000)) : 'age unknown';
+    const read = Number.isFinite(measured) ? `Measured ${age}.` : Number.isFinite(at) ? `Checked ${age}.` : 'Measurement time unknown.';
+    const retry = Date.parse(l.retryAt);
+    const retryInfo = Number.isFinite(retry) ? ` Retry ${retry > now ? until(l.retryAt) : 'pending'} (${new Date(retry).toISOString()}).` : '';
+    const message = LIMIT_STATUS[status] || (!windows.length ? 'No current usage' : '');
+    const about = `${provider} via ${source}. ${message ? message + '. ' : ''}${stale ? 'Stale. ' : ''}${read}${retryInfo}`;
+    const meters = windows.map(w => {
+      const label = typeof w.label === 'string' && w.label ? w.label : 'Usage', pct = Math.round(w.percentUsed);
+      const title = `${about} ${label}: ${pct}% used. Resets ${until(w.resetsAt)} (${new Date(w.resetsAt).toISOString()}).`;
+      return `<span class="ctx lim ${!stale && pct >= 90 ? 'full' : !stale && pct >= 75 ? 'high' : ''}" title="${esc(title)}"><span class="window-label">${esc(label)}</span><span class="meter"><i style="width:${Math.min(100, pct)}%"></i></span>${pct}%</span>`;
+    }).join('');
+    return `<span class="provider-limit${stale ? ' stale' : ''}" title="${esc(about)}"><span class="provider-name">${provider}</span>${message ? `<span class="limit-status">${message}</span>` : ''}${meters}${stale ? `<span class="limit-status">stale · ${age}</span>` : ''}</span>`;
+  }).join('');
+}
+function refreshProviderLimits() {
+  const strip = document.getElementById('provider-limits');
+  if (strip) strip.innerHTML = providerLimitMeters();
 }
 
 /* A session's role: the kind of session it is, as the user named the kinds. */
@@ -1990,6 +2034,7 @@ let live = null, liveItems = [], liveEfforts = [], summarizer = {}, settings = {
 let capabilities = {};
 const historyReading = new Set();
 let knowledge = { watch: [], questions: [], context: [], routing: [], roles: [] }, integrations = [], lookups = [], feeds = {}, pulls = [], limits = [], archive = [], plugins = {}, archiveDocs = {};
+let providerLimits = [];
 /* Fetches a closed session's timeline, once per time it closes. */
 const archiveAsked = {};
 function fetchArchived(id) {
@@ -2030,6 +2075,7 @@ async function refresh(force) {
     feeds = data.feeds || {};
     pulls = data.pullRequests || [];
     limits = data.limits || [];
+    providerLimits = Array.isArray(data.providerLimits) ? data.providerLimits : [];
     const listed = JSON.stringify(journal);
     journal = data.journal || [];
     if (journalFound && JSON.stringify(journal) !== listed) runJournalSearch();
@@ -3429,8 +3475,9 @@ function render() {
   const main = RENDER[state.view]();  // first: it may settle the selection
   const n = activeItems().length;
   $('#nav').innerHTML = nav().map(v => `<button class="${state.view === v ? 'on' : ''}" data-act="view" data-view="${v}">${VIEW_NAMES[v] || cap(v)}${v === 'attention' && n ? `<span class="count">${n}</span>` : ''}</button>`).join('');
+  const limitsScroll = $('#provider-limits')?.scrollLeft || 0;
   $('#tools').innerHTML = `
-    <span class="model" ${modelless() ? `title="${esc(modelWhy(true))}"` : ''}><span class="dot ${live && isOffline ? 'error' : modelless() ? 'idle' : 'running'}"></span>${live ? (isOffline ? 'service offline' : `live · ${summarizer.model ? summarizer.model.split('/').pop() : 'no local model'}`) : 'qwen3:14b · local · caught up'}</span>${live ? usageTotal() + limitMeters() : ''}
+    <span class="model" ${modelless() ? `title="${esc(modelWhy(true))}"` : ''}><span class="dot ${live && isOffline ? 'error' : modelless() ? 'idle' : 'running'}"></span>${live ? (isOffline ? 'service offline' : `live · ${summarizer.model ? summarizer.model.split('/').pop() : 'no local model'}`) : 'qwen3:14b · local · caught up'}</span>${live ? usageTotal() + limitMeters() + `<span id="provider-limits" class="provider-limits" role="group" aria-label="Provider usage limits">${providerLimitMeters()}</span>` : ''}
     <span class="seg" role="group" aria-label="Voice" title="Fluent shows what the model wrote. Raw shows what the sources said. (r)">
       <button class="${state.fluent ? 'on' : ''}" data-act="fluent" data-on="1">Fluent</button><button class="${state.fluent ? '' : 'on'}" data-act="fluent" data-on="0">Raw</button></span>
     ${live ? `<button class="icon" data-act="searchOpen" title="Search sessions (/ or ⌘K)" aria-label="Search sessions">⌕</button>` : ''}
@@ -3440,6 +3487,7 @@ function render() {
       <div class="pop"><p>Demo controls</p>
         <button data-act="simulate">Simulate an incoming item</button>
         <button data-act="reset">Reset the demo</button></div></details>`}`;
+  $('#provider-limits')?.scrollTo(limitsScroll, 0);
   const notices = [modNotice(), modelNotice()].filter(Boolean);
   document.documentElement.style.setProperty('--notice', `${44 * notices.length}px`);
   $('#notice').innerHTML = notices.join('');
@@ -3975,6 +4023,8 @@ state.view = viewNamed(location.hash.slice(1)) || state.view;
 history.replaceState(null, '', '#' + state.view);
 render();
 connect();
+setInterval(refreshProviderLimits, 15000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshProviderLimits(); });
 </script>
 </body>
 </html>
