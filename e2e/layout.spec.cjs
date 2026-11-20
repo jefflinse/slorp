@@ -217,4 +217,35 @@ test('a session page puts the box to answer in after its last exchange', async t
   await inner.locator('.need textarea').waitFor()
   const parts = await inner.evaluate(el => [...el.children].map(child => child.classList[0]))
   assert.ok(parts.indexOf('tabbody') >= 0 && parts.indexOf('tabbody') < parts.indexOf('need'), parts.join(' '))
+  const head = await inner.locator('.crumb').allInnerTexts()
+  assert.equal(head.length, 3)
+  assert.match(head[0], /pair ›\s*Wire the outbox$/)
+  assert.equal(head[1], 'Claude Code')
+  assert.match(head[2], /^Opus 5\.5\s*50k \/ 200k \(25%\)\s*awaiting you\s*active 2m ago$/)
+})
+
+test('an insight Claude Code offers in passing is set apart from the rest of what it wrote', async t => {
+  const page = await world(t, 'sessions')
+  await page.locator('.pane.detail .inner').waitFor()
+  const rule = '─'.repeat(40), said = ['Done.', '`★ Insight ' + rule + '`', '- Rebasing keeps **history** linear.', '`' + rule + '`', 'Next?'].join('\n')
+  const [html, gist] = await page.evaluate(text => [md(text), gist(text)], said)
+  assert.equal(html, '<div class="md"><p>Done.</p><aside class="tip"><b>★ Insight</b><div class="md"><ul><li>Rebasing keeps <b>history</b> linear.</li></ul></div></aside><p>Next?</p></div>')
+  assert.equal(gist, 'Done. Rebasing keeps history linear. Next?')
+  assert.equal(await page.evaluate(text => md(text), '`★ Insight ' + rule + '`\nnever closed'), '<div class="md"><p><code>★ Insight ' + rule + '</code><br>never closed</p></div>')
+})
+
+test('the top bar counts tokens before cost and says when the local model is at work', async t => {
+  const page = await world(t, 'sessions')
+  const model = page.locator('#tools .model')
+  await model.waitFor()
+  assert.equal(await model.locator('.dot.ready').count(), 1)
+  await page.evaluate(() => {
+    Object.assign(live[0], { used: { in: 1000, out: 500, cacheWrite: 0, cacheRead: 0 }, costUsd: 1.5 })
+    summarizer.doing = 'describe quiet'
+    render()
+  })
+  assert.equal(await page.locator('#used').innerText(), '2k tokens · ≈$1.50')
+  assert.equal(await model.innerText(), 'live · fixture · ✦describing')
+  assert.equal(await model.locator('.dot.running').count(), 1)
+  assert.equal(await model.getAttribute('title'), 'The local model is at work: describe quiet')
 })

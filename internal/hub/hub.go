@@ -410,6 +410,8 @@ type Summarizer struct {
 	// given when Slorp started, where the user's settings do not reach.
 	FixedURL   bool `json:"fixedUrl,omitempty"`
 	FixedModel bool `json:"fixedModel,omitempty"`
+	// Doing names the piece of work the model is on, empty while it is idle.
+	Doing string `json:"doing,omitempty"`
 }
 
 // Subagent is an agent a session started to do part of its work.

@@ -136,9 +136,10 @@ func (e *Enricher) Run(ctx context.Context) {
 }
 
 // step does one piece of work if there is one, and tells the hub which model
-// is there to do it: before each piece, every idleCheck while there is
-// none, and at once when the user's settings change which to use. With a
-// model and nothing to do, it has the journal ask for a day it is missing.
+// is there to do it and what it is on while it works: before each piece,
+// every idleCheck while there is none, and at once when the user's settings
+// change which to use. With a model and nothing to do, it has the journal ask
+// for a day it is missing.
 func (e *Enricher) step(ctx context.Context) {
 	if e.Resolve != nil {
 		if cfg := e.Resolve(e.Hub.Settings().Model); cfg != e.cfg || e.checked.IsZero() {
@@ -166,15 +167,20 @@ func (e *Enricher) step(ctx context.Context) {
 		return
 	}
 	said.Model = model
-	e.Hub.SetSummarizer(said)
 	if job == nil {
+		e.Hub.SetSummarizer(said)
 		if time.Since(e.missed) >= missedCheck {
 			e.missed = time.Now()
 			e.Hub.AskMissed(e.missed)
 		}
 		return
 	}
-	if err := job(ctx, model); err != nil && ctx.Err() == nil {
+	said.Doing = what
+	e.Hub.SetSummarizer(said)
+	err = job(ctx, model)
+	said.Doing = ""
+	e.Hub.SetSummarizer(said)
+	if err != nil && ctx.Err() == nil {
 		log.Printf("enrich: %s: %v", what, err)
 		e.failed[key] = time.Now()
 	}

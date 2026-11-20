@@ -718,3 +718,37 @@ func TestBriefsWaitTheirTurn(t *testing.T) {
 		t.Errorf("a brief that failed was asked for %d times in a row; want it left a while", failing.requests)
 	}
 }
+
+func TestSaysWhatTheModelIsOnWhileItWorks(t *testing.T) {
+	st := testdb.Open(t)
+	k := testdb.KB(t, st)
+	h := hub.New(k, st)
+	var during string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v0/models":
+			io.WriteString(w, `{"data":[{"id":"m","type":"llm","state":"loaded"}]}`)
+		case "/v1/chat/completions":
+			during = h.State().Summarizer.Doing
+			json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": `{"line":"Moving.","stands":"It stands."}`}}}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	e := &Enricher{BaseURL: srv.URL, client: srv.Client(), failed: map[string]time.Time{}, Hub: h}
+	effort, err := k.Create("Widgets", "")
+	if err != nil || k.AddDir(effort.ID, "/work/widgets") != nil {
+		t.Fatal(err)
+	}
+	h.SetRoster("claude", []hub.Session{{ID: "s", Agent: "claude", Status: hub.Idle, Cwd: "/work/widgets"}})
+	h.SetInsight("s", "k", hub.Insight{Title: "Done"})
+
+	e.step(ctx)
+	if during != "note Widgets" {
+		t.Errorf("while the model worked the hub said it was on %q; want the note it was writing", during)
+	}
+	if got := h.State().Summarizer; got.Doing != "" || got.Model != "m" {
+		t.Errorf("summarizer = %+v; want the model named and nothing under way once the work is done", got)
+	}
+}

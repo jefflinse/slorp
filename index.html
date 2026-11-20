@@ -188,6 +188,7 @@ a.pr:hover, button.pr:hover { border-color: var(--k-github); color: var(--ink); 
 .seg button.on { background: var(--ink); color: var(--bg); }
 .icon { width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; color: var(--ink2); border: 1px solid var(--line); background: var(--raised); list-style: none; cursor: pointer; }
 .icon::-webkit-details-marker { display: none; }
+.top .icon { width: 30px; height: 30px; font-size: 16px; }
 .menu { position: relative; }
 .menu .pop { position: absolute; right: 0; top: 34px; width: 230px; background: var(--raised); border: 1px solid var(--line); border-radius: 9px; padding: 6px; box-shadow: 0 8px 28px rgb(0 0 0 / 0.16); }
 .menu .pop button { display: block; width: 100%; padding: 7px 9px; border-radius: 6px; }
@@ -330,6 +331,9 @@ h1 .pen:hover { color: var(--accent); background: var(--sel); }
 .md th { background: var(--panel); font-weight: 600; }
 .md a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 .md hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0 0; }
+.md .tip { margin: 12px 0 0; padding: 10px 14px 12px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; background: var(--panel); }
+.md .tip > b { display: block; margin-bottom: 4px; font-size: 11px; font-weight: 650; letter-spacing: 0.07em; text-transform: uppercase; color: var(--ink2); }
+.md .tip .md { font-size: inherit; line-height: inherit; }
 .asked + .asked { margin-top: 16px; }
 .asked .q { font-size: 15px; font-weight: 500; margin: 2px 0 8px; }
 .asked .opt { display: flex; gap: 10px; align-items: baseline; padding: 8px 11px; margin-top: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
@@ -444,6 +448,8 @@ h1 .pen:hover { color: var(--accent); background: var(--sel); }
 .crumb { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; color: var(--ink3); font-size: 12.5px; margin-bottom: 10px; }
 .crumb .eff { color: var(--ink2); font-weight: 600; }
 .crumb .eff:hover { color: var(--accent); }
+.crumb + .crumb { margin-top: -3px; }
+.crumb .here { color: var(--ink2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctx { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .meter { width: 60px; height: 6px; border-radius: 99px; background: var(--line); overflow: hidden; }
 .meter i { display: block; height: 100%; border-radius: 99px; background: var(--accent); }
@@ -491,6 +497,8 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
 
 /* Session status dots */
 .dot.running { background: var(--k-local); animation: pulse 1.8s ease-in-out infinite; }
+.dot.ready { background: var(--k-local); }
+.model .busy { color: var(--ink2); animation: pulse 1.8s ease-in-out infinite; }
 .dot.waiting { background: var(--fill); box-shadow: 0 0 0 1.5px var(--accent); }
 .dot.idle { background: transparent; box-shadow: inset 0 0 0 1.5px var(--ink3); }
 .dot.done { background: var(--ink3); }
@@ -1059,7 +1067,7 @@ const visibleOrder = () => groupItems(shownItems()).filter(g => !isShut(g.key)).
 /* What needs the user, the most pressing first: the order Home lists it in. */
 const queue = () => activeItems().sort(byUrgency);
 /* Markdown as one line of plain text, for where only its gist fits. */
-const gist = src => String(src || '').replace(/```[\s\S]*?(```|$)/g, ' ').replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+const gist = src => String(src || '').replace(/```[\s\S]*?(```|$)/g, ' ').replace(/★\s*Insight\s*─+|─{8,}/g, ' ').replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
   .replace(/^\s{0,3}(#{1,6}|>|[-*+]|\d+\.)\s+/gm, '').replace(/[*`~]+/g, '').replace(/\s+/g, ' ').trim();
 /* The open sessions whose turn it is to hear from the user, the latest to stop first: each has replied and
    stopped, has nothing in the queue above, and has done something since the user last set it aside. */
@@ -1473,7 +1481,7 @@ function usageTotal() {
   const about = `New tokens in the ${num(counted.length)} open session${counted.length === 1 ? '' : 's'} with a transcript and in their subagents, since each began: ${tokens(sum('in', 'cacheWrite'))} sent for the first time and ${tokens(sum('out'))} written by the model. Reading the conversation back from the cache on every request came to another ${tokens(sum('cacheRead'))}, left out of the figure. `
     + (priced.length ? `The cost is each agent's own estimate at list prices, from ${priced.length === live.length ? 'all of them' : `${num(priced.length)} of the ${num(live.length)} open`}; inside a subscription it is not a charge.` : 'No session has reported what it cost.');
   const agents = [...new Set(counted.map(s => s.agent))];
-  return `<span class="used" id="used" style="${agents.length === 1 ? kindColor(agents[0]) : ''}" title="${esc(about)}"><i></i>${priced.length ? `≈${money(usd)} · ` : ''}${tokens(sum('in', 'cacheWrite', 'out'))} tokens</span>`;
+  return `<span class="used" id="used" style="${agents.length === 1 ? kindColor(agents[0]) : ''}" title="${esc(about)}"><i></i>${tokens(sum('in', 'cacheWrite', 'out'))} tokens${priced.length ? ` · ≈${money(usd)}` : ''}</span>`;
 }
 function runsOn(s) {
   return [s.model && esc(modelName(s.model)), s.reasoning && `<span title="Reasoning effort">${esc(s.reasoning)}</span>`].filter(Boolean).join(' · ');
@@ -2482,6 +2490,8 @@ function feedItemDetail(it) {
   </div>`;
 }
 
+/* The rules Claude Code draws around an insight it offers in passing: the one that opens it and the one that closes it. */
+const TIP = [/^\s*`?\s*★\s*Insight\s*─+\s*`?\s*$/, /^\s*`?\s*─{8,}\s*`?\s*$/];
 /* Renders the Markdown an agent wrote. All of it is escaped before any
    markup is added, so nothing in the text becomes markup of its own, and a
    link is made only for an https address. Text cut off mid-block still
@@ -2499,8 +2509,11 @@ function md(src) {
   const cells = row => row.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
   const item = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/, lines = String(src).replace(/\r/g, '').split('\n'), out = [];
   for (let i = 0; i < lines.length;) {
-    const line = lines[i];
-    if (/^\s*```/.test(line)) {
+    const line = lines[i], tipEnd = TIP[0].test(line) ? lines.findIndex((l, n) => n > i && TIP[1].test(l)) : -1;
+    if (tipEnd > 0) {
+      out.push(`<aside class="tip"><b>★ Insight</b>${md(lines.slice(i + 1, tipEnd).join('\n'))}</aside>`);
+      i = tipEnd + 1;
+    } else if (/^\s*```/.test(line)) {
       const body = [];
       for (i++; i < lines.length && !/^\s*```\s*$/.test(lines[i]); i++) body.push(lines[i]);
       i++;
@@ -2532,7 +2545,7 @@ function md(src) {
       out.push(`<blockquote>${quote.map(inline).join('<br>')}</blockquote>`);
     } else {
       const para = [lines[i++]];
-      for (; i < lines.length && lines[i].trim() && !/^\s*(```|#{1,6}\s|>|\|)/.test(lines[i]) && !item.test(lines[i]); i++) para.push(lines[i]);
+      for (; i < lines.length && lines[i].trim() && !/^\s*(```|#{1,6}\s|>|\|)/.test(lines[i]) && !item.test(lines[i]) && !TIP[0].test(lines[i]); i++) para.push(lines[i]);
       out.push(`<p>${para.map(inline).join('<br>')}</p>`);
     }
   }
@@ -2728,6 +2741,13 @@ function answerBox(s, it) {
     <button class="btn go" data-act="${it ? 'liveItemSend' : 'liveSend'}" data-id="${it ? it.id : s.id}">Send</button></div>`;
 }
 
+/* What a session's page opens with, a line each: where it is filed and its name, then its chips, then what it
+   runs on and how it stands. A line with nothing on it is left out. */
+function pageHead(effort, name, filed, chips, stands) {
+  return `<div class="crumb">${effort ? `<button class="eff" data-act="effort" data-id="${effort}">${effortMark(effortById(effort), 's')}${esc(effortById(effort).name)} ›</button>` : '<span class="eff">Unsorted ›</span>'}<span class="here">${esc(name)}</span>${filed}</div>
+    ${chips ? `<div class="crumb">${chips}</div>` : ''}${stands ? `<div class="crumb">${stands}</div>` : ''}`;
+}
+
 /* A session's page: its recap, its last exchange, then what is needed of the user and the means of answering. stands is how it stands, for its first line. */
 function sessionPage(s, it, stands) {
   const subtitle = it ? it.subtitle : s.status !== 'working' && s.insight?.title;
@@ -2736,7 +2756,7 @@ function sessionPage(s, it, stands) {
     : s.pending ? `<div class="label" style="margin-bottom:10px">${s.pending.question || askedQuestions(s.pending) ? 'Waiting for your answer' : 'Waiting for your permission'}</div>`
     : s.canReply ? '<div class="label">Say something to it</div>' : '';
   return `<div class="inner">
-    <div class="crumb">${s.effort ? `<button class="eff" data-act="effort" data-id="${s.effort}">${effortMark(effortById(s.effort), 's')}${esc(effortById(s.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${s.effortVia === 'guess' ? `<span>${spark}filed by the model</span>` : ''}${kindBadge(s.agent, srcOf(s))}${roleChip(s)}${stands}${s.branch ? `<span class="mono">${esc(s.branch)}</span>` : ''}${pullChip(s, true)}${s.model ? `<span>${runsOn(s)}</span>` : ''}${contextUse(s)}</div>
+    ${pageHead(s.effort, s.label, `${s.effortVia === 'guess' ? `<span>${spark}filed by the model</span>` : ''}`, `${kindBadge(s.agent)}${roleChip(s)}${pullChip(s, true)}`, `${s.model ? `<span>${runsOn(s)}</span>` : ''}${contextUse(s)}${stands}`)}
     <div class="titled">${renaming === s.id
       ? `<form class="rename" data-form="name" data-id="${s.id}"><input name="name" data-keep="name-${s.id}" value="${esc(s.label)}" maxlength="80" placeholder="Leave empty to go back to its own title" aria-label="Name for this session">
           <button class="btn go">Save</button><button type="button" class="btn" data-act="renameCancel">Cancel</button></form>`
@@ -2936,7 +2956,7 @@ function closedPage(a) {
   const doc = archiveDocs[a.id], cmd = a.agent === 'claude' && capabilities.claude?.resumeCommand === undefined ? resumeCommand(a) : '';
   const ran = a.startedAt ? `<span>open for ${span((new Date(a.endedAt) - new Date(a.startedAt)) / 60000)}</span>` : '';
   return `<div class="inner">
-    <div class="crumb">${a.effort ? `<button class="eff" data-act="effort" data-id="${a.effort}">${effortMark(effortById(a.effort), 's')}${esc(effortById(a.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${a.agent ? kindBadge(a.agent) : ''}${stat('done', `closed ${ago(minsSince(a.endedAt))}`)}${ran}${a.branch ? `<span class="mono">${esc(a.branch)}</span>` : ''}${a.cwd ? `<span class="mono" title="${esc(a.cwd)}">${esc(shortPath(a.cwd))}</span>` : ''}</div>
+    ${pageHead(a.effort, a.label, '', a.agent ? kindBadge(a.agent) : '', `${stat('done', `closed ${ago(minsSince(a.endedAt))}`)}${ran}${a.cwd ? `<span class="mono" title="${esc(a.cwd)}">${esc(shortPath(a.cwd))}</span>` : ''}`)}
     <h1>${esc(a.label)}</h1>
     ${a.title && state.fluent ? `<p class="subt">${spark}${esc(a.title)}</p>` : ''}
     ${lifecycleCap(a.agent, 'resume') || lifecycleCap(a.agent, 'resumeCommand') ? `<div class="need"><div class="label">Pick it back up</div>
@@ -3687,6 +3707,13 @@ const rain = (() => {
   return want => { on = want; sync(); };
 })();
 
+/* What the top bar says the local model is doing, by the first word of what the service calls the work. */
+const MODEL_DOING = { describe: 'describing', file: 'filing', role: 'guessing a role', note: 'writing a note', brief: 'briefing', wrap: 'wrapping up', fill: 'filling in' };
+const ICONS = {
+  search: '<svg viewBox="0 0 16 16" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.6"/><path d="M10.5 10.5 14 14"/></svg>',
+  settings: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>',
+};
+
 const RENDER = { home: viewHome, attention: viewAttention, efforts: viewEfforts, sessions: viewSessions, pulls: viewPulls, journal: viewJournal, knowledge: viewKnowledge, settings: viewSettings };
 
 function render() {
@@ -3714,14 +3741,14 @@ function render() {
   const main = RENDER[state.view]();  // first: it may settle the selection
   const n = activeItems().length;
   $('#nav').innerHTML = nav().map(v => `<button class="${state.view === v ? 'on' : ''}" data-act="view" data-view="${v}">${VIEW_NAMES[v] || cap(v)}${v === 'home' && n ? `<span class="count">${n}</span>` : ''}</button>`).join('');
-  const limitsScroll = $('#provider-limits')?.scrollLeft || 0;
+  const limitsScroll = $('#provider-limits')?.scrollLeft || 0, busy = live && !isOffline && !modelless() && summarizer.doing || '';
   $('#tools').innerHTML = `
-    <span class="model" ${modelless() ? `title="${esc(modelWhy(true))}"` : ''}><span class="dot ${live && isOffline ? 'error' : modelless() ? 'idle' : 'running'}"></span>${live ? (isOffline ? 'service offline' : `live · ${summarizer.model ? summarizer.model.split('/').pop() : 'no local model'}`) : 'qwen3:14b · local · caught up'}</span>${live ? usageTotal() + limitMeters() + `<span id="provider-limits" class="provider-limits" role="group" aria-label="Provider usage limits">${providerLimitMeters()}</span>` : ''}
+    <span class="model" ${modelless() ? `title="${esc(modelWhy(true))}"` : busy ? `title="The local model is at work: ${esc(busy)}"` : ''}><span class="dot ${live && isOffline ? 'error' : modelless() ? 'idle' : busy ? 'running' : 'ready'}"></span>${live ? (isOffline ? 'service offline' : `live · ${summarizer.model ? summarizer.model.split('/').pop() : 'no local model'}${busy ? ` · <span class="busy">${spark}${MODEL_DOING[busy.split(' ')[0]] || 'working'}</span>` : ''}`) : 'qwen3:14b · local · caught up'}</span>${live ? usageTotal() + limitMeters() + `<span id="provider-limits" class="provider-limits" role="group" aria-label="Provider usage limits">${providerLimitMeters()}</span>` : ''}
     <span class="seg" role="group" aria-label="Voice" title="Fluent shows what the model wrote. Raw shows what the sources said. (r)">
       <button class="${state.fluent ? 'on' : ''}" data-act="fluent" data-on="1">Fluent</button><button class="${state.fluent ? '' : 'on'}" data-act="fluent" data-on="0">Raw</button></span>
-    ${live ? `<button class="icon" data-act="searchOpen" title="Search sessions (/ or ⌘K)" aria-label="Search sessions">⌕</button>` : ''}
+    ${live ? `<button class="icon" data-act="searchOpen" title="Search sessions (/ or ⌘K)" aria-label="Search sessions">${ICONS.search}</button>` : ''}
     ${state.look === 'slorp' ? '<button class="icon" data-act="theme" title="Light or dark" aria-label="Toggle theme">◐</button>' : ''}
-    <button class="icon ${state.view === 'settings' ? 'on' : ''}" data-act="view" data-view="settings" title="Settings (,)" aria-label="Settings">⚙</button>
+    <button class="icon ${state.view === 'settings' ? 'on' : ''}" data-act="view" data-view="settings" title="Settings (,)" aria-label="Settings">${ICONS.settings}</button>
     ${live ? '' : `<details class="menu" id="menu" ${menuOpen ? 'open' : ''}><summary class="icon" title="Demo controls" aria-label="Demo controls">⋯</summary>
       <div class="pop"><p>Demo controls</p>
         <button data-act="simulate">Simulate an incoming item</button>
