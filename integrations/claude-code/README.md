@@ -31,6 +31,7 @@ claude plugin update slorp@slorp
 | Key | Default | Notes |
 |---|---|---|
 | `url` | `http://127.0.0.1:4747` | Where the Slorp service listens. Env: `SLORP_URL`, which wins when set. |
+| `terminalOnly` | empty | A regular expression. Prompts whose tool name or command it matches are shown in Slorp but answered only in the terminal, for example ones a guard hook raises with context Slorp doesn't see. A pattern that doesn't compile holds back every prompt. |
 
 Set it at install time with `--config url=...`, or later with `/plugin configure slorp@slorp`.
 

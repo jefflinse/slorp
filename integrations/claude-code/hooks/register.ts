@@ -16,6 +16,8 @@ type Reply = { id: string; text: string }
 
 let base = ''
 let cwd = ''
+/** Prompts whose tool name or command this matches are answered in the terminal only. */
+let terminalOnly: RegExp | undefined
 /** What the session's model can take, in tokens; zero until the engine says. */
 let contextWindow = 0
 /** The engine's estimate of the session's cost so far, in US dollars. */
@@ -112,7 +114,7 @@ async function askSlorp($: EngineInterface, tool: string, input: unknown, agentI
     tool,
     summary: asks.slice(0, SUMMARY_LIMIT),
     input: full.slice(0, INPUT_LIMIT),
-    canAnswer: !NEEDS_PERSON.has(tool) && full.length <= INPUT_LIMIT,
+    canAnswer: !NEEDS_PERSON.has(tool) && full.length <= INPUT_LIMIT && !(terminalOnly?.test(tool) || terminalOnly?.test(full)),
     question: tool === 'AskUserQuestion',
     agentId,
   })
@@ -146,6 +148,13 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     base = ((await $.env.get('SLORP_URL')) || String(options.url)).replace(/\/+$/, '')
     cwd = e.cwd
+    const pattern = String(options.terminalOnly ?? '').trim()
+    try {
+      terminalOnly = pattern ? new RegExp(pattern) : undefined
+    } catch {
+      // A pattern that doesn't compile holds back every prompt rather than none.
+      terminalOnly = /[\s\S]/
+    }
     void $.session
       .usage()
       .then(usage => measured(usage, 0))
