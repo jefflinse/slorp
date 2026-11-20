@@ -240,11 +240,15 @@ func (a *Adapter) CheckPlugin() {
 	a.publish(a.inspect())
 }
 
+// install registers the plugin at path in OpenCode's global configuration, with
+// "plugin <path> --global" or, where OpenCode rejects that, "plugin add <path>".
 func (a *Adapter) install(ctx context.Context, path string) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	cmd := a.command(ctx, "plugin", path, "--global")
-	out, err := cmd.CombinedOutput()
+	out, err := a.command(ctx, "plugin", path, "--global").CombinedOutput()
+	if err != nil && strings.Contains(string(out), "Unknown subcommand") {
+		out, err = a.command(ctx, "plugin", "add", path).CombinedOutput()
+	}
 	if err != nil {
 		return fmt.Errorf("OpenCode plugin installation failed: %w: %s", err, strings.TrimSpace(string(out)))
 	}

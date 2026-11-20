@@ -215,6 +215,31 @@ func TestInstallErrorsAreReported(t *testing.T) {
 	}
 }
 
+func TestInstallWithPluginAddSubcommand(t *testing.T) {
+	a := fixture(t)
+	put(t, a.Bin, `#!/bin/sh
+if test "$1" != plugin || test "$2" != add || test $# != 3; then
+  echo "Unknown subcommand \"$2\" for \"opencode plugin\"" >&2
+  exit 1
+fi
+mkdir -p "$XDG_CONFIG_HOME/opencode"
+printf '{"plugin":["%s"]}' "$3" > "$XDG_CONFIG_HOME/opencode/opencode.json"
+printf '{"plugin":["%s"]}' "$3" > "$XDG_CONFIG_HOME/opencode/tui.json"
+`)
+	os.Chmod(a.Bin, 0o700)
+	if err := a.Install(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := a.inspect(); err != nil || !p.Installed || p.NeedsSetup {
+		t.Fatalf("installed: %+v, %v", p, err)
+	}
+	put(t, a.Bin, "#!/bin/sh\ntest \"$2\" = add && echo refused >&2 || echo 'Unknown subcommand' >&2\nexit 1\n")
+	os.Chmod(a.Bin, 0o700)
+	if err := a.install(context.Background(), a.managedPath()); err == nil || !strings.Contains(err.Error(), "refused") {
+		t.Fatalf("failed add: %v", err)
+	}
+}
+
 func TestRemoveReferencePreservesOtherConfiguration(t *testing.T) {
 	for _, input := range []string{
 		`{"plugin":["/managed"]}`,
