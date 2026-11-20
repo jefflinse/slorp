@@ -23,6 +23,12 @@ type Adapter struct {
 	ConfigDir, ExtraConfigDir, ConfigFile string
 	pluginMu                              sync.Mutex
 	pluginAt                              time.Time
+	lifecycleMu                           sync.Mutex
+	runtimeMu                             sync.Mutex
+	lifeOnce                              sync.Once
+	life                                  context.Context
+	cancelLife                            context.CancelFunc
+	runtimes                              map[string]*runtime
 }
 
 // Run retires silent sessions until ctx ends.

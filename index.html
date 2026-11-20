@@ -1342,38 +1342,202 @@ function roleNote(s) {
    a start is on its way, what the session is to run on, and whether the local model is to think. The last
    choices made are kept for the next one. */
 let starting = null, launching = false, startWith = 'claude', startThinking = true;
+let startDraft = {}, startCatalog = {}, catalogTimer, catalogVersion = 0;
+let partialStart = null, startAttempt = null, partialResume = null;
+const resumeAttempts = new Map();
+function observeResumeAttempts() {
+  const open = new Set(live.map(s => s.id)), closed = new Map(archive.map(a => [a.id, a.endedAt]));
+  for (const [id, attempt] of resumeAttempts) {
+    if (open.has(id)) attempt.liveObserved = true;
+    else if (closed.has(id) && (attempt.liveObserved || attempt.endedAt !== closed.get(id))) resumeAttempts.delete(id);
+  }
+}
+function identifiedLaunch(previous, body) {
+  const normalized = Object.fromEntries(Object.keys(body).sort().map(key => [key, typeof body[key] === 'string' ? body[key].trim() : body[key]]));
+  const fingerprint = JSON.stringify(normalized);
+  const requestId = previous?.fingerprint === fingerprint ? previous.requestId : crypto.randomUUID();
+  return { fingerprint, requestId, body: { ...normalized, requestId } };
+}
+const lifecycleCap = (agent, key) => capabilities[agent]?.[key] ?? (agent === 'claude' && ['start', 'resume', 'resumeCommand'].includes(key));
+const canStop = s => s.canStop ?? (s.agent === 'claude' && !!s.job);
+const startSupported = () => lifecycleCap(startWith === 'local' ? 'claude' : startWith, 'start') && (startWith !== 'local' || !!localName());
+function startDirs() {
+  const e = effortById(starting);
+  return [...new Set((starting ? (e.id !== 'unsorted' ? e.dirs : []).concat(live.filter(s => (s.effort || 'unsorted') === e.id).map(s => s.cwd))
+    : liveSessions()[0].map(s => s.cwd).concat(openEfforts().flatMap(x => x.dirs))).filter(Boolean).map(tilde))];
+}
+function captureStart() {
+  const form = $('[data-form="start"]');
+  if (!form) return;
+  const f = Object.fromEntries(new FormData(form));
+  for (const key of ['dir', 'name', 'role', 'prompt']) if (key in f) startDraft[key] = f[key];
+  const opts = startDraft[form.dataset.engine] ||= {};
+  for (const key of ['model', 'effortLevel', 'temperature', 'agentName', 'variant']) if (key in f) opts[key] = f[key];
+}
+function loadStartCatalog(retry = false) {
+  if (startWith !== 'opencode' || !lifecycleCap('opencode', 'launchOptions')) return;
+  const dir = startDraft.dir.trim();
+  if (!retry && startCatalog.dir === dir) return;
+  clearTimeout(catalogTimer);
+  const version = ++catalogVersion;
+  startCatalog = { dir, loading: !!dir };
+  if (!dir) return;
+  catalogTimer = setTimeout(async () => {
+    try {
+      const res = await fetch(`/api/agents/opencode/launch-options?dir=${encodeURIComponent(dir)}`);
+      if (!res.ok) throw new Error(`Launch options (${res.status}): ${(await res.text()).trim() || res.statusText}`);
+      const data = await res.json();
+      if (!Array.isArray(data.agents) || !Array.isArray(data.models) || !data.defaults) throw new Error('Invalid launch options response');
+      if (version !== catalogVersion) return;
+      startCatalog = { dir, data };
+    } catch (err) {
+      if (version !== catalogVersion) return;
+      startCatalog = { dir, error: err instanceof TypeError ? 'Could not load launch options. Check the Slorp service.' : err.message };
+    }
+    render();
+  }, retry ? 0 : 250);
+}
+function startVariants() {
+  const data = startCatalog.data, model = startDraft.opencode.model || data?.defaults.model;
+  return data?.models.find(m => m.id === model)?.variants || [];
+}
+function startProblem() {
+  if (partialStart) return 'A conversation already exists. View it before preparing a new session.';
+  if (!startSupported()) return 'This engine cannot start sessions.';
+  if (startWith === 'opencode') {
+    if (!lifecycleCap('opencode', 'launchOptions')) return 'OpenCode launch options are not supported by this service.';
+    if (startCatalog.loading) return 'Loading OpenCode launch options…';
+    if (startCatalog.error) return startCatalog.error;
+    const data = startCatalog.data, opts = startDraft.opencode;
+    if (!data || startCatalog.dir !== startDraft.dir.trim()) return 'Choose a directory to load OpenCode launch options.';
+    if (opts.agentName && !data.agents.some(a => a.name === opts.agentName)) return 'Choose an available OpenCode agent or Native default.';
+    if (opts.model && !data.models.some(m => m.id === opts.model)) return 'Choose an available OpenCode model or Native default.';
+    if (opts.variant && !startVariants().includes(opts.variant)) return 'Choose an available variant or Native default.';
+  }
+  if (!startDraft.dir.trim() || !startDraft.prompt.trim()) return 'Choose a directory and write a prompt.';
+  if (startWith === 'local' && startDraft.local.temperature !== '' && (!Number.isFinite(+startDraft.local.temperature) || +startDraft.local.temperature < 0 || +startDraft.local.temperature > 2)) return 'Temperature must be between 0 and 2.';
+  return '';
+}
+function syncStartSubmit() {
+  const form = $('[data-form="start"]'), button = form?.querySelector('button.go');
+  const problem = startProblem();
+  if (button) { button.disabled = launching || !!problem || !form.checkValidity(); button.title = problem; }
+  const status = $('#start-status');
+  if (status) status.textContent = problem;
+}
+function openCodeOptions() {
+  const data = startCatalog.data, opts = startDraft.opencode;
+  const options = (rows, value, fallback) => [[ '', `Native default${fallback ? ` (${fallback})` : ''}` ], ...rows,
+    ...(value && !rows.some(([id]) => id === value) ? [[value, `${value} (unavailable)`]] : [])]
+    .map(([id, name]) => `<option value="${esc(id)}" ${id === value ? 'selected' : ''}>${esc(name)}</option>`).join('');
+  const pick = (name, label, choices) => `<label><span>${label}</span><select class="btn" name="${name}" data-keep="start-opencode-${name}">${choices}</select></label>`;
+  let models = options([], opts.model, data?.defaults.model);
+  if (data) {
+    models = options([], '', data.defaults.model);
+    for (const provider of new Set(data.models.map(m => m.provider))) {
+      models += `<optgroup label="${esc(provider)}">${data.models.filter(m => m.provider === provider).map(m => `<option value="${esc(m.id)}" ${m.id === opts.model ? 'selected' : ''}>${esc(m.name)} · ${esc(m.id)}</option>`).join('')}</optgroup>`;
+    }
+    if (opts.model && !data.models.some(m => m.id === opts.model)) models += `<option value="${esc(opts.model)}" selected>${esc(opts.model)} (unavailable)</option>`;
+  }
+  return pick('agentName', 'OpenCode agent', options((data?.agents || []).map(a => [a.name, a.description ? `${a.name} — ${a.description}` : a.name]), opts.agentName, data?.defaults.agentName))
+    + pick('model', 'OpenCode model', models)
+    + pick('variant', 'OpenCode variant', options(startVariants().map(v => [v, v]), opts.variant, !opts.model || opts.model === data?.defaults.model ? data?.defaults.variant : ''))
+    + `<div class="none wide" role="status"><span id="start-status">${esc(startProblem())}</span>${startCatalog.error ? ' <button type="button" class="btn" data-act="startCatalogRetry">Retry launch options</button>' : ''}</div>`;
+}
 const START_MODELS = [['', 'Default'], ['fable', 'Fable'], ['opus', 'Opus'], ['sonnet', 'Sonnet'], ['haiku', 'Haiku']];
 const START_EFFORTS = [['', 'Default'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max']];
 const localName = () => summarizer.model ? summarizer.model.split('/').pop() : '';
 function openStart(effort) {
+  if (launching || partialStart || startAttempt) { modal = 'start'; modalFocus = true; return; }
   const last = state.startOpts || {};
   starting = effort; launching = false; modal = 'start'; modalFocus = true;
-  startWith = last.engine === 'local' && localName() ? 'local' : 'claude';
+  startWith = ['claude', 'opencode', 'local'].includes(last.engine) ? last.engine : 'claude';
+  startDraft = { dir: starting ? startDirs()[0] || '' : '', name: '', role: '', prompt: '',
+    claude: { model: last.model || '', effortLevel: last.effortLevel || '' }, local: { temperature: last.temperature ?? '' },
+    opencode: { agentName: '', model: '', variant: '' } };
+  startCatalog = {}; ++catalogVersion; clearTimeout(catalogTimer);
+  loadStartCatalog();
   startThinking = last.thinking !== false;
 }
+function retainedSessionModal(p) {
+  return `<div class="veil"><div class="modal start" data-act="noop" role="dialog" aria-label="Conversation retained">
+    <h2>Conversation retained</h2>
+    <p role="alert">${esc(p.message)}</p>
+    ${p.outcome ? `<p>Outcome: ${esc(p.outcome)}.</p>` : ''}
+    <p>A native conversation already exists: <span class="mono">${esc(p.sessionId)}</span>.</p>
+    <p>The prompt may have been accepted despite the error. Nothing will be resent automatically. View the existing conversation before deciding what to do next.</p>
+    <div class="bar"><button type="button" class="btn go" data-act="${p.resume ? 'resumeViewExisting' : 'startViewExisting'}" data-first ${p.viewing ? 'disabled' : ''}>${p.viewing ? 'Looking for conversation…' : 'View existing conversation'}</button>
+      <button type="button" class="btn" data-act="copyText" data-text="${esc(p.sessionId)}">Copy conversation ID</button></div>
+    ${p.viewError ? `<p role="status">${esc(p.viewError)}</p>` : ''}
+    <p>${p.resume ? 'Your resume prompt is kept. Retrying it unchanged reuses the same request ID and replays its recorded result, even if the cause of the error has been fixed.' : 'Your launch draft is kept. Preparing a new session restores the form; submitting it creates a separate conversation.'}</p>
+    ${p.resume && p.resetConfirm ? `<div class="need"><p>The previous prompt may already have run. A new attempt can send it again. This resets the request ID for this conversation only; nothing is resumed or sent until you press Reopen in the background.</p>
+      <div class="bar"><button type="button" class="btn" data-act="resumeResetConfirm" ${p.viewing ? 'disabled' : ''}>Confirm new resume attempt</button>
+        <button type="button" class="btn" data-act="resumeResetCancel" ${p.viewing ? 'disabled' : ''}>Cancel reset</button></div></div>` : ''}
+    <div class="mfoot">${p.resume ? (p.resetConfirm ? '' : `<button type="button" class="btn" data-act="resumeReset" ${p.viewing ? 'disabled' : ''}>Prepare a new resume attempt</button>`) : `<button type="button" class="btn" data-act="startReset" ${p.viewing ? 'disabled' : ''}>Prepare a new session</button>`}
+      <button type="button" class="btn" data-act="modalClose">Close</button></div>
+  </div></div>`;
+}
+async function viewRetainedSession(p) {
+  if (!p || p.viewing) return;
+  const owner = p.resume ? 'resumeError' : 'start';
+  p.viewing = true; p.viewError = ''; render();
+  try {
+    await refresh(true);
+    if ((p.resume ? partialResume : partialStart) !== p || modal !== owner) return;
+    const open = live.some(s => s.id === p.sessionId), closed = archive.some(s => s.id === p.sessionId);
+    if (isOffline) p.viewError = 'Could not refresh sessions. Try View existing conversation again; this will not start or resume anything.';
+    else if (!open && !closed) p.viewError = 'The retained conversation is not listed yet. Keep its ID and try View existing conversation again; this will not start or resume anything.';
+    else {
+      modal = null;
+      state.actSel = p.sessionId;
+      state.collapsed[open ? 'act:active' : 'act:closed'] = false;
+      go('sessions'); save();
+    }
+  } finally { p.viewing = false; render(); }
+}
+async function resetResumeAttempt() {
+  const p = partialResume;
+  if (!p?.resetConfirm || p.viewing) return;
+  p.viewing = true; p.viewError = ''; render();
+  try {
+    await refresh(true);
+    if (partialResume !== p || modal !== 'resumeError') return;
+    const a = archive.find(a => a.id === p.sessionId);
+    if (isOffline) p.viewError = 'Could not refresh sessions. The resume request ID has not been reset.';
+    else if (live.some(s => s.id === p.sessionId)) p.viewError = 'This conversation is already live. View it before deciding whether to send anything else.';
+    else if (!a) p.viewError = 'The retained conversation is not listed in the archive yet. The resume request ID has not been reset.';
+    else {
+      resumeAttempts.set(a.id, { endedAt: a.endedAt, body: p.prompt ? { prompt: p.prompt } : {} });
+      partialResume = null; modal = null;
+      state.actSel = a.id; state.collapsed['act:closed'] = false;
+      go('sessions'); save();
+    }
+  } finally { p.viewing = false; render(); }
+}
 function startModal() {
+  if (partialStart) return retainedSessionModal(partialStart);
   const e = effortById(starting);
   if (!live || !e) { modal = null; return ''; }
-  const real = e.id !== 'unsorted', last = state.startOpts || {}, local = localName(), on = startWith === 'local' && local ? 'local' : 'claude';
-  const dirs = [...new Set((starting ? (real ? e.dirs : []).concat(live.filter(s => (s.effort || 'unsorted') === e.id).map(s => s.cwd))
-    : liveSessions()[0].map(s => s.cwd).concat(openEfforts().flatMap(x => x.dirs))).filter(Boolean).map(tilde))];
-  const first = starting ? dirs[0] : '';
-  const pick = (name, label, options, chosen) => `<label><span>${label}</span><select class="btn" name="${name}" data-keep="start-${name}">${options.map(([v, t]) => `<option value="${v}" ${v === (chosen || '') ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`;
+  loadStartCatalog();
+  const real = e.id !== 'unsorted', local = localName(), on = startWith, last = startDraft[on];
+  const dirs = startDirs(), first = startDraft.dir;
+  const pick = (name, label, options, chosen) => `<label><span>${label}</span><select class="btn" name="${name}" data-keep="start-${on}-${name}">${options.map(([v, t]) => `<option value="${esc(v)}" ${v === (chosen || '') ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`;
   const way = (id, label, off) => `<button type="button" class="${on === id ? 'on' : ''}" data-act="startWith" data-to="${id}" aria-pressed="${on === id}" ${off ? `disabled title="${esc(off)}"` : ''}>${esc(label)}</button>`;
   return `<div class="veil"><div class="modal start" data-act="noop" role="dialog" aria-label="New Session">
     <h2>New Session</h2>
-    <form data-form="start" data-id="${e.id}">
-      <div class="seg wide" role="group" aria-label="What it runs on">${way('claude', 'Claude Code')}${way('opencode', 'OpenCode', 'Slorp cannot start OpenCode sessions yet')}${way('local', local || 'Local model', local ? '' : 'No local model is running')}</div>
+    <form data-form="start" data-id="${e.id}" data-engine="${on}">
+      <div class="seg wide" role="group" aria-label="What it runs on">${way('claude', 'Claude Code', lifecycleCap('claude', 'start') ? '' : 'Starting Claude is not supported')}${way('opencode', 'OpenCode', lifecycleCap('opencode', 'start') && lifecycleCap('opencode', 'launchOptions') ? '' : 'Starting OpenCode is not supported')}${way('local', local || 'Local model', !local ? 'No local model is running' : lifecycleCap('claude', 'start') ? '' : 'Starting Claude is not supported')}</div>
       <label class="wide"><span>Directory</span><input name="dir" class="mono" data-keep="start-dir" list="start-dirs" value="${esc(first || '')}" placeholder="~/dev/project" required spellcheck="false" autocomplete="off" ${first ? '' : 'data-first'}>
         <datalist id="start-dirs">${dirs.map(d => `<option value="${esc(d)}"></option>`).join('')}</datalist></label>
-      <label class="${knowledge.roles.length ? '' : 'wide'}"><span>Name <i>optional</i></span><input name="name" data-keep="start-name" maxlength="80" autocomplete="off"></label>
-      ${knowledge.roles.length ? pick('role', 'Role', [['', 'No role']].concat(knowledge.roles.map(r => [r.id, esc(r.name)]))) : ''}
+      <label class="${knowledge.roles.length ? '' : 'wide'}"><span>Name <i>optional</i></span><input name="name" data-keep="start-name" value="${esc(startDraft.name)}" maxlength="80" autocomplete="off"></label>
+      ${knowledge.roles.length ? pick('role', 'Slorp role', [['', 'No role']].concat(knowledge.roles.map(r => [r.id, esc(r.name)])), startDraft.role) : ''}
       ${on === 'claude' ? pick('model', 'Model', START_MODELS, last.model) + pick('effortLevel', 'Effort', START_EFFORTS, last.effortLevel)
-        : `<div class="field"><span>Thinking</span><div class="seg" role="group" aria-label="Thinking"><button type="button" class="${startThinking ? 'on' : ''}" data-act="startThinking" data-to="1" aria-pressed="${startThinking}">On</button><button type="button" class="${startThinking ? '' : 'on'}" data-act="startThinking" data-to="" aria-pressed="${!startThinking}">Off</button></div></div>
+        : on === 'opencode' ? openCodeOptions() : `<div class="field"><span>Thinking</span><div class="seg" role="group" aria-label="Thinking"><button type="button" class="${startThinking ? 'on' : ''}" data-act="startThinking" data-to="1" aria-pressed="${startThinking}">On</button><button type="button" class="${startThinking ? '' : 'on'}" data-act="startThinking" data-to="" aria-pressed="${!startThinking}">Off</button></div></div>
           <label><span>Temperature <i>optional</i></span><input name="temperature" type="number" min="0" max="2" step="0.05" data-keep="start-temperature" value="${esc(last.temperature ?? '')}" placeholder="The model's own"></label>`}
-      <label class="wide"><span>Prompt</span><textarea name="prompt" data-keep="start-prompt" placeholder="What should it do?" required ${first ? 'data-first' : ''}></textarea></label>
-      <div class="mfoot wide"><span>${on === 'local' ? `Starts a Claude Code session in the background that runs on ${esc(local)}` : 'Starts a Claude Code session in the background'}${real ? `, filed under ${esc(e.name)}` : ''}.</span>
-        <span class="bar"><button type="button" class="btn" data-act="modalClose">Cancel</button><button class="btn go" ${launching ? 'disabled' : ''}>${launching ? 'Starting…' : 'Start session'}</button></span></div>
+      <label class="wide"><span>Prompt</span><textarea name="prompt" data-keep="start-prompt" placeholder="What should it do?" required ${first ? 'data-first' : ''}>${esc(startDraft.prompt)}</textarea></label>
+      ${on === 'opencode' && startAttempt && !launching ? '<div class="none wide">Retrying unchanged options reuses the same request ID. <button type="button" class="btn" data-act="startReset">Prepare a new session</button> to intentionally create a separate conversation.</div>' : ''}
+      <div class="mfoot wide"><span>${on === 'local' ? `Starts a Claude Code session in the background that runs on ${esc(local)}` : `Starts a ${on === 'opencode' ? 'OpenCode' : 'Claude Code'} session in the background`}${real ? `, filed under ${esc(e.name)}` : ''}.</span>
+        <span class="bar"><button type="button" class="btn" data-act="modalClose">Cancel</button><button class="btn go" ${launching || startProblem() ? 'disabled' : ''} title="${esc(startProblem())}">${launching ? 'Starting…' : 'Start session'}</button></span></div>
     </form>
   </div></div>`;
 }
@@ -1850,6 +2014,7 @@ async function refresh(force) {
     journal = data.journal || [];
     if (journalFound && JSON.stringify(journal) !== listed) runJournalSearch();
     archive = data.archive || [];
+    observeResumeAttempts();
     plugins = data.plugins || {};
     isOffline = false;
     announce(liveItems);
@@ -1966,8 +2131,9 @@ function sessionMenu(s, it) {
     .concat(s.role || s.roleVia !== 'you' ? [['__none', 'No role']] : [], [['__new', 'New role…']]);
   const rows = `${menuPart('move', 'Move to', menuTo('liveMoveTo', s.id, effortsBut(s.effort || 'unsorted')))}
     ${menuPart('role', s.role && s.roleVia === 'you' ? 'Change role' : 'Role', menuTo('liveRoleTo', s.id, roles))}
-    ${s.job ? `<button data-act="copyText" data-text="${esc(attachCommand(s))}" title="Copies the command that opens this background session in Claude Code, in a terminal. It keeps running when you leave it.">Copy attach command</button>` : ''}
-    ${s.job ? `<button data-act="stop" data-id="${s.id}" title="Stops this background session. Its conversation is kept, and it can be reopened from the closed sessions under Sessions.">Stop session</button>` : ''}`;
+    ${s.agent === 'claude' && s.job ? `<button data-act="copyText" data-text="${esc(attachCommand(s))}" title="Copies the command that opens this background session in Claude Code, in a terminal. It keeps running when you leave it.">Copy attach command</button>` : ''}
+    ${lifecycleCap(s.agent, 'resumeCommand') ? `<button data-act="copyResume" data-id="${esc(s.id)}" ${commandReading.has(s.id) ? 'disabled' : ''}>${commandReading.has(s.id) ? 'Fetching command…' : 'Copy resume command'}</button>` : ''}
+    ${canStop(s) ? `<button data-act="stop" data-id="${esc(s.id)}" title="Stops this background session. Its conversation is kept, and it can be reopened from the closed sessions under Sessions.">Stop session</button>` : ''}`;
   return it ? itemMenu(it, `${s.pending ? '' : `<button data-act="livePark" data-id="${it.id}">Park as open question</button>`}${rows}`)
     : actsMenu(s.id, 'Move, give a role and more', rows);
 }
@@ -2197,7 +2363,7 @@ function aboutSession(s) {
     ['Filed under', `${esc(effortById(s.effort || 'unsorted').name)}${s.effort && VIA[s.effortVia] ? `, ${VIA[s.effortVia]}` : ''}`],
     s.role && roleById(s.role) && ['Role', `${esc(roleById(s.role).name)}, ${s.roleVia === 'guess' ? 'guessed by the model' : 'given by you'}`],
     ['Session', `<span class="mono">${esc(s.id)}</span> <button class="link" data-act="copyText" data-text="${esc(s.id)}">copy</button>`],
-    s.job && ['Attach', `<span class="mono">${esc(attachCommand(s))}</span> <button class="link" data-act="copyText" data-text="${esc(attachCommand(s))}" title="Copy the command that opens this background session in Claude Code, in a terminal">copy</button>`],
+    s.agent === 'claude' && s.job && ['Attach', `<span class="mono">${esc(attachCommand(s))}</span> <button class="link" data-act="copyText" data-text="${esc(attachCommand(s))}" title="Copy the command that opens this background session in Claude Code, in a terminal">copy</button>`],
   ];
   const sent = (s.replies || []).map(r => `<div><b>${esc(r.state)}</b> · ${esc(r.text)}</div>`).join('');
   const open = !!state.aboutOpen;
@@ -2408,17 +2574,79 @@ const shellWord = s => /^[\w./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'
 /* The command that opens a session running in the background in Claude Code, in a terminal. */
 const attachCommand = s => `claude attach ${shellWord(s.job)}`;
 const resumeCommand = a => a.agent === 'claude' && a.cwd ? `cd ${shellWord(a.cwd)} && claude --resume ${shellWord(a.id)}` : '';
+const commandReading = new Set(), reopening = new Set();
+async function copyResume(id) {
+  const s = live.find(s => s.id === id) || archive.find(s => s.id === id);
+  if (!s || !lifecycleCap(s.agent, 'resumeCommand') || commandReading.has(id)) return;
+  commandReading.add(id); render();
+  try {
+    let command;
+    if (s.agent === 'claude' && capabilities.claude?.resumeCommand === undefined) command = resumeCommand(s);
+    else {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(id)}/resume-command`);
+      if (!res.ok) throw new Error(`Resume command (${res.status}): ${(await res.text()).trim() || res.statusText}`);
+      const data = await res.json();
+      if (typeof data.command !== 'string' || !data.command.trim()) throw new Error('No resume command was returned');
+      command = data.command;
+    }
+    await navigator.clipboard.writeText(command);
+    toast('Copied');
+  } catch (err) { toast(`Could not copy resume command: ${err.message}. Try again.`); }
+  finally { commandReading.delete(id); render(); }
+}
+async function launchSession(path, body, done) {
+  const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const text = await res.text();
+  if (!res.ok) {
+    let result;
+    try { result = JSON.parse(text); } catch { /* Older services also return plain-text errors. */ }
+    const message = typeof result?.error === 'string' && result.error.trim() ? result.error : text.trim() || res.statusText;
+    const err = new Error(`Request failed (${res.status}): ${message}`);
+    if (typeof result?.sessionId === 'string' && result.sessionId.trim()) err.sessionId = result.sessionId;
+    if (['pending', 'unknown'].includes(result?.outcome)) err.outcome = result.outcome;
+    throw err;
+  }
+  const result = text ? JSON.parse(text) : {};
+  done();
+  await refresh(true);
+  if (result.sessionId) { state.actSel = result.sessionId; go('sessions'); save(); render(); }
+}
+async function reopenSession(id) {
+  const s = archive.find(s => s.id === id);
+  if (!s || !lifecycleCap(s.agent, 'resume') || reopening.has(id)) return;
+  const prompt = document.querySelector(`[data-keep="resume-${CSS.escape(id)}"]`)?.value.trim();
+  reopening.add(id); render();
+  try {
+    let body = prompt ? { prompt } : {};
+    if (s.agent === 'opencode') {
+      const previous = resumeAttempts.get(id);
+      const attempt = { ...identifiedLaunch(previous, body), endedAt: s.endedAt, liveObserved: previous?.liveObserved || false };
+      resumeAttempts.set(id, attempt); body = attempt.body;
+    }
+    await launchSession(`/api/archive/${encodeURIComponent(id)}/resume`, body, () => {
+      if (partialResume?.sessionId === id) { partialResume = null; if (modal === 'resumeError') modal = null; }
+      toast('Reopened in the background');
+    });
+  } catch (err) {
+    if (s.agent === 'opencode' && err.sessionId) {
+      partialResume = { sessionId: err.sessionId, message: err.message, outcome: err.outcome, resume: true, prompt };
+      modal = 'resumeError'; modalFocus = true;
+    } else toast(`Could not reopen session: ${err.message}. Try again.`);
+  }
+  finally { reopening.delete(id); render(); }
+}
 function closedPage(a) {
-  const doc = archiveDocs[a.id], cmd = resumeCommand(a);
+  const doc = archiveDocs[a.id], cmd = a.agent === 'claude' && capabilities.claude?.resumeCommand === undefined ? resumeCommand(a) : '';
   const ran = a.startedAt ? `<span>open for ${span((new Date(a.endedAt) - new Date(a.startedAt)) / 60000)}</span>` : '';
   return `<div class="inner">
     <div class="crumb">${a.effort ? `<button class="eff" data-act="effort" data-id="${a.effort}">${effortMark(effortById(a.effort), 's')}${esc(effortById(a.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${a.agent ? kindBadge(a.agent) : ''}${stat('done', `closed ${ago(minsSince(a.endedAt))}`)}${ran}${a.branch ? `<span class="mono">${esc(a.branch)}</span>` : ''}${a.cwd ? `<span class="mono" title="${esc(a.cwd)}">${esc(shortPath(a.cwd))}</span>` : ''}</div>
     <h1>${esc(a.label)}</h1>
     ${a.title && state.fluent ? `<p class="subt">${spark}${esc(a.title)}</p>` : ''}
-    ${cmd ? `<div class="need"><div class="label">Pick it back up</div>
-      <div class="cmd"><span class="mono">${esc(cmd)}</span><button class="btn" data-act="copyText" data-text="${esc(cmd)}" title="Copy the command that reopens this session in a terminal">Copy</button></div>
-      <div class="replies"><button class="btn go" data-act="reopen" data-id="${a.id}">Reopen in the background</button>
-        <span class="none" style="align-self:center">Its conversation is kept. Reopened, it waits for a message.</span></div></div>` : ''}
+    ${lifecycleCap(a.agent, 'resume') || lifecycleCap(a.agent, 'resumeCommand') ? `<div class="need"><div class="label">Pick it back up</div>
+      ${lifecycleCap(a.agent, 'resumeCommand') ? `<div class="cmd">${cmd ? `<span class="mono">${esc(cmd)}</span>` : ''}<button class="btn" data-act="copyResume" data-id="${esc(a.id)}" ${commandReading.has(a.id) ? 'disabled' : ''}>${commandReading.has(a.id) ? 'Fetching command…' : 'Copy resume command'}</button></div>` : ''}
+      ${lifecycleCap(a.agent, 'resume') ? `<label><span>Prompt <i>optional</i></span><textarea data-keep="resume-${esc(a.id)}" placeholder="What should it do next?" aria-label="Reopen prompt">${esc(resumeAttempts.get(a.id)?.body.prompt || '')}</textarea></label>
+      <div class="replies"><button class="btn go" data-act="reopen" data-id="${esc(a.id)}" ${reopening.has(a.id) ? 'disabled' : ''}>${reopening.has(a.id) ? 'Reopening…' : 'Reopen in the background'}</button>
+        <span class="none" style="align-self:center">Its conversation is kept. Without a prompt, it waits for a message.</span></div>` : ''}</div>` : ''}
     <div class="sec"><div class="label"><span>${a.summary ? spark : ''}How it stood</span></div>
       <p class="prose">${a.summary ? esc(a.summary) : `<span class="none">${modelless() ? `${NO_MODEL}, so it was not summarized.` : 'The model wrote nothing about it before it closed.'}</span>`}</p></div>
     ${doc && (doc.subagents || []).length ? `<div class="sec"><div class="label"><span>Subagents (${doc.subagents.length})</span></div>${subsBody(a.id, doc.subagents, true)}</div>` : ''}
@@ -3196,7 +3424,7 @@ function render() {
   document.documentElement.style.setProperty('--notice', `${44 * notices.length}px`);
   $('#notice').innerHTML = notices.join('');
   $('#main').innerHTML = main;
-  $('#modal').innerHTML = modal === 'search' ? searchModal() : modal === 'start' ? startModal() : modal === 'effortDelete' ? deleteModal() : modal === 'effortMerge' ? mergeModal() : '';
+  $('#modal').innerHTML = modal === 'search' ? searchModal() : modal === 'start' ? startModal() : modal === 'resumeError' ? retainedSessionModal(partialResume) : modal === 'effortDelete' ? deleteModal() : modal === 'effortMerge' ? mergeModal() : '';
   if (modalFocus) { modalFocus = false; $('#q, #modal [data-first]')?.focus(); }
   // The toggle shows only where there is more of what the user said to see.
   document.querySelectorAll('.said').forEach(el => {
@@ -3206,9 +3434,10 @@ function render() {
 
   document.querySelectorAll('[data-scroll]').forEach(el => { if (scrolls[el.dataset.scroll]) el.scrollTop = scrolls[el.dataset.scroll]; });
   document.querySelectorAll('[data-keep]').forEach(el => {
-    if (el.dataset.keep in drafts) el.value = drafts[el.dataset.keep];
+    if (!el.closest('[data-form="start"]') && el.dataset.keep in drafts) el.value = drafts[el.dataset.keep];
     if (el.dataset.keep === focused) { el.focus(); if (el.setSelectionRange && caret[0] != null) el.setSelectionRange(caret[0], caret[1]); }
   });
+  if (modal === 'start') syncStartSubmit();
   if (renameFocus) { renameFocus = false; $('.rename input')?.focus(); $('.rename input')?.select(); }
   if (card) document.querySelector(`.ecard[data-id="${CSS.escape(card)}"]`)?.focus({ preventScroll: true });
   if (editFocus) { editFocus = false; $('.eedit input')?.focus(); $('.eedit input')?.select(); }
@@ -3426,14 +3655,23 @@ const actions = {
   },
   holdTo: d => { api('POST', '/api/settings', { answerPermissions: d.to === 'both' }); return false; },
   startOpen: d => { openStart(d.id); },
-  startWith: d => { startWith = d.to; },
+  startViewExisting: () => { viewRetainedSession(partialStart); return false; },
+  resumeViewExisting: () => { viewRetainedSession(partialResume); return false; },
+  resumeReset: () => { if (partialResume && !partialResume.viewing) partialResume.resetConfirm = true; },
+  resumeResetCancel: () => { if (partialResume && !partialResume.viewing) partialResume.resetConfirm = false; },
+  resumeResetConfirm: () => { resetResumeAttempt(); return false; },
+  startReset: () => { if (!launching && !partialStart?.viewing) { partialStart = null; startAttempt = null; modalFocus = true; } },
+  startWith: d => { captureStart(); startWith = d.to; loadStartCatalog(); },
+  startCatalogRetry: () => { loadStartCatalog(true); },
   startThinking: d => { startThinking = !!d.to; },
   stop: d => {
     const s = live.find(x => x.id === d.id);
-    toast(`Stop "${clip(s ? s.label : d.id, 50)}"? Its conversation is kept.`, () => { ask(`/api/sessions/${d.id}/stop`, {}, () => toast('Stopped. Reopen it from the closed sessions under Sessions.')); }, 'Stop');
+    if (!s || !canStop(s)) return false;
+    toast(`Stop "${clip(s.label, 50)}"? Its conversation is kept.`, () => { ask(`/api/sessions/${encodeURIComponent(d.id)}/stop`, {}, () => toast('Stopped. Reopen it from the closed sessions under Sessions.')); }, 'Stop');
     return false;
   },
-  reopen: d => { ask(`/api/archive/${d.id}/resume`, {}, () => toast('Reopened in the background')); return false; },
+  reopen: d => { reopenSession(d.id); return false; },
+  copyResume: d => { copyResume(d.id); return false; },
   effortEdit: d => { editing = d.id; editFocus = true; editColor = effortColor(effortById(d.id)); },
   editColor: d => { editColor = d.c; },
   effortMergeTo: d => { modal = 'effortMerge'; modalId = d.id; modalInto = d.to; },
@@ -3545,6 +3783,12 @@ document.addEventListener('click', e => {
   if (actions[el.dataset.act](el.dataset, el) !== false) { save(); render(); }
 });
 document.addEventListener('input', e => {
+  if (e.target.closest('[data-form="start"]')) {
+    captureStart();
+    if (e.target.name === 'dir' && startWith === 'opencode') { loadStartCatalog(); render(); }
+    else syncStartSubmit();
+    return;
+  }
   if (e.target.dataset.questionCustom) {
     const d = e.target.dataset, picks = state.picks[d.questionCustom] ||= {};
     (picks.custom ||= {})[d.q] = e.target.value;
@@ -3564,6 +3808,12 @@ document.addEventListener('input', e => {
   searchTimer = setTimeout(runSearch, 120);
 });
 document.addEventListener('change', e => {
+  if (e.target.closest('[data-form="start"]')) {
+    captureStart();
+    if (e.target.tagName !== 'SELECT') { syncStartSubmit(); return; }
+    if (startWith === 'opencode' && e.target.name === 'model') startDraft.opencode.variant = '';
+    render(); return;
+  }
   const el = e.target.closest('[data-change]');
   if (el && changes[el.dataset.change](el.dataset, el) !== false) { save(); render(); }
 });
@@ -3599,16 +3849,29 @@ document.addEventListener('submit', e => {
     return;
   }
   if (sec === 'start') {
-    if (launching) return;
+    captureStart();
+    if (launching || partialStart || startProblem() || !form.reportValidity()) return;
     const effort = form.dataset.id === 'unsorted' ? '' : form.dataset.id;
+    const local = startWith === 'local', oc = startWith === 'opencode';
+    const opts = local ? { engine: 'local', thinking: startThinking, temperature: f.temperature ?? '' } : oc ? { engine: 'opencode' } : { engine: 'claude', model: f.model || '', effortLevel: f.effortLevel || '' };
+    const runs = local ? { local: { thinking: opts.thinking, temperature: opts.temperature === '' ? null : +opts.temperature } } : oc ? { agent: 'opencode', ...startDraft.opencode } : { model: opts.model, effortLevel: opts.effortLevel };
+    let body = { dir: f.dir, name: f.name, prompt: f.prompt, role: f.role || '', effort, ...runs };
+    if (oc) {
+      try { startAttempt = identifiedLaunch(startAttempt, body); body = startAttempt.body; }
+      catch (err) { toast(`Could not prepare a safe launch request: ${err.message}`); return; }
+    }
     launching = true;
-    const local = startWith === 'local', opts = local ? { engine: 'local', thinking: startThinking, temperature: f.temperature ?? '' } : { engine: 'claude', model: f.model || '', effortLevel: f.effortLevel || '' };
-    const runs = local ? { local: { thinking: opts.thinking, temperature: opts.temperature === '' ? null : +opts.temperature } } : { model: opts.model, effortLevel: opts.effortLevel };
-    ask('/api/sessions', { dir: f.dir, name: f.name, prompt: f.prompt, role: f.role || '', effort, ...runs }, () => {
+    launchSession('/api/sessions', body, () => {
+      startAttempt = null;
       if (modal === 'start') modal = null;
       state.startOpts = { ...state.startOpts, ...opts }; save();
       toast('Started. It will show up here in a moment.');
-    }, () => { launching = false; render(); });
+    }).catch(err => {
+      if (err.sessionId) {
+        partialStart = { sessionId: err.sessionId, message: err.message, outcome: err.outcome };
+        modal = 'start'; modalFocus = true;
+      } else toast(`Could not start session: ${err.message}. Try again.`);
+    }).finally(() => { launching = false; render(); });
     render();
     return;
   }

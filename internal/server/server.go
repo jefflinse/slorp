@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -82,13 +83,18 @@ type Feeds interface {
 type History func(ctx context.Context, sessionID string, limit int) ([]hub.Exchange, error)
 
 type agentCapabilities struct {
-	History bool `json:"history"`
+	History       bool `json:"history"`
+	Start         bool `json:"start"`
+	Resume        bool `json:"resume"`
+	LaunchOptions bool `json:"launchOptions"`
+	ResumeCommand bool `json:"resumeCommand"`
 }
 
 // Launcher starts, reopens and stops one agent's sessions in the background.
 type Launcher interface {
 	// Start begins the session l describes. It returns the id the session
 	// goes by, empty when the agent had not listed it yet.
+	// Managed launchers report the created job with hub.ReportLaunchJob before returning.
 	Start(ctx context.Context, l hub.Launch) (sessionID string, err error)
 	// Resume reopens a closed session that worked in dir, and says prompt in
 	// it unless that is empty.
@@ -187,6 +193,15 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 	for agent, read := range history {
 		capabilities[agent] = agentCapabilities{History: read != nil}
 	}
+	for agent, launcher := range launchers {
+		c := capabilities[agent]
+		c.Start, c.Resume = launcher != nil, launcher != nil
+		_, c.LaunchOptions = launcher.(launchCatalog)
+		_, c.ResumeCommand = launcher.(resumeCommander)
+		c.ResumeCommand = c.ResumeCommand || agent == claude.Agent && launcher != nil
+		capabilities[agent] = c
+	}
+	lifecycleRoutes(mux, h, launchers)
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -248,6 +263,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 	// reached through Slorp.
 	mux.HandleFunc("POST /api/sessions", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
+			RequestID   string `json:"requestId"`
 			Agent       string `json:"agent"`
 			Dir         string `json:"dir"`
 			Name        string `json:"name"`
@@ -255,6 +271,8 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			Effort      string `json:"effort"`
 			Role        string `json:"role"`
 			Model       string `json:"model"`
+			AgentName   string `json:"agentName"`
+			Variant     string `json:"variant"`
 			EffortLevel string `json:"effortLevel"`
 			Local       *struct {
 				Thinking    bool     `json:"thinking"`
@@ -265,22 +283,37 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			return
 		}
 		agent := cmp.Or(in.Agent, claude.Agent)
+		if agent == opencode.Agent && in.RequestID != "" {
+			key := in.RequestID
+			in.RequestID = ""
+			var finish func()
+			var ok bool
+			w, r, finish, ok = journalLifecycle(h, w, r, key, operationFingerprint("start", "", in), "")
+			if !ok {
+				return
+			}
+			defer finish()
+		}
 		launcher := launchers[agent]
 		prompt, name := strings.TrimSpace(in.Prompt), []rune(strings.TrimSpace(in.Name))
-		start := hub.Launch{Name: string(name[:min(len(name), nameLimit)]), Prompt: prompt, Model: strings.TrimSpace(in.Model), Effort: in.EffortLevel}
+		start := hub.Launch{Name: string(name[:min(len(name), nameLimit)]), Prompt: prompt, Model: strings.TrimSpace(in.Model), Effort: in.EffortLevel, AgentName: strings.TrimSpace(in.AgentName), Variant: strings.TrimSpace(in.Variant)}
 		var problem string
 		switch {
 		case launcher == nil:
 			problem = "Slorp cannot start sessions of this agent"
 		case in.Local != nil && agent != claude.Agent:
 			problem = "only Claude Code sessions can run on the local model"
+		case in.EffortLevel != "" && agent != claude.Agent:
+			problem = "effortLevel is only supported for Claude Code"
+		case agent == claude.Agent && (start.AgentName != "" || start.Variant != ""):
+			problem = "agentName and variant are only supported for OpenCode"
 		case in.Local != nil && in.Local.Temperature != nil && (*in.Local.Temperature < 0 || *in.Local.Temperature > maxTemperature):
 			problem = "temperature must be between 0 and 2"
-		case in.Local == nil && start.Model != "" && !modelName.MatchString(start.Model):
+		case agent == claude.Agent && in.Local == nil && start.Model != "" && !modelName.MatchString(start.Model):
 			problem = "that is not the name of a model"
 		case in.Local == nil && start.Effort != "" && !slices.Contains(claude.Efforts, start.Effort):
 			problem = "no such effort level"
-		case prompt == "":
+		case prompt == "" && agent == claude.Agent:
 			problem = "prompt is required"
 		case len(prompt) > startLimit:
 			problem = "prompt is too long"
@@ -309,9 +342,15 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			}
 			start.Local = &hub.LocalModel{URL: localBase(r.Host, in.Local.Thinking, in.Local.Temperature), Thinking: in.Local.Thinking}
 		}
-		id, err := launcher.Start(r.Context(), start)
+		createdID, createdJob := "", ""
+		launchCtx := hub.WithLaunchJob(r.Context(), func(id, job string) {
+			if createdJob == "" {
+				createdID, createdJob = id, job
+			}
+		})
+		id, err := launcher.Start(launchCtx, start)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
+			lifecycleError(w, err, id)
 			return
 		}
 		// Without an id there is nothing to file yet; the session still
@@ -323,7 +362,20 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			err = k.SetRole(id, in.Role)
 		}
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			if agent == opencode.Agent {
+				if createdID == id && createdJob != "" {
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					stopErr := launcher.Stop(ctx, createdJob)
+					cancel()
+					if stopErr != nil {
+						err = fmt.Errorf("binding session: %w; stopping created runtime: %v", err, stopErr)
+					}
+				} else {
+					err = fmt.Errorf("binding session: %w; created runtime ownership was not reported", err)
+				}
+			}
+			slog.ErrorContext(r.Context(), "binding launched session", "session_id", id, "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"sessionId": id, "error": "session was created but its effort/role could not be bound; conversation retained"})
 			return
 		}
 		h.Touch()
@@ -347,7 +399,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			return
 		}
 		if err := launcher.Stop(r.Context(), s.Job); err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
+			lifecycleError(w, err, "")
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -357,15 +409,51 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 	// something in it.
 	mux.HandleFunc("POST /api/archive/{id}/resume", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Prompt string `json:"prompt"`
+			RequestID string `json:"requestId"`
+			Prompt    string `json:"prompt"`
 		}
 		if !readJSON(w, r, &in) {
 			return
 		}
+		key := in.RequestID
+		in.RequestID = ""
+		fingerprint := operationFingerprint("resume", r.PathValue("id"), in)
 		a, ok := h.Archive(r.PathValue("id"))
+		agent := a.Agent
 		if !ok {
+			for _, s := range h.Sessions() {
+				if s.ID == r.PathValue("id") {
+					agent = s.Agent
+					break
+				}
+			}
+		}
+		if key != "" && agent != claude.Agent {
+			result, exists, err := h.ReplayLifecycle(key, fingerprint)
+			if err != nil {
+				lifecycleError(w, err, r.PathValue("id"))
+				return
+			}
+			if exists {
+				writeJSON(w, result.Status, result)
+				return
+			}
+		}
+		if !ok {
+			if agent == opencode.Agent {
+				lifecycleError(w, hub.ErrLifecycleConflict, r.PathValue("id"))
+				return
+			}
 			http.Error(w, "no such closed session", http.StatusNotFound)
 			return
+		}
+		if a.Agent == opencode.Agent && key != "" {
+			var finish func()
+			w, r, finish, ok = journalLifecycle(h, w, r, key, fingerprint, a.ID)
+			if !ok {
+				return
+			}
+			defer finish()
 		}
 		launcher := launchers[a.Agent]
 		if launcher == nil {
@@ -382,10 +470,10 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			return
 		}
 		if err := launcher.Resume(r.Context(), a.ID, dir, strings.TrimSpace(in.Prompt)); err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
+			lifecycleError(w, err, a.ID)
 			return
 		}
-		w.WriteHeader(http.StatusAccepted)
+		writeJSON(w, http.StatusAccepted, map[string]string{"sessionId": a.ID})
 	})
 
 	// edited reports a knowledge-base change, republishing state on success.
@@ -1051,7 +1139,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	return localOnly(mux)
+	return localOnly(bridgeFenced(h, mux))
 }
 
 // localOnly refuses requests a web page on another origin could have caused.

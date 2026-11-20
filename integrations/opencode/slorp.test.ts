@@ -2,17 +2,19 @@ import assert from 'node:assert/strict'
 import { test, type TestContext } from 'node:test'
 import { Slorp } from './slorp.ts'
 import { BroadcastChannel } from 'node:worker_threads'
-import { readFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 // The world around the plugin: the Slorp service behind fetch, and OpenCode
 // behind the client, each answered from memory and recorded.
 
-type Post = { path: string; body: any }
+type Post = { path: string; body: any; headers: Headers; signal?: AbortSignal | null }
 type Message = { info: { role: string; [key: string]: any }; parts: { type: string; text?: string; synthetic?: boolean; [key: string]: any }[] }
 
 const SID = 'ses_top'
 
-async function world(t: TestContext, options?: Record<string, unknown>) {
+async function world(t: TestContext, options?: Record<string, unknown>, managedEnv: { file?: string; run?: string } = {}) {
   const w = {
     url: '',
     /** What the Slorp service was sent, in order. */
@@ -21,6 +23,7 @@ async function world(t: TestContext, options?: Record<string, unknown>) {
     answers: {} as Record<string, (body: any) => unknown>,
     isDown: false,
     infos: {} as Record<string, object>,
+    infoGates: {} as Record<string, Promise<void>>,
     lookups: [] as string[],
     messages: {} as Record<string, Message[]>,
     prompted: [] as any[],
@@ -40,6 +43,7 @@ async function world(t: TestContext, options?: Record<string, unknown>) {
     answered: [] as any[],
     answerError: undefined as unknown,
     answerStatus: undefined as number | undefined,
+    answerGate: undefined as Promise<void> | undefined,
     /** Permission answers sent to the older route. */
     answeredOld: [] as any[],
     to: (path: string) => w.posts.filter(p => p.path === path).map(p => p.body),
@@ -53,7 +57,7 @@ async function world(t: TestContext, options?: Record<string, unknown>) {
     const at = new URL(url)
     w.url = at.origin
     const body = JSON.parse(init.body as string)
-    w.posts.push({ path: at.pathname, body })
+    w.posts.push({ path: at.pathname, body, headers: new Headers(init.headers), signal: init.signal })
     const gone = new Promise<never>((_, reject) => init.signal?.addEventListener('abort', () => reject(new Error('aborted'))))
     const out = await Promise.race([Promise.resolve().then(() => w.answers[at.pathname]?.(body)), gone])
     return out instanceof Response ? out : out === undefined ? new Response(null, { status: 204 }) : Response.json(out)
@@ -62,7 +66,12 @@ async function world(t: TestContext, options?: Record<string, unknown>) {
   const client = {
     session: {
       status: async () => { const data = structuredClone(w.statuses); await w.statusGate; return { data } },
-      get: async ({ path }: any) => (w.lookups.push(path.id), { data: w.infos[path.id] }),
+      get: async ({ path }: any) => {
+        w.lookups.push(path.id)
+        const data = structuredClone(w.infos[path.id])
+        await w.infoGates[path.id]
+        return { data }
+      },
       children: async ({ path }: any) => {
         w.childLookups.push(path.id)
         const result = { data: structuredClone(w.children[path.id] ?? []), error: w.childrenErrors[path.id] }
@@ -82,13 +91,38 @@ async function world(t: TestContext, options?: Record<string, unknown>) {
       },
     },
     vcs: { get: async () => ({ data: { branch: 'main' } }) },
-    _client: { post: async ({ signal, ...o }: any) => (w.answered.push(o), { error: w.answerError, response: w.answerStatus ? new Response(null, { status: w.answerStatus }) : undefined }) },
+    _client: { post: async ({ signal, ...o }: any) => {
+      w.answered.push(o)
+      const result = { error: w.answerError, response: w.answerStatus ? new Response(null, { status: w.answerStatus }) : undefined }
+      await w.answerGate
+      return result
+    } },
     postSessionIdPermissionsPermissionId: async ({ signal, ...o }: any) => (w.answeredOld.push(o), {}),
   }
 
   t.mock.timers.reset()
   t.mock.timers.enable({ apis: ['setInterval', 'Date'] })
-  const hooks: any = await Slorp({ client, directory: '/work/proj' } as any, options)
+  const controlTicks: Promise<unknown>[] = []
+  if (managedEnv.file !== undefined || managedEnv.run !== undefined) {
+    const interval = globalThis.setInterval
+    t.mock.method(globalThis, 'setInterval', (callback: () => Promise<unknown>, ms: number) => interval(() => {
+      controlTicks.push(callback())
+    }, ms))
+  }
+  const oldFile = process.env.SLORP_MANAGED_FILE, oldRun = process.env.SLORP_MANAGED_RUN
+  const setEnv = (file?: string, run?: string) => {
+    if (file === undefined) delete process.env.SLORP_MANAGED_FILE
+    else process.env.SLORP_MANAGED_FILE = file
+    if (run === undefined) delete process.env.SLORP_MANAGED_RUN
+    else process.env.SLORP_MANAGED_RUN = run
+  }
+  let hooks: any
+  try {
+    setEnv(managedEnv.file, managedEnv.run)
+    hooks = await Slorp({ client, directory: '/work/proj' } as any, options)
+  } finally {
+    setEnv(oldFile, oldRun)
+  }
   t.after(() => hooks.dispose())
 
   /** Lets everything the plugin has started run as far as it can. */
@@ -112,6 +146,7 @@ async function world(t: TestContext, options?: Record<string, unknown>) {
     },
     tick: async (ms = 2000) => {
       t.mock.timers.tick(ms)
+      await Promise.all(controlTicks.splice(0))
       await settle()
     },
     say: async (sessionID: string, ...parts: Message['parts']) => {
@@ -130,6 +165,735 @@ async function world(t: TestContext, options?: Record<string, unknown>) {
 const text = (t: string, more: object = {}) => ({ type: 'text', text: t, ...more })
 const assistant = (...parts: Message['parts']): Message => ({ info: { role: 'assistant' }, parts })
 const user = (t: string): Message => ({ info: { role: 'user' }, parts: [text(t)] })
+
+async function managedWorld(t: TestContext) {
+  const dir = await mkdtemp(join(tmpdir(), 'slorp-managed-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const file = join(dir, 'control.json')
+  const run = 'private-fencing-token'
+  const o = await world(t, undefined, { file, run })
+  return {
+    ...o, file, run,
+    control: async (contents = JSON.stringify({ sessionId: SID })) => {
+      await writeFile(file + '.next', contents)
+      await rename(file + '.next', file)
+    },
+  }
+}
+
+async function cleanupWorld(t: TestContext, kind: 'ack' | 'settlement') {
+  const o = await managedWorld(t)
+  o.w.infos[SID] = { id: SID }
+  await o.control()
+  await o.tick()
+  const path = kind === 'ack' ? '/api/bridge/ack' : '/api/bridge/permission/done'
+  const replies: { id: string; text: string }[] = []
+  o.w.answers['/api/bridge/poll'] = () => ({ replies: replies.splice(0) })
+  return {
+    ...o, path,
+    cleanups: () => o.w.to(path),
+    queue: async (id: string, dropped = false) => {
+      if (kind === 'ack') {
+        o.w.promptError = dropped ? new Error('delivery failed') : undefined
+        replies.push({ id, text: 'continue' })
+        await o.tick()
+      } else {
+        o.w.answers['/api/bridge/permission'] = () => ({ id, answerable: false })
+        await o.emit('permission.asked', { id: `native_${id}`, sessionID: SID, permission: 'bash', patterns: ['ls'] })
+        await o.emit('permission.replied', { requestID: `native_${id}` })
+      }
+    },
+  }
+}
+
+test('evicted managed cleanup tombstones do not block later queued entries after a lost success response', async t => {
+  for (const kind of ['ack', 'settlement'] as const) await t.test(kind, async t => {
+    const o = await cleanupWorld(t, kind)
+    const pending = new Set(['old', 'later'])
+    const completed = new Set<string>()
+    const complete = (id: string) => {
+      pending.delete(id)
+      completed.add(id)
+      if (completed.size > 256) completed.delete(completed.values().next().value!)
+    }
+    let release = (_: Response) => {}
+    const evicted = new Promise<Response>(resolve => { release = resolve })
+    o.w.answers[o.path] = ({ id }) => {
+      if (pending.has(id)) {
+        complete(id)
+        if (id === 'old') throw new Error('successful cleanup response lost')
+        return new Response(null, { status: 204 })
+      }
+      if (completed.has(id)) return new Response(null, { status: 204 })
+      return evicted
+    }
+    await o.queue('old')
+    assert.ok(completed.has('old'))
+    assert.ok(!pending.has('old'))
+    assert.deepEqual(o.cleanups().map(p => p.id), ['old'])
+    for (let i = 0; i < 257; i++) complete(`other_${i}`)
+    assert.equal(completed.size, 256)
+    assert.ok(!completed.has('old'))
+    await o.tick()
+    await o.queue('later')
+    assert.deepEqual(o.cleanups().map(p => p.id), ['old', 'old'], 'the in-flight retry holds the later cleanup behind it')
+    release(new Response(null, { status: 409 }))
+    await o.settle()
+    assert.deepEqual(o.cleanups().map(p => p.id), ['old', 'old', 'later'])
+    assert.ok(completed.has('later'))
+    assert.ok(!pending.has('later'))
+    await o.tick()
+    assert.equal(o.cleanups().length, 3, 'both terminal cleanups have been removed from the queue')
+    if (kind === 'ack') assert.equal(o.w.prompted.length, 2, 'retrying cleanup does not redeliver replies')
+    assert.ok(o.w.posts.filter(p => p.path === o.path).every(p => p.headers.get('X-Slorp-Run') === o.run))
+  })
+})
+
+test('managed cleanup still retries network and non-409 HTTP failures before later entries', async t => {
+  for (const kind of ['ack', 'settlement'] as const) for (const status of [500, 410, undefined]) {
+    await t.test(`${kind}: ${status ?? 'network'}`, async t => {
+      const o = await cleanupWorld(t, kind)
+      let down = true
+      o.w.answers[o.path] = () => {
+        if (!down) return new Response(null, { status: 204 })
+        if (status) return new Response(null, { status })
+        throw new Error('network failure mentioning Slorp: HTTP 409')
+      }
+      await o.queue('old')
+      await o.queue('later')
+      assert.ok(o.cleanups().length > 0)
+      assert.ok(o.cleanups().every(p => p.id === 'old'))
+      down = false
+      const before = o.cleanups().length
+      await o.tick()
+      assert.deepEqual(o.cleanups().slice(before).map(p => p.id), ['old', 'later'])
+      await o.tick()
+      assert.equal(o.cleanups().length, before + 2)
+    })
+  }
+})
+
+test('a terminal cleanup response does not erase a concurrently changed acknowledgement', async t => {
+  for (const status of [204, 409]) await t.test(String(status), async t => {
+    const o = await cleanupWorld(t, 'ack')
+    o.w.answers[o.path] = () => { throw new Error('response lost') }
+    await o.queue('shared')
+    let release = (_: Response) => {}
+    o.w.answers[o.path] = () => new Promise<Response>(resolve => { release = resolve })
+    await o.tick()
+    await o.queue('shared', true)
+    assert.deepEqual(o.cleanups().map(p => p.state), ['delivered', 'delivered'])
+    release(new Response(null, { status }))
+    await o.settle()
+    o.w.answers[o.path] = () => new Response(null, { status: 204 })
+    await o.tick()
+    assert.deepEqual(o.cleanups().map(p => p.state), ['delivered', 'delivered', 'dropped'])
+    await o.tick()
+    assert.equal(o.cleanups().length, 3)
+  })
+})
+
+test('managed 409 responses on poll and permission routes are not mistaken for successful cleanup', async t => {
+  const o = await managedWorld(t)
+  o.w.infos[SID] = { id: SID }
+  o.w.answers['/api/bridge/poll'] = () => new Response(null, { status: 409 })
+  o.w.answers['/api/bridge/permission'] = () => new Response(null, { status: 409 })
+  await o.control()
+  await o.tick()
+  await o.emit('permission.asked', { id: 'native', sessionID: SID, permission: 'bash', patterns: ['ls'] })
+  await o.tick()
+  assert.ok(o.w.to('/api/bridge/poll').length >= 2)
+  assert.ok(o.w.to('/api/bridge/permission').length >= 2)
+  assert.deepEqual(o.w.to('/api/bridge/ack'), [])
+  assert.deepEqual(o.w.to('/api/bridge/permission/done'), [])
+  assert.equal(o.w.prompted.length, 0)
+  assert.equal(o.w.answered.length, 0)
+  let claimed = false
+  o.w.answers['/api/bridge/poll'] = () => ({ replies: claimed ? [] : (claimed = true, [{ id: 'reply', text: 'continue' }]) })
+  o.w.answers['/api/bridge/permission'] = () => ({ id: 'slorp', answerable: true })
+  o.w.answers['/api/bridge/permission/wait'] = () => ({ state: 'allow' })
+  await o.tick()
+  assert.equal(o.w.prompted.length, 1)
+  assert.equal(o.w.answered.length, 1)
+})
+
+test('managed activation reports a promptless idle root with its original timestamps', async t => {
+  const o = await managedWorld(t)
+  o.w.infos[SID] = { id: SID, title: 'New session - 2026-11-19', time: { created: 100, updated: 150 } }
+  await o.tick()
+  assert.equal(o.w.posts.length, 0)
+  await o.control('{}')
+  await o.tick()
+  assert.deepEqual(o.w.lookups, [])
+  await o.control()
+  await o.tick()
+  const poll = o.w.to('/api/bridge/poll')[0]
+  assert.equal(poll.sessionId, SID)
+  assert.equal(poll.title, '')
+  assert.equal(poll.snapshot.status, 'idle')
+  assert.equal(poll.snapshot.startedAt, 100)
+  assert.equal(poll.snapshot.activeAt, 150)
+  assert.equal(poll.snapshot.promptAt, undefined)
+  assert.equal(poll.snapshot.lastPrompt, '')
+  assert.equal(poll.snapshot.lastReply, '')
+  assert.deepEqual(o.w.to('/api/bridge/event'), [])
+  assert.deepEqual(o.w.prompted, [])
+  await o.tick()
+  await o.open(SID)
+  assert.deepEqual(o.w.lookups, [SID])
+  assert.equal(o.w.to('/api/bridge/poll').length, 2)
+  assert.ok(o.w.posts.every(p => p.headers.get('X-Slorp-Run') === o.run), 'environment is captured at plugin creation, not reread on a tick')
+})
+
+test('managed activation hydrates saved history and usage without a fake turn', async t => {
+  const o = await managedWorld(t)
+  o.w.infos[SID] = { id: SID, title: 'Saved work', time: { created: 100, updated: 400 } }
+  o.w.messages[SID] = [
+    message(SID, 'question', 'user', 200, [text('original question')]),
+    message(SID, 'answer', 'assistant', 300, [text('original answer')], { tokens: usage(20), cost: 0.25, time: { created: 300, completed: 400 } }),
+  ]
+  await o.control()
+  await o.tick()
+  const s = o.w.to('/api/bridge/poll')[0].snapshot
+  assert.equal(s.status, 'idle')
+  assert.equal(s.startedAt, 100)
+  assert.equal(s.activeAt, 400)
+  assert.equal(s.promptAt, 200)
+  assert.equal(s.lastPrompt, 'original question')
+  assert.equal(s.lastReply, 'original answer')
+  assert.deepEqual(s.used, { in: 100, out: 30, cacheRead: 40, cacheWrite: 30 })
+  assert.equal(s.costUsd, 0.25)
+  assert.deepEqual(o.w.to('/api/bridge/event'), [])
+  assert.deepEqual(o.w.prompted, [])
+})
+
+test('managed launch retains a chat hook before the first control tick, including resumed history', async t => {
+  for (const resumed of [false, true]) await t.test(resumed ? 'resumed' : 'new', async t => {
+    const o = await managedWorld(t)
+    o.w.infos[SID] = { id: SID, time: { created: 100, updated: 300 } }
+    o.w.messages[SID] = resumed ? [
+      message(SID, 'old_user', 'user', 200, [text('old prompt')]),
+      message(SID, 'old_answer', 'assistant', 300, [text('old answer')], { tokens: usage(), cost: 0.25, providerID: 'old', modelID: 'old-model' }),
+    ] : []
+    await o.control()
+    const prompt = message(SID, 'launch_user', 'user', 500, [text('launch prompt')], { agent: 'build', model: { providerID: 'test', modelID: 'new-model', variant: 'high' } })
+    await o.sayWith({ agent: 'build', model: prompt.info.model, variant: 'high' }, prompt.info, ...prompt.parts)
+    await o.params(SID, 32000)
+    assert.equal(o.w.posts.length, 0)
+    o.w.messages[SID]!.push(prompt)
+    await o.emit('message.updated', { info: prompt.info })
+    for (const part of prompt.parts) await o.emit('message.part.updated', { part })
+    o.w.statuses[SID] = { type: 'busy' }
+    await o.tick()
+    const s = o.w.to('/api/bridge/poll')[0].snapshot
+    assert.equal(s.lastPrompt, 'launch prompt')
+    assert.equal(s.promptAt, 500)
+    assert.equal(s.startedAt, 100)
+    assert.equal(s.activeAt, 500)
+    assert.equal(s.lastReply, '')
+    assert.equal(s.model, 'test/new-model')
+    assert.equal(s.reasoning, 'high')
+    assert.equal(s.contextWindow, 32000)
+    assert.equal(s.status, 'working')
+    assert.equal(s.costUsd, resumed ? 0.25 : 0)
+    assert.deepEqual(o.w.to('/api/bridge/event'), [])
+  })
+})
+
+test('managed activation refreshes history missed while closed without inventing replay timestamps', async t => {
+  const o = await managedWorld(t)
+  const doc = JSON.parse(await readFile(new URL('../../internal/opencode/testdata/overflow.json', import.meta.url), 'utf8'))
+  o.w.infos[SID] = { ...doc.info, id: SID }
+  await o.params(SID, 64000)
+  await o.control()
+  await o.tick()
+  await o.control('{')
+  await o.tick()
+  o.w.messages[SID] = doc.messages.filter((m: Message) => !['msg_repeat', 'msg_repeatanswer'].includes(m.info.id)).map((m: Message) => ({ ...m, info: { ...m.info, sessionID: SID } }))
+  await o.control()
+  await o.tick()
+  const s = o.w.to('/api/bridge/poll').at(-1).snapshot
+  assert.equal(s.lastPrompt, 'Apply the fix')
+  assert.equal(s.promptAt, 1700000003000)
+  assert.equal(s.lastReply, 'Fixed after compaction.')
+  assert.deepEqual(o.w.to('/api/bridge/event'), [])
+})
+
+test('managed discovery cannot overwrite newer hook selections before delivering its first queued reply', async t => {
+  const o = await managedWorld(t)
+  const old = { id: SID, agent: 'old-agent', model: { providerID: 'old-provider', id: 'old-model', variant: 'low' }, time: { created: 100, updated: 500 } }
+  o.w.infos[SID] = old
+  await o.emit('session.created', { info: old })
+  let release = () => {}
+  o.w.infoGates[SID] = new Promise(resolve => { release = resolve })
+  await o.control()
+  await o.tick()
+  assert.deepEqual(o.w.lookups, [SID])
+  const prompt = message(SID, 'new_prompt', 'user', 500, [text('new prompt')], { agent: 'new-agent', model: { providerID: 'new-provider', modelID: 'new-model', variant: 'high' } })
+  await o.sayWith({ agent: 'new-agent', model: prompt.info.model, variant: 'high' }, prompt.info, ...prompt.parts)
+  await o.params(SID, 64000)
+  o.w.messages[SID] = [prompt]
+  o.w.answers['/api/bridge/poll'] = () => ({ replies: [{ id: 'first_reply', text: 'continue' }] })
+  assert.equal(o.w.posts.length, 0)
+  release()
+  await o.settle()
+  assert.deepEqual(o.w.prompted, [{ path: { id: SID }, body: {
+    agent: 'new-agent', model: { providerID: 'new-provider', modelID: 'new-model' }, variant: 'high', parts: [text('continue')],
+  } }])
+  const s = o.w.to('/api/bridge/poll')[0].snapshot
+  assert.equal(s.lastPrompt, 'new prompt')
+  assert.equal(s.promptAt, 500)
+  assert.equal(s.model, 'new-provider/new-model')
+  assert.equal(s.reasoning, 'high')
+  assert.equal(s.contextWindow, 64000)
+})
+
+test('managed selection accepts later session updates and rejects older snapshots without freezing selection', async t => {
+  const o = await managedWorld(t)
+  o.w.infos[SID] = { id: SID }
+  const prompt = message(SID, 'prompt', 'user', 500, [text('prompt')])
+  await o.sayWith({ agent: 'hook-agent', model: { providerID: 'hook', modelID: 'hook-model' }, variant: 'high' }, prompt.info, ...prompt.parts)
+  o.w.messages[SID] = [prompt]
+  await o.control()
+  await o.tick()
+  const stale = { id: SID, agent: 'stale-agent', model: { providerID: 'stale', id: 'stale-model', variant: 'low' }, time: { created: 100, updated: 400 } }
+  await o.emit('session.updated', { info: stale })
+  o.w.answers['/api/bridge/poll'] = () => ({ replies: [{ id: 'reply', text: 'continue' }] })
+  await o.tick()
+  assert.deepEqual(o.w.prompted[0].body, {
+    agent: 'hook-agent', model: { providerID: 'hook', modelID: 'hook-model' }, variant: 'high', parts: [text('continue')],
+  })
+  await o.emit('session.updated', { info: { id: SID, agent: 'later-agent', model: { providerID: 'later', id: 'later-model' }, time: { created: 100, updated: 800 } } })
+  await o.emit('session.updated', { info: { ...stale, time: { created: 100, updated: 600 } } })
+  await o.tick()
+  assert.deepEqual(o.w.prompted[1].body, {
+    agent: 'later-agent', model: { providerID: 'later', modelID: 'later-model' }, parts: [text('continue')],
+  })
+  const s = o.w.to('/api/bridge/poll').at(-1).snapshot
+  assert.equal(s.lastPrompt, 'prompt')
+  assert.equal(s.promptAt, 500)
+  assert.equal(s.model, 'later/later-model')
+  assert.equal(s.reasoning, '')
+  await Promise.all(['next', 'latest'].map(name => o.dispatch('session.updated', { info: {
+    id: SID, agent: `${name}-agent`, model: { providerID: name, id: `${name}-model`, variant: 'max' }, time: { created: 100, updated: 900 },
+  } })))
+  await o.control('{}')
+  await o.tick()
+  await o.control()
+  await o.tick()
+  assert.deepEqual(o.w.prompted[2].body, {
+    agent: 'latest-agent', model: { providerID: 'latest', modelID: 'latest-model' }, variant: 'max', parts: [text('continue')],
+  }, 'later queued selections survive another activation/history refresh')
+})
+
+test('managed activation retains a hook that native history has not saved yet', async t => {
+  const o = await managedWorld(t)
+  o.w.infos[SID] = { id: SID, time: { created: 100, updated: 100 } }
+  const prompt = message(SID, 'pending_user', 'user', 200, [text('not saved yet')])
+  await o.sayWith({}, prompt.info, ...prompt.parts)
+  await o.control()
+  await o.tick()
+  const s = o.w.to('/api/bridge/poll')[0].snapshot
+  assert.equal(s.lastPrompt, 'not saved yet')
+  assert.equal(s.promptAt, 200)
+  assert.equal(s.activeAt, 200)
+  assert.deepEqual(o.w.to('/api/bridge/event'), [])
+})
+
+test('managed history refresh replaces stale cached assistant text and usage', async t => {
+  const o = await managedWorld(t)
+  o.w.infos[SID] = { id: SID }
+  o.w.messages[SID] = [
+    message(SID, 'user', 'user', 100, [text('question')]),
+    message(SID, 'answer', 'assistant', 200, [text('partial')], { tokens: usage(10), cost: 0.1 }),
+  ]
+  await o.control()
+  await o.tick()
+  await rm(o.file)
+  await o.tick()
+  o.w.messages[SID]![1] = message(SID, 'answer', 'assistant', 200, [text('complete')], { tokens: usage(50), cost: 0.5, time: { created: 200, completed: 300 } })
+  await o.control()
+  await o.tick()
+  const s = o.w.to('/api/bridge/poll').at(-1).snapshot
+  assert.equal(s.lastReply, 'complete')
+  assert.equal(s.activeAt, 300)
+  assert.equal(s.used.out, 60)
+  assert.equal(s.costUsd, 0.5)
+})
+
+test('managed activation normalizes a locally ingested overflow replay to its original prompt', async t => {
+  const o = await managedWorld(t)
+  o.w.infos[SID] = { id: SID, time: { created: 100, updated: 100 } }
+  const original = message(SID, 'original', 'user', 200, [text('original prompt')])
+  const compact = message(SID, 'compact', 'user', 300, [{ type: 'compaction', auto: true, overflow: true }])
+  const summary = message(SID, 'summary', 'assistant', 400, [text('summary')], { parentID: 'compact', summary: true, time: { created: 400, completed: 450 } })
+  const replay = message(SID, 'replay', 'user', 500, [text('original prompt')])
+  o.w.messages[SID] = [original, compact, summary]
+  await o.sayWith({}, replay.info, ...replay.parts)
+  o.w.messages[SID]!.push(replay, message(SID, 'answer', 'assistant', 600, [text('final answer')]))
+  await o.control()
+  await o.tick()
+  const s = o.w.to('/api/bridge/poll')[0].snapshot
+  assert.equal(s.lastPrompt, 'original prompt')
+  assert.equal(s.promptAt, 200)
+  assert.equal(s.activeAt, 600)
+  assert.equal(s.lastReply, 'final answer')
+  assert.deepEqual(o.w.to('/api/bridge/event'), [])
+})
+
+test('managed native prompts survive unavailable control before presentation and after a suspended wait', async t => {
+  for (const kind of ['permission', 'question']) for (const active of [false, true]) {
+    await t.test(`${kind}: ${active ? 'suspended wait' : 'before activation'}`, async t => {
+      const o = await managedWorld(t)
+      o.w.infos[SID] = { id: SID }
+      let registrations = 0
+      const waits = new Map<string, (value: unknown) => void>()
+      o.w.answers['/api/bridge/permission'] = () => ({ id: `ask_${++registrations}`, answerable: true })
+      o.w.answers['/api/bridge/permission/wait'] = ({ id }) => new Promise(resolve => { waits.set(id, resolve) })
+      if (active) { await o.control(); await o.tick() }
+      await o.emit(`${kind}.asked`, kind === 'permission'
+        ? { id: 'native_ask', sessionID: SID, permission: 'bash', patterns: ['ls'] }
+        : { id: 'native_ask', sessionID: SID, questions: [{ question: 'Continue?', options: [{ label: 'Yes' }] }] })
+      assert.equal(registrations, active ? 1 : 0)
+      if (active) await rm(o.file)
+      const before = o.w.posts.length
+      await o.tick()
+      await o.control('{')
+      await o.tick()
+      assert.equal(o.w.posts.length, before)
+      assert.equal(o.w.answered.length, 0)
+      assert.deepEqual(o.w.to('/api/bridge/permission/done'), [])
+      await o.control()
+      await o.tick()
+      const expected = active ? 2 : 1
+      assert.equal(registrations, expected, 'the same native prompt is offered again, once')
+      if (active) waits.get('ask_1')!({ state: 'allow', selections: [['stale']] })
+      await o.settle()
+      assert.equal(o.w.answered.length, 0)
+      await o.tick()
+      assert.equal(registrations, expected)
+      waits.get(`ask_${expected}`)!({ state: 'allow', selections: [['Yes']] })
+      await o.settle()
+      assert.deepEqual(o.w.answered.map(a => [a.path.requestID, a.body]), [['native_ask', kind === 'permission' ? { reply: 'once' } : { answers: [['Yes']] }]])
+      await o.tick()
+      assert.equal(registrations, expected)
+      assert.ok(o.w.to('/api/bridge/permission/done').every(p => active && p.id === 'ask_1'), 'only an obsolete Slorp presentation may be retired')
+    })
+  }
+})
+
+test('old managed presentation continuations cannot clear or settle a replacement attempt', async t => {
+  for (const kind of ['permission', 'question']) for (const status of [undefined, 500, 404]) await t.test(`${kind}: old answer ${status ?? 'succeeds'}`, async t => {
+    const o = await managedWorld(t)
+    o.w.infos[SID] = { id: SID }
+    await o.control()
+    await o.tick()
+    let release = () => {}, decide = (_: unknown) => {}, registrations = 0
+    o.w.answerGate = new Promise(resolve => { release = resolve })
+    o.w.answerError = status ? new Error('old transport failed') : undefined
+    o.w.answerStatus = status
+    o.w.answers['/api/bridge/permission'] = () => ({ id: `ask_${++registrations}`, answerable: true })
+    o.w.answers['/api/bridge/permission/wait'] = ({ id }) => id === 'ask_1' ? { state: 'allow', selections: [['Yes']] } : new Promise(resolve => { decide = resolve })
+    await o.emit(`${kind}.asked`, kind === 'permission'
+      ? { id: 'native_ask', sessionID: SID, permission: 'bash', patterns: ['ls'] }
+      : { id: 'native_ask', sessionID: SID, questions: [{ question: 'Continue?', options: [{ label: 'Yes' }] }] })
+    assert.equal(o.w.answered.length, 1)
+    await rm(o.file)
+    await o.tick()
+    o.w.answerGate = undefined
+    o.w.answerError = undefined
+    o.w.answerStatus = undefined
+    await o.control()
+    await o.tick()
+    assert.equal(registrations, 2)
+    release()
+    await o.settle()
+    await o.tick()
+    assert.equal(registrations, 2)
+    assert.deepEqual(o.w.answeredOld, [])
+    assert.ok(o.w.to('/api/bridge/permission/done').every(p => p.id !== 'ask_2'))
+    decide({ state: 'allow', selections: [['Yes']] })
+    await o.settle()
+    assert.equal(o.w.answered.length, 2)
+    await o.tick()
+    assert.equal(registrations, 2)
+  })
+})
+
+test('native settlement while managed presentation is suspended prevents restoration', async t => {
+  for (const kind of ['permission', 'question']) await t.test(kind, async t => {
+    const o = await managedWorld(t)
+    o.w.infos[SID] = { id: SID }
+    await o.control()
+    await o.tick()
+    o.w.answers['/api/bridge/permission'] = () => ({ id: 'old_presentation', answerable: true })
+    o.w.answers['/api/bridge/permission/wait'] = () => new Promise(() => {})
+    await o.emit(`${kind}.asked`, kind === 'permission'
+      ? { id: 'native_ask', sessionID: SID, permission: 'bash', patterns: ['ls'] }
+      : { id: 'native_ask', sessionID: SID, questions: [{ question: 'Continue?' }] })
+    await rm(o.file)
+    await o.tick()
+    await o.emit(`${kind}.replied`, { requestID: 'native_ask' })
+    await o.control()
+    await o.tick()
+    assert.equal(o.w.to('/api/bridge/permission').length, 1)
+    assert.deepEqual(o.w.answered, [])
+    assert.deepEqual(o.w.to('/api/bridge/permission/done'), [{ id: 'old_presentation' }])
+  })
+})
+
+test('managed control retries absent, malformed, oversized and unavailable session data on later ticks', async t => {
+  const o = await managedWorld(t)
+  await o.tick()
+  for (const contents of ['{', '{}', 'null', '[]', '{"sessionId":42}', '{"sessionId":"other"}', '{"sessionId":"ses_../bad"}', JSON.stringify({ sessionId: SID, padding: 'é'.repeat(600) })]) {
+    await o.control(contents)
+    await o.tick()
+    assert.deepEqual(o.w.posts, [])
+    assert.deepEqual(o.w.lookups, [])
+  }
+  await o.control()
+  await o.tick()
+  assert.deepEqual(o.w.lookups, [SID])
+  await o.settle()
+  assert.deepEqual(o.w.lookups, [SID], 'a failed discovery must not spin')
+  o.w.infos[SID] = { id: SID, time: { created: 1, updated: 2 } }
+  await o.tick()
+  assert.deepEqual(o.w.lookups, [SID, SID])
+  assert.equal(o.w.to('/api/bridge/poll').length, 1)
+})
+
+test('a managed control ID must resolve to that native root, never a child or a different root', async t => {
+  const o = await managedWorld(t)
+  await o.control()
+  o.w.infos[SID] = { id: 'ses_other' }
+  await o.tick()
+  o.w.infos[SID] = { id: SID, parentID: 'ses_other' }
+  await o.tick()
+  assert.deepEqual(o.w.posts, [])
+  assert.deepEqual(o.w.lookups, [SID, SID])
+  o.w.infos[SID] = { id: SID }
+  await o.tick()
+  assert.equal(o.w.to('/api/bridge/poll')[0].sessionId, SID)
+})
+
+test('managed control rejects non-files and permits exactly one KiB, then recovers only its pinned root', async t => {
+  const o = await managedWorld(t)
+  o.w.infos[SID] = { id: SID }
+  await mkdir(o.file)
+  await o.tick()
+  assert.equal(o.w.posts.length, 0)
+  await rm(o.file, { recursive: true })
+  const control = JSON.stringify({ sessionId: SID }).padEnd(1024, ' ')
+  await o.control(control)
+  await o.tick()
+  assert.equal(o.w.to('/api/bridge/poll').length, 1)
+  await o.control(control + ' ')
+  await o.tick()
+  await o.say(SID, text('must not advertise while control is invalid'))
+  assert.equal(o.w.posts.length, 1)
+  await o.control()
+  await o.tick()
+  assert.equal(o.w.to('/api/bridge/poll').length, 2)
+  assert.deepEqual(o.w.lookups, [SID, SID])
+  await o.control(JSON.stringify({ sessionId: 'ses_other' }))
+  await o.tick()
+  assert.equal(o.w.posts.length, 2)
+  assert.deepEqual(o.w.lookups, [SID, SID])
+})
+
+test('managed incidental chats, events, permissions and terminal presence cannot advertise another root', async t => {
+  const o = await managedWorld(t)
+  const other = 'ses_other', child = 'ses_other_child'
+  o.w.infos[SID] = { id: SID }
+  o.w.infos[other] = { id: other }
+  o.w.infos[child] = { id: child, parentID: other }
+  await o.open(other)
+  assert.deepEqual(o.w.lookups, [])
+  const incidental = async () => {
+    await o.say(other, text('not managed'))
+    await o.say(child, text('not a managed child'))
+    await o.emit('session.status', { sessionID: other, status: { type: 'busy' } })
+    await o.emit('session.status', { sessionID: child, status: { type: 'busy' } })
+    await o.emit('message.updated', { info: { sessionID: child, id: 'msg_other', role: 'assistant' } })
+    await o.emit('message.part.updated', { part: taskPart(other, child) })
+    await o.emit('session.error', { sessionID: child, error: { name: 'Error' } })
+    await o.emit('permission.asked', { id: 'per_other', sessionID: child, permission: 'bash', patterns: ['ls'] })
+    await o.emit('question.asked', { id: 'q_other', sessionID: other, questions: [] })
+    await o.open(other)
+  }
+  await incidental()
+  assert.equal(o.w.posts.length, 0)
+  await o.control()
+  await o.tick()
+  await incidental()
+  await o.tick()
+  assert.ok(o.w.posts.length > 0)
+  assert.ok(o.w.posts.every(p => p.body.sessionId === SID))
+  assert.deepEqual(o.w.to('/api/bridge/permission'), [])
+  assert.deepEqual(o.w.to('/api/bridge/event'), [])
+  await o.control(JSON.stringify({ sessionId: other }))
+  const count = o.w.posts.length
+  await o.tick()
+  await incidental()
+  await o.tick()
+  assert.equal(o.w.posts.length, count, 'switching control cannot rebind the runtime or keep advertising its old root')
+})
+
+test('every managed bridge route carries the private fence and descendants stay under the chosen root', async t => {
+  const o = await managedWorld(t)
+  o.w.infos[SID] = { id: SID }
+  o.w.children[SID] = [{ id: CHILD, parentID: SID }]
+  o.w.messages[CHILD] = [message(CHILD, 'child_answer', 'assistant', 100, [text('child report')])]
+  await o.control()
+  await o.tick()
+  await o.say(SID, text('real turn'))
+  o.w.answers['/api/bridge/poll'] = () => ({ replies: [{ id: 'reply_1', text: 'continue' }] })
+  await o.tick()
+  assert.equal(o.w.prompted[0].path.id, SID)
+  o.w.answers['/api/bridge/permission'] = () => ({ id: 'ask_1', answerable: true })
+  o.w.answers['/api/bridge/permission/wait'] = () => new Promise(() => {})
+  await o.emit('permission.asked', { id: 'per_child', sessionID: CHILD, permission: 'bash', patterns: ['ls'] })
+  const permission = o.w.to('/api/bridge/permission')[0]
+  assert.equal(permission.sessionId, SID)
+  assert.equal(permission.agentId, CHILD)
+  await o.emit('permission.replied', { requestID: 'per_child' })
+  const paths = ['/api/bridge/poll', '/api/bridge/event', '/api/bridge/subagent', '/api/bridge/ack', '/api/bridge/permission', '/api/bridge/permission/wait', '/api/bridge/permission/done']
+  assert.deepEqual([...new Set(o.w.posts.map(p => p.path))].sort(), paths.sort())
+  for (const p of o.w.posts) {
+    assert.equal(p.headers.get('X-Slorp-Run'), o.run, p.path)
+    assert.ok(!JSON.stringify(p.body).includes(o.run))
+    assert.ok(!JSON.stringify(p.body).includes(o.file))
+    if (p.body.sessionId) assert.equal(p.body.sessionId, SID)
+  }
+  assert.equal(o.w.to('/api/bridge/subagent')[0].subagent.id, CHILD)
+})
+
+test('deleting managed control aborts waits and polls, suppresses late answers and closes subsequent activity', async t => {
+  const o = await managedWorld(t)
+  o.w.infos[SID] = { id: SID }
+  await o.control()
+  await o.tick()
+  let reply = (_: unknown) => {}, allow = (_: unknown) => {}
+  o.w.answers['/api/bridge/poll'] = () => new Promise(resolve => { reply = resolve })
+  o.w.answers['/api/bridge/permission'] = () => ({ id: 'ask_1', answerable: true })
+  o.w.answers['/api/bridge/permission/wait'] = () => new Promise(resolve => { allow = resolve })
+  await o.emit('permission.asked', { id: 'per_stop', sessionID: SID, permission: 'bash', patterns: ['ls'] })
+  await o.tick()
+  const pending = o.w.posts.filter(p => p.path.endsWith('/wait') || p.path.endsWith('/poll')).slice(1)
+  assert.equal(pending.length, 2)
+  await rm(o.file)
+  const count = o.w.posts.length
+  await o.tick()
+  assert.ok(pending.every(p => p.signal?.aborted))
+  reply({ replies: [{ id: 'late', text: 'must not deliver' }] })
+  allow({ state: 'allow' })
+  await o.settle()
+  await o.say(SID, text('after stop'))
+  await o.open(SID)
+  await o.emit('session.status', { sessionID: SID, status: { type: 'busy' } })
+  await o.emit('permission.asked', { id: 'per_late', sessionID: SID, permission: 'bash', patterns: ['ls'] })
+  await o.tick()
+  assert.equal(o.w.posts.length, count)
+  assert.deepEqual(o.w.prompted, [])
+  assert.deepEqual(o.w.answered, [])
+  assert.deepEqual(o.w.answeredOld, [])
+})
+
+test('managed discovery is not duplicated across ticks and disposal prevents delayed activation', async t => {
+  const o = await managedWorld(t)
+  o.w.infos[SID] = { id: SID }
+  let release = () => {}
+  o.w.statusGate = new Promise(resolve => { release = resolve })
+  await o.control()
+  await o.tick()
+  await o.tick()
+  await o.open(SID)
+  assert.deepEqual(o.w.lookups, [SID])
+  await o.dispose()
+  release()
+  await o.settle()
+  await o.tick()
+  assert.deepEqual(o.w.posts, [])
+})
+
+test('removing control during discovery prevents delayed activation and retries only on a later valid tick', async t => {
+  const o = await managedWorld(t)
+  o.w.infos[SID] = { id: SID }
+  let release = () => {}
+  o.w.statusGate = new Promise(resolve => { release = resolve })
+  await o.control()
+  await o.tick()
+  await rm(o.file)
+  await o.tick()
+  release()
+  await o.settle()
+  assert.equal(o.w.posts.length, 0)
+  await o.tick()
+  assert.deepEqual(o.w.lookups, [SID])
+  await o.control()
+  await o.tick()
+  assert.deepEqual(o.w.lookups, [SID, SID])
+  assert.equal(o.w.to('/api/bridge/poll').length, 1)
+})
+
+test('managed descendant permission decisions go to the native request and disposal cancels active waits', async t => {
+  const o = await managedWorld(t)
+  o.w.infos[SID] = { id: SID }
+  o.w.children[SID] = [{ id: CHILD, parentID: SID }]
+  await o.control()
+  await o.tick()
+  o.w.answers['/api/bridge/permission'] = () => ({ id: 'ask_child', answerable: true })
+  o.w.answers['/api/bridge/permission/wait'] = () => ({ state: 'allow' })
+  await o.emit('permission.asked', { id: 'per_child', sessionID: CHILD, permission: 'bash', patterns: ['ls'] })
+  assert.deepEqual(o.w.answered.map(a => [a.path.requestID, a.body]), [['per_child', { reply: 'once' }]])
+  assert.equal(o.w.to('/api/bridge/permission')[0].sessionId, SID)
+  assert.equal(o.w.to('/api/bridge/permission')[0].agentId, CHILD)
+  o.w.answers['/api/bridge/permission/wait'] = () => new Promise(() => {})
+  await o.emit('permission.asked', { id: 'per_wait', sessionID: CHILD, permission: 'bash', patterns: ['pwd'] })
+  const waiting = o.w.posts.at(-1)!
+  assert.equal(waiting.path, '/api/bridge/permission/wait')
+  const count = o.w.posts.length
+  await o.dispose()
+  await o.tick()
+  assert.equal(waiting.signal?.aborted, true)
+  assert.equal(o.w.posts.length, count)
+  assert.equal(o.w.answered.length, 1)
+})
+
+test('disposal cancels managed activation while the control file is being read', async t => {
+  const o = await managedWorld(t)
+  o.w.infos[SID] = { id: SID }
+  await o.control()
+  const reading = o.tick()
+  await o.dispose()
+  await reading
+  assert.deepEqual(o.w.lookups, [])
+  assert.deepEqual(o.w.posts, [])
+})
+
+test('incomplete managed environment pairs fail closed rather than becoming ordinary installations', async t => {
+  for (const env of [{ file: '/not/read/without/token' }, { run: 'token-only' }, { file: '', run: 'token' }, { file: '/unused', run: '' }]) {
+    await t.test(JSON.stringify(Object.keys(env)), async t => {
+      const o = await world(t, undefined, env)
+      o.w.infos[SID] = { id: SID }
+      await o.open(SID)
+      await o.say(SID, text('not ordinary'))
+      await o.emit('session.status', { sessionID: SID, status: { type: 'busy' } })
+      await o.emit('permission.asked', { id: 'per_1', sessionID: SID, permission: 'bash', patterns: ['ls'] })
+      await o.tick()
+      assert.deepEqual(o.w.posts, [])
+    })
+  }
+})
+
+test('ordinary installations still advertise multiple roots without a run header', async t => {
+  const o = await world(t)
+  await o.say(SID, text('first'))
+  await o.say('ses_other', text('second'))
+  await o.tick()
+  assert.deepEqual(o.w.polls().map(p => p.sessionId), [SID, 'ses_other'])
+  assert.ok(o.w.posts.every(p => !p.headers.has('X-Slorp-Run')))
+})
 
 /** A world in which the top-level session has finished one turn. */
 async function afterOneTurn(t: TestContext) {
@@ -832,7 +1596,7 @@ test('bridge version and managed revision identify the loaded installation', asy
   const manifest = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8'))
   const poll = o.w.to('/api/bridge/poll')[0]
   assert.equal(poll.pluginVersion, manifest.version)
-  assert.equal(poll.pluginVersion, '0.3.0')
+  assert.equal(poll.pluginVersion, '0.4.0')
   assert.equal(poll.pluginRevision, 'managed-build')
 })
 

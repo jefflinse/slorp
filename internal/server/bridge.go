@@ -1,11 +1,84 @@
 package server
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jefflinse/slorp/internal/claude"
 	"github.com/jefflinse/slorp/internal/hub"
 )
+
+func bridgeFenced(h *hub.Hub, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/bridge/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+		if err != nil {
+			http.Error(w, "bad request body", http.StatusBadRequest)
+			return
+		}
+		var in struct {
+			Agent     string `json:"agent"`
+			SessionID string `json:"sessionId"`
+			ID        string `json:"id"`
+		}
+		if json.Unmarshal(body, &in) != nil {
+			http.Error(w, "bad request body", http.StatusBadRequest)
+			return
+		}
+		ctx, release, err := h.BridgeLease(r.Context(), r.Header.Get("X-Slorp-Run"), in.Agent, in.SessionID, in.ID, r.URL.Path)
+		if err != nil {
+			http.Error(w, "unknown, stopped, or mismatched managed run", http.StatusConflict)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		// Network backpressure must not keep a managed mutation lease alive.
+		response := &bridgeResponse{header: make(http.Header)}
+		cancelled := false
+		func() {
+			defer release()
+			next.ServeHTTP(response, r.WithContext(ctx))
+			cancelled = ctx.Err() != nil
+		}()
+		if cancelled {
+			http.Error(w, "managed request cancelled", http.StatusConflict)
+			return
+		}
+		for key, values := range response.header {
+			w.Header()[key] = values
+		}
+		if response.status == 0 {
+			response.status = http.StatusOK
+		}
+		w.WriteHeader(response.status)
+		_, _ = w.Write(response.body.Bytes())
+	})
+}
+
+type bridgeResponse struct {
+	header http.Header
+	body   bytes.Buffer
+	status int
+}
+
+func (w *bridgeResponse) Header() http.Header { return w.header }
+func (w *bridgeResponse) WriteHeader(status int) {
+	if w.status == 0 {
+		w.status = status
+	}
+}
+func (w *bridgeResponse) Write(b []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.body.Write(b)
+}
 
 // bridgeSnapshot is a plugin's current view, repeated on polls so missed
 // events and service restarts do not leave a session in an old state.

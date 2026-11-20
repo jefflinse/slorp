@@ -144,6 +144,11 @@ func (h *Hub) archived(id string, d sessionDoc) Archived {
 
 // leave stores a session as it goes and archives it if it has work to retain.
 func (h *Hub) leave(s *Session) {
+	for id, ref := range h.permissionRoots {
+		if ref.root == s.ID {
+			h.settle(id)
+		}
+	}
 	delete(h.backfill, s.ID)
 	d := h.doc(s)
 	d.Ended = time.Now()
@@ -159,7 +164,7 @@ func (h *Hub) shelve(id string, d sessionDoc) {
 }
 
 func (h *Hub) worthKeeping(id string, d sessionDoc) bool {
-	if d.Insight != nil || len(d.Timeline) > 0 {
+	if d.Managed || d.Insight != nil || len(d.Timeline) > 0 {
 		return true
 	}
 	for _, r := range h.retained[id] {

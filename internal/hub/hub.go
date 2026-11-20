@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"log"
@@ -53,7 +54,11 @@ type Session struct {
 	Kind  string `json:"kind"`
 	// Job is what the agent's own commands call the session when it runs in
 	// the background, empty otherwise.
-	Job string `json:"job,omitempty"`
+	Job       string `json:"job,omitempty"`
+	CanStop   bool   `json:"canStop"`
+	managed   bool
+	run       string
+	persisted [sha256.Size]byte
 	// Name and Title are what the session's agent calls it, and Named what
 	// the user called it there, if they did.
 	Name  string `json:"name"`
@@ -645,6 +650,14 @@ type Cache interface {
 
 // What the model wrote about one session, kept so a restart need not ask again.
 type sessionDoc struct {
+	Managed    bool      `json:"managed,omitempty"`
+	Title      string    `json:"title,omitempty"`
+	Model      string    `json:"model,omitempty"`
+	Reasoning  string    `json:"reasoning,omitempty"`
+	ActiveAt   time.Time `json:"activeAt,omitzero"`
+	LastPrompt string    `json:"lastPrompt,omitempty"`
+	LastReply  string    `json:"lastReply,omitempty"`
+	PromptAt   time.Time `json:"promptAt,omitzero"`
 	Insight    *Insight  `json:"insight"`
 	InsightKey string    `json:"insightKey"`
 	Guess      string    `json:"guess"`
@@ -687,20 +700,27 @@ type Reply struct {
 }
 
 type Hub struct {
-	mu       sync.Mutex
-	sessions map[string]*Session
-	replies  []*Reply
-	subs     map[chan struct{}]struct{}
-	last     string
-	summ     Summarizer
-	kb       *kb.Store
-	notes    map[string]note
-	cache    Cache
-	settings Settings
-	waiters  map[string]chan Decision
-	lookups  []Lookup
-	feeds    map[string]*feed
-	clones   map[string][]string
+	mu                  sync.Mutex
+	runs                map[string]*managedRun
+	permissionRoots     map[string]*permissionReference
+	replyRuns           map[string]string
+	unmanagedAdmissions map[string]int
+	lifecycle           map[string]lifecycleRecord
+	lifecycleActive     map[string]bool
+	lifecycleErr        error
+	sessions            map[string]*Session
+	replies             []*Reply
+	subs                map[chan struct{}]struct{}
+	last                string
+	summ                Summarizer
+	kb                  *kb.Store
+	notes               map[string]note
+	cache               Cache
+	settings            Settings
+	waiters             map[string]chan Decision
+	lookups             []Lookup
+	feeds               map[string]*feed
+	clones              map[string][]string
 	// checkouts is, for each session's directory, the repositories checked
 	// out there.
 	checkouts map[string][]string
@@ -747,6 +767,7 @@ func New(k *kb.Store, c Cache) *Hub {
 		archive: map[string]sessionDoc{}, unsettled: map[string]sessionDoc{}, started: time.Now(), origins: map[string]string{}, plugins: map[string]Plugin{},
 		discussed: map[string]*pullDoc{}, discussFailed: map[string]time.Time{}}
 	h.loadSubagents()
+	h.loadLifecycle()
 	h.warn(c.Each("pull", func(id string, body []byte) {
 		var d pullDoc
 		if json.Unmarshal(body, &d) == nil {
@@ -789,6 +810,16 @@ func New(k *kb.Store, c Cache) *Hub {
 			h.replies = append(h.replies, &r)
 		}
 	}))
+	for id, d := range h.unsettled {
+		if d.Managed {
+			h.dropReplies(id)
+		}
+	}
+	for id, d := range h.archive {
+		if d.Managed {
+			h.dropReplies(id)
+		}
+	}
 	_, err := c.Get("setting", "main", &h.settings)
 	h.warn(err)
 	if h.settings.Integrations == nil {
@@ -813,6 +844,17 @@ func (h *Hub) restore(s *Session) {
 	s.Insight, s.insightKey, s.guess, s.guessKey, s.insightAt = d.Insight, d.InsightKey, d.Guess, d.GuessKey, d.InsightAt
 	s.roleGuess, s.roleKey = d.RoleGuess, d.RoleKey
 	s.given, s.pinned, s.Timeline = d.Given, d.Pinned, tidy(d.Timeline)
+	if d.Managed || s.managed {
+		s.managed = true
+		s.Cwd, s.Branch, s.Title = d.Cwd, d.Branch, d.Title
+		s.StartedAt, s.ActiveAt = d.StartedAt, d.ActiveAt
+		if s.ActiveAt.IsZero() {
+			s.ActiveAt = d.Ended
+		}
+		s.Used, s.CostUSD = d.Used, d.CostUSD
+		s.Model, s.Reasoning = d.Model, d.Reasoning
+		s.LastPrompt, s.LastReply, s.PromptAt = d.LastPrompt, d.LastReply, d.PromptAt
+	}
 	delete(h.unsettled, s.ID)
 	if _, back := h.archive[s.ID]; back {
 		delete(h.archive, s.ID)
@@ -821,14 +863,33 @@ func (h *Hub) restore(s *Session) {
 }
 
 func (h *Hub) remember(s *Session) {
-	h.warn(h.cache.Put("session", s.ID, h.doc(s)))
+	h.warn(h.checkpoint(s))
+}
+
+func (h *Hub) checkpoint(s *Session) error {
+	doc := h.doc(s)
+	b, err := json.Marshal(doc)
+	if err != nil {
+		return err
+	}
+	fingerprint := sha256.Sum256(b)
+	if s.persisted == fingerprint {
+		return nil
+	}
+	if err := h.cache.Put("session", s.ID, doc); err != nil {
+		return err
+	}
+	s.persisted = fingerprint
+	return nil
 }
 
 // doc is what is stored of a session while it is open.
 func (h *Hub) doc(s *Session) sessionDoc {
 	label, _ := s.label()
 	effort, _ := h.filed(s)
-	return sessionDoc{Insight: s.Insight, InsightKey: s.insightKey, Guess: s.guess, GuessKey: s.guessKey, InsightAt: s.insightAt,
+	return sessionDoc{Managed: s.managed, Title: s.Title, Model: s.Model, Reasoning: s.Reasoning, ActiveAt: s.ActiveAt,
+		LastPrompt: s.LastPrompt, LastReply: s.LastReply, PromptAt: s.PromptAt,
+		Insight: s.Insight, InsightKey: s.insightKey, Guess: s.guess, GuessKey: s.guessKey, InsightAt: s.insightAt,
 		RoleGuess: s.roleGuess, RoleKey: s.roleKey, Given: s.given, Pinned: s.pinned, Timeline: s.Timeline, Label: label, Effort: effort,
 		Agent: s.Agent, Cwd: s.Cwd, Branch: s.Branch, StartedAt: s.StartedAt, Used: s.Used, CostUSD: s.CostUSD}
 }
@@ -851,6 +912,7 @@ func (h *Hub) filed(s *Session) (effort, via string) {
 func (h *Hub) SetRoster(agent string, live []Session) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.prunePermissionDecisions(time.Now())
 	seen := map[string]bool{}
 	for i := range live {
 		s := live[i]
@@ -934,8 +996,12 @@ func (h *Hub) Apply(agent, id string, fn func(*Session)) (created bool) {
 		h.sessions[id] = s
 	}
 	s.bridgeSeen = time.Now()
+	previous := s.Pending
 	if fn != nil {
 		fn(s)
+	}
+	if previous != nil && (s.Pending == nil || s.Pending.ID != previous.ID) {
+		h.settle(previous.ID)
 	}
 	h.changed()
 	return !ok
@@ -947,8 +1013,9 @@ func (h *Hub) Apply(agent, id string, fn func(*Session)) (created bool) {
 func (h *Hub) Retire(agent string, silence time.Duration) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.prunePermissionDecisions(time.Now())
 	for id, s := range h.sessions {
-		if s.Agent == agent && time.Since(s.bridgeSeen) > silence {
+		if s.Agent == agent && s.run == "" && time.Since(s.bridgeSeen) > silence {
 			h.leave(s)
 			delete(h.sessions, id)
 		}
@@ -975,6 +1042,10 @@ func (h *Hub) Ask(agent, sessionID string, p Pending, canAnswer bool) Pending {
 		if p.Answerable {
 			h.waiters[p.ID] = make(chan Decision, 1)
 		}
+		if h.permissionRoots == nil {
+			h.permissionRoots = map[string]*permissionReference{}
+		}
+		h.permissionRoots[p.ID] = &permissionReference{root: sessionID, run: s.run}
 	})
 	return p
 }
@@ -988,16 +1059,38 @@ func (h *Hub) Await(ctx context.Context, requestID string, d time.Duration) (dec
 	if held && len(ch) == 0 && !h.asking(requestID) {
 		// The terminal answered, or the turn ended; nothing is waiting any more.
 		delete(h.waiters, requestID)
+		h.settle(requestID)
 		held = false
+	}
+	ref := h.permissionRoots[requestID]
+	if held && ref != nil {
+		ref.awaiting++
 	}
 	h.mu.Unlock()
 	if !held {
 		return Decision{Behavior: Terminal}, true
 	}
+	defer func() {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if ref != nil {
+			ref.awaiting--
+		}
+		h.finishPermission(requestID)
+	}()
 	select {
 	case dec = <-ch:
 		h.mu.Lock()
 		delete(h.waiters, requestID)
+		if ref != nil {
+			ref.complete, ref.decided = true, false
+			if ref.awaiting > 1 {
+				select {
+				case ch <- Decision{Behavior: Terminal}:
+				default:
+				}
+			}
+		}
 		h.mu.Unlock()
 		return dec, true
 	case <-time.After(d):
@@ -1008,12 +1101,17 @@ func (h *Hub) Await(ctx context.Context, requestID string, d time.Duration) (dec
 
 // settle tells whoever is waiting on a request that Slorp will not answer it.
 func (h *Hub) settle(requestID string) {
-	if ch, ok := h.waiters[requestID]; ok {
+	ref := h.permissionRoots[requestID]
+	if ref != nil {
+		ref.complete = true
+	}
+	if ch, ok := h.waiters[requestID]; ok && (ref == nil || !ref.decided) {
 		select {
 		case ch <- Decision{Behavior: Terminal}:
 		default:
 		}
 	}
+	h.finishPermission(requestID)
 }
 
 func (h *Hub) asking(requestID string) bool {
@@ -1105,6 +1203,10 @@ func (h *Hub) decide(requestID string, with func(*Pending) (Decision, bool)) boo
 		case h.waiters[requestID] <- dec:
 		default:
 			return false
+		}
+		if ref := h.permissionRoots[requestID]; ref != nil {
+			ref.complete, ref.decided = true, true
+			ref.decisionDeadline = time.Now().Add(permissionDecisionGrace)
 		}
 		s.Pending, s.Status, s.WaitingFor = nil, Working, ""
 		h.changed()
@@ -1491,6 +1593,11 @@ func (h *Hub) MergeEfforts(from, into string) error {
 func (h *Hub) Touch() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	for _, s := range h.sessions {
+		if s.managed {
+			h.remember(s)
+		}
+	}
 	h.changed()
 }
 
@@ -1891,6 +1998,7 @@ func (h *Hub) snapshot() []Session {
 	pulls := h.pulls()
 	for _, s := range h.sessions {
 		c := *s
+		c.CanStop = s.CanStop || s.Agent == "claude" && s.Job != ""
 		c.CanReply = time.Since(s.bridgeSeen) < bridgeTTL
 		c.Subagents = h.sessionSubagents(s, c.CanReply)
 		c.Label, c.LabelVia = s.label()
@@ -1946,6 +2054,12 @@ func (h *Hub) Claim(sessionID string) []Reply {
 	for _, r := range h.replies {
 		if r.SessionID == sessionID && r.State == Queued {
 			r.State = Claimed
+			if s := h.sessions[sessionID]; s != nil && s.run != "" {
+				if h.replyRuns == nil {
+					h.replyRuns = map[string]string{}
+				}
+				h.replyRuns[r.ID] = s.run
+			}
 			h.warn(h.cache.Put("reply", r.ID, r))
 			out = append(out, *r)
 		}
@@ -1963,6 +2077,8 @@ func (h *Hub) Ack(replyID string, state ReplyState) {
 	for _, r := range h.replies {
 		if r.ID == replyID && r.State == Claimed {
 			r.State = state
+			h.rememberCompletedReference(h.replyRuns[replyID], replyID, true)
+			delete(h.replyRuns, replyID)
 			h.warn(h.cache.Put("reply", r.ID, r))
 			h.changed()
 		}
@@ -1991,6 +2107,9 @@ func (h *Hub) changed() {
 			s.key, s.keySince = k, now
 		}
 		h.track(s, now)
+		if s.run != "" {
+			h.remember(s)
+		}
 	}
 	snap := h.snapshot()
 	b, _ := json.Marshal(map[string]any{"s": snap, "i": items(snap), "f": h.fed(), "e": h.efforts(snap), "m": h.summ})

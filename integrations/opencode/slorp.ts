@@ -1,13 +1,16 @@
 import type { Plugin } from '@opencode-ai/plugin'
 import { BroadcastChannel } from 'node:worker_threads'
 import { isDeepStrictEqual } from 'node:util'
+import { constants } from 'node:fs'
+import { open } from 'node:fs/promises'
 
 const AGENT = 'opencode'
-const VERSION = '0.3.0'
+const VERSION = '0.4.0'
 const DEFAULT_URL = 'http://127.0.0.1:4747'
 const POLL_MS = 2000
 const REQUEST_MS = 5000
 const DISCOVERY_CONCURRENCY = 4
+const CONTROL_LIMIT = 1024
 const SUMMARY_LIMIT = 400
 /** Inputs longer than this are too much to judge in Slorp; the terminal asks. */
 const INPUT_LIMIT = 8000
@@ -17,6 +20,16 @@ const ANSWER_MAX_MS = 60 * 60_000
 const UNTITLED = /^New session - \d{4}-/
 
 type Reply = { id: string; text: string }
+
+class BridgeHTTPError extends Error {
+  readonly status: number
+
+  constructor(status: number) {
+    super(`Slorp: HTTP ${status}`)
+    this.name = 'BridgeHTTPError'
+    this.status = status
+  }
+}
 
 /** The fields read from OpenCode's own record of a session. */
 type Info = {
@@ -70,6 +83,8 @@ type Known = {
   contextTokens?: number
   measuredAt?: number
   metadataAt?: number
+  /** Last selection change, ordered independently of native timestamps. */
+  selectionRevision?: number
   compacted?: { id?: string; at: string; auto?: boolean; before?: number }
   compacting?: { id?: string; auto: boolean; before: number }
   usage?: Map<string, { tokens: Usage; cost: number }>
@@ -126,6 +141,7 @@ type Ask = {
   epoch?: string
   settled: AbortController
   running?: boolean
+  attempt?: symbol
   resolved?: boolean
   origin: string
   tool: string
@@ -150,6 +166,27 @@ function runes(text: string, limit: number) {
 
 function validID(id: unknown): id is string {
   return typeof id === 'string' && id !== '' && id !== '.' && id !== '..' && Buffer.byteLength(id) <= 256 && !/[\s\p{Cc}/\\]/u.test(id)
+}
+
+async function managedSession(path: string) {
+  const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK)
+  try {
+    const stat = await file.stat()
+    if (!stat.isFile() || stat.size > CONTROL_LIMIT) return
+    const buffer = Buffer.alloc(CONTROL_LIMIT + 1)
+    let size = 0
+    while (size < buffer.length) {
+      const { bytesRead } = await file.read(buffer, size, buffer.length - size, null)
+      if (!bytesRead) break
+      size += bytesRead
+    }
+    if (size > CONTROL_LIMIT) return
+    const value = JSON.parse(buffer.subarray(0, size).toString('utf8'))
+    const id: unknown = value?.sessionId
+    if (validID(id) && /^ses_[A-Za-z0-9_-]+$/.test(id)) return id
+  } finally {
+    await file.close()
+  }
 }
 
 function taskResult(text: string) {
@@ -213,6 +250,15 @@ function describe(request: { patterns?: string[]; metadata?: Record<string, unkn
  */
 export const Slorp: Plugin = async ({ client, directory }, options) => {
   const base = (process.env.SLORP_URL || String(options?.url ?? DEFAULT_URL)).replace(/\/+$/, '')
+  const managedFile = process.env.SLORP_MANAGED_FILE
+  const managedRun = process.env.SLORP_MANAGED_RUN
+  const managed = managedFile !== undefined || managedRun !== undefined
+  let managedRoot: string | undefined
+  let managedAvailable = false
+  let managedVerified = false
+  let managedActivity = new AbortController()
+  let readingControl = false
+  let managedDiscovery: Promise<void> | undefined
   const sessions = new Map<string, Known>()
   const removedMessages = new Map<string, Map<string, Tombstone>>()
   const removedParts = new Map<string, Map<string, Tombstone>>()
@@ -226,17 +272,61 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
   const events = new Map<string, Promise<void>>()
   let settling = false
   let acknowledging = false
-  const signal = () => AbortSignal.any([stopped.signal, AbortSignal.timeout(REQUEST_MS)])
+  const signal = (activity?: AbortSignal) => AbortSignal.any([stopped.signal, AbortSignal.timeout(REQUEST_MS), ...(activity ? [activity] : [])])
   const presence = new BroadcastChannel('slorp.opencode.presence')
   const discovering = new Set<string>()
   let tuiSeenAt: number | undefined
   let hookMessage = 0
   let eventSequence = 0
+  let selectionRevision = 0
   presence.unref()
   presence.onmessage = ({ data }) => {
     if (data?.directory !== directory || stopped.signal.aborted) return
     tuiSeenAt = Date.now()
-    if (typeof data.sessionId === 'string') void enqueue(data.sessionId, () => discover(data.sessionId)).catch(() => {})
+    if (!managed && typeof data.sessionId === 'string') void enqueue(data.sessionId, () => discover(data.sessionId)).catch(() => {})
+  }
+
+  function managedOpen(id?: string) {
+    return !managed || managedAvailable && managedVerified && (id === undefined || id === managedRoot)
+  }
+
+  async function tick() {
+    if (!managed) return poll()
+    if (readingControl || stopped.signal.aborted || !managedFile || !managedRun) return
+    readingControl = true
+    let id: string | undefined
+    try {
+      id = await managedSession(managedFile)
+    } catch {
+      // Missing, malformed, or unreadable control files retry only on the next tick.
+    } finally {
+      readingControl = false
+    }
+    if (stopped.signal.aborted) return
+    if (id) managedRoot ??= id
+    if (!id || id !== managedRoot) {
+      managedAvailable = false
+      managedVerified = false
+      managedActivity.abort()
+      for (const ask of asks.values()) {
+        ask.attempt = undefined
+        ask.running = false
+        if (ask.slorpId) finish(ask.slorpId)
+        ask.slorpId = undefined
+        ask.epoch = undefined
+      }
+      return
+    }
+    if (!managedAvailable) managedActivity = new AbortController()
+    managedAvailable = true
+    if (!managedVerified) {
+      if (!managedDiscovery) {
+        const root = id
+        managedDiscovery = enqueue(root, () => discover(root)).catch(() => {}).finally(() => { managedDiscovery = undefined })
+      }
+    } else {
+      void poll()
+    }
   }
 
   function enqueue(id: string, step: () => Promise<void>) {
@@ -246,21 +336,31 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
   }
 
   async function discover(id: string) {
-    if (sessions.get(id)?.isLive || deletedSessions.has(id) || discovering.has(id)) return
+    if (managed && (!managedAvailable || id !== managedRoot)) return
+    if ((sessions.get(id)?.isLive && (!managed || managedVerified)) || deletedSessions.has(id) || discovering.has(id)) return
+    const activity = managedActivity
     discovering.add(id)
     try {
+      const selectionReadAt = selectionRevision
       const info = await client.session.get({ path: { id }, signal: signal() })
       if (info.error || !info.data || stopped.signal.aborted || deletedSessions.has(id)) return
-      learn(info.data)
+      if (managed && (info.data.id !== id || info.data.parentID || activity.signal.aborted || activity !== managedActivity)) return
+      const known = learn(info.data, undefined, selectionReadAt)
+      if (managed) {
+        await hydrate(id, known, undefined, true)
+        if (!known.hydrated) return
+      }
       const [root, s] = await top(id)
       const activate = async () => {
         const statuses = await client.session.status({ signal: signal() })
-        if (statuses.error || stopped.signal.aborted || s.isLive || s.deleted) return
+        if (statuses.error || stopped.signal.aborted || (s.isLive && (!managed || managedVerified)) || s.deleted) return
+        if (managed && (!managedAvailable || activity !== managedActivity || activity.signal.aborted || root !== managedRoot)) return
         const status = statuses.data?.[root]
         s.isBusy = status?.type === 'busy' || status?.type === 'retry'
         s.status = s.isBusy ? 'working' : 'idle'
         s.waitingFor = status?.type === 'retry' ? `Retrying: ${status.message}` : ''
         s.isLive = true
+        if (managed) managedVerified = true
         await poll()
       }
       if (root === id) await activate()
@@ -272,15 +372,17 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
 
   async function post(path: string, body: object, signal?: AbortSignal) {
     const id = (body as { sessionId?: string }).sessionId
-    if (stopped.signal.aborted || id && (deletedSessions.has(id) || sessions.get(id)?.deleted)) throw new Error('Slorp: session closed')
+    if (stopped.signal.aborted || !managedOpen(id) || id && (deletedSessions.has(id) || sessions.get(id)?.deleted)) throw new Error('Slorp: session closed')
+    const activity = managedActivity
     const res = await fetch(base + path, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(managed ? { 'X-Slorp-Run': managedRun! } : {}) },
       body: JSON.stringify(body),
-      signal: AbortSignal.any([stopped.signal, signal ?? AbortSignal.timeout(REQUEST_MS)]),
+      signal: AbortSignal.any([stopped.signal, signal ?? AbortSignal.timeout(REQUEST_MS), ...(managed ? [activity.signal] : [])]),
     })
-    if (!res.ok) throw new Error(`Slorp: HTTP ${res.status}`)
+    if (!res.ok) throw new BridgeHTTPError(res.status)
     const text = await res.text()
+    if (managed && (activity.signal.aborted || activity !== managedActivity || !managedOpen(id))) throw new Error('Slorp: session closed')
     return text ? JSON.parse(text) : undefined
   }
 
@@ -299,6 +401,10 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
   }
 
   function openRoot(id: string) {
+    return localRoot(id) && managedOpen(id)
+  }
+
+  function localRoot(id: string) {
     const s = sessions.get(id)
     return !!s && !s.parent && !s.deleted && !deletedSessions.has(id) && !stopped.signal.aborted
   }
@@ -315,7 +421,7 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
     }
   }
 
-  function learn(info: Info, discovery?: Discovery) {
+  function learn(info: Info, discovery?: Discovery, selectionReadAt = selectionRevision) {
     const existed = sessions.has(info.id)
     const s = sessions.get(info.id) ?? { title: '', cwd: directory, prompt: '', reply: '', isBusy: false, isLive: false }
     const previousParent = s.parent
@@ -323,9 +429,14 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
     if (deletedSessions.has(info.id) || s.parent && sessions.get(s.parent)?.deleted) s.deleted = true
     if (info.title !== undefined) s.title = UNTITLED.test(info.title) ? '' : info.title
     if (info.directory) s.cwd = info.directory
-    if (info.agent) s.agent = info.agent
-    if (info.model?.providerID && info.model.id) model(s, { providerID: info.model.providerID, modelID: info.model.id })
-    if (info.model) s.variant = info.model.variant
+    if ((info.agent || info.model) && (s.selectionRevision ?? 0) <= selectionReadAt &&
+      (info.time?.updated === undefined || info.time.updated >= (s.metadataAt ?? 0))) {
+      if (info.agent) s.agent = info.agent
+      if (info.model?.providerID && info.model.id) model(s, { providerID: info.model.providerID, modelID: info.model.id })
+      if (info.model) s.variant = info.model.variant
+      s.metadataAt = Math.max(s.metadataAt ?? 0, info.time?.updated ?? 0)
+      s.selectionRevision = ++selectionRevision
+    }
     if (info.time) {
       s.startedAt = info.time.created
       s.activeAt = Math.max(s.activeAt ?? 0, info.time.updated)
@@ -351,9 +462,10 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
     for (let hops = 0; ; hops++) {
       let s = sessions.get(id)
       if (!s) {
+        const selectionReadAt = selectionRevision
         const res = await client.session.get({ path: { id }, signal: signal() })
         if (res.error) throw res.error
-        s = learn((res.data as Info | undefined) ?? { id })
+        s = learn((res.data as Info | undefined) ?? { id }, undefined, selectionReadAt)
       }
       if (!s.parent || hops === 64) {
         await hydrate(id, s)
@@ -369,9 +481,11 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
     const at = info.time?.created ?? 0
     if (at < (s.measuredAt ?? 0)) return
     s.measuredAt = at
-    if (at >= (s.metadataAt ?? 0)) {
+    if (at >= (s.metadataAt ?? 0) && ((info.providerID && info.modelID) || info.variant !== undefined)) {
       if (info.providerID && info.modelID) model(s, { providerID: info.providerID, modelID: info.modelID })
       s.variant = info.variant ?? s.variant
+      s.metadataAt = at
+      s.selectionRevision = ++selectionRevision
     }
     const t = info.tokens
     s.contextTokens = t.total ?? t.input + t.output + (t.reasoning ?? 0) + t.cache.read + t.cache.write
@@ -390,6 +504,7 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
       else if (info.providerID && info.modelID) model(s, { providerID: info.providerID, modelID: info.modelID })
       if (info.agent) s.agent = info.agent
       s.variant = info.variant ?? info.model?.variant ?? s.variant
+      s.selectionRevision = ++selectionRevision
     }
   }
 
@@ -476,13 +591,14 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
           if (!openRoot(root)) return
           if (!node.deleted) {
             try {
+              const selectionReadAt = selectionRevision
               const res = await client.session.children({ path: { id }, signal: signal() })
               if (!openRoot(root)) return
               if (!node.deleted) {
                 if (res.error || !res.data) throw res.error ?? new Error('Missing children')
                 for (const info of res.data) {
                   if (!validID(info.id) || info.id === root || info.parentID !== id) continue
-                  learn(info, discovery)
+                  learn(info, discovery, selectionReadAt)
                 }
               }
             } catch {
@@ -647,16 +763,35 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
     }))
   }
 
-  async function hydrate(id: string, s: Known, discovery?: Discovery) {
+  async function hydrate(id: string, s: Known, discovery?: Discovery, refresh = false) {
+    if (refresh) {
+      await s.hydrating
+      s.hydrated = false
+    }
     if (s.hydrated || s.deleted || stopped.signal.aborted) return
     if (s.hydrating) return s.hydrating
     s.hydrating = (async () => {
       const readAt = eventSequence
+      const messagesBefore = refresh ? new Map(s.messages) : undefined
+      const partsBefore = refresh ? new Map(s.parts) : undefined
       const res = await client.session.messages({ path: { id }, signal: signal() })
       if (s.deleted || stopped.signal.aborted) return
       if (res.error || !res.data) throw res.error ?? new Error('Missing messages')
+      // Refresh persisted records without overwriting events received during the read.
+      if (refresh) for (const m of res.data as TranscriptMessage[]) {
+        if (m.info.id && s.messages?.get(m.info.id) === messagesBefore?.get(m.info.id)) s.messages?.delete(m.info.id)
+        for (const part of m.parts) {
+          if (typeof part.id === 'string' && s.parts?.get(part.id) === partsBefore?.get(part.id)) s.parts?.delete(part.id)
+        }
+      }
       const messages = history(id, res.data as TranscriptMessage[], readAt).sort((a, b) => (a.info.time?.created ?? 0) - (b.info.time?.created ?? 0))
       const origins = replayOrigins(messages as TranscriptMessage[])
+      const original = origins.get(s.promptID ?? '')
+      if (original) {
+        s.promptID = original.info.id
+        s.promptAt = original.info.time?.created ?? 0
+        s.prompt = textOf(original.parts)
+      }
       for (const m of messages) {
         const info = m.info as Message
         rememberMessage(s, info, true)
@@ -670,9 +805,13 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
             s.prompt = prompt
             s.promptID = original.info.id
             s.promptAt = at
-            s.agent = info.agent ?? s.agent
-            model(s, info.model)
-            s.variant = info.model?.variant ?? s.variant
+            if (at >= (s.metadataAt ?? 0)) {
+              s.metadataAt = at
+              s.agent = info.agent ?? s.agent
+              model(s, info.model)
+              s.variant = info.model?.variant ?? s.variant
+              s.selectionRevision = ++selectionRevision
+            }
             s.reply = ''
           }
         }
@@ -733,7 +872,7 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
     try {
       if (!openRoot(id)) return
       const body = { agent: s.agent, model: s.model, ...(s.variant ? { variant: s.variant } : {}), parts: [{ type: 'text' as const, text: reply.text }] }
-      const sent = await client.session.promptAsync({ path: { id }, body, signal: signal() })
+      const sent = await client.session.promptAsync({ path: { id }, body, signal: signal(managed ? managedActivity.signal : undefined) })
       state = sent.error ? 'dropped' : 'delivered'
     } finally {
       acknowledgements.set(reply.id, state)
@@ -803,11 +942,15 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
     acknowledging = true
     try {
       for (const [id, state] of acknowledgements) {
-        await post('/api/bridge/ack', { id, state })
-        acknowledgements.delete(id)
+        try {
+          await post('/api/bridge/ack', { id, state })
+        } catch (error) {
+          if (!(error instanceof BridgeHTTPError && error.status === 409)) throw error
+        }
+        if (acknowledgements.get(id) === state) acknowledgements.delete(id)
       }
     } catch {
-      // Keep acknowledgements until Slorp accepts them, without resubmitting replies.
+      // Other failures retry without resubmitting replies.
     } finally {
       acknowledging = false
     }
@@ -815,20 +958,22 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
 
   async function request(url: string, requestId: string, body?: object) {
     const raw = (client as unknown as { _client?: { post?: (o: object) => Promise<{ error?: unknown; response?: Response }> } })._client
-    return raw?.post?.({ url, path: { requestID: requestId }, body, headers: { 'content-type': 'application/json' }, signal: signal() })
+    return raw?.post?.({ url, path: { requestID: requestId }, body, headers: { 'content-type': 'application/json' }, signal: signal(managed ? managedActivity.signal : undefined) })
   }
 
   /** Answers a permission prompt for this one call, or rejects it. */
   async function answer(sessionId: string, requestId: string, allow: boolean, message?: string) {
+    const activity = managed ? managedActivity.signal : undefined
     const body = allow ? { reply: 'once' } : message ? { reply: 'reject', message } : { reply: 'reject' }
     const sent = await request('/permission/{requestID}/reply', requestId, body)
+    if (activity?.aborted || stopped.signal.aborted) return
     if (sent && !sent.error) return
     if (sent?.response && sent.response.status !== 404) throw sent.error
     // An OpenCode without that route has this one, which cannot carry the message.
     const fallback = await client.postSessionIdPermissionsPermissionId({
       path: { id: sessionId, permissionID: requestId },
       body: { response: allow ? 'once' : 'reject' },
-      signal: signal(),
+      signal: signal(activity),
     })
     if (fallback.error) throw fallback.error
   }
@@ -852,11 +997,15 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
     settling = true
     try {
       for (const id of settlements) {
-        await post('/api/bridge/permission/done', { id })
+        try {
+          await post('/api/bridge/permission/done', { id })
+        } catch (error) {
+          if (!(error instanceof BridgeHTTPError && error.status === 409)) throw error
+        }
         settlements.delete(id)
       }
     } catch {
-      // Keep settlements until Slorp acknowledges them.
+      // Other failures keep settlements queued for retry.
     } finally {
       settling = false
     }
@@ -876,24 +1025,33 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
   }
 
   async function offerAgain(requestId: string, ask: Ask) {
+    if (!managedOpen()) return
     if (Date.now() >= ask.deadline) { settle(requestId); return }
     if (ask.running || ask.slorpId || ask.settled.signal.aborted) return
     ask.running = true
+    const attempt = ask.attempt = Symbol()
     try {
-      await present(requestId, ask)
+      await present(requestId, ask, attempt)
     } catch {
-      if (ask.slorpId && !ask.settled.signal.aborted) finish(ask.slorpId)
-      ask.slorpId = undefined
+      if (ask.attempt === attempt) {
+        if (ask.slorpId && !ask.settled.signal.aborted) finish(ask.slorpId)
+        ask.slorpId = undefined
+      }
     } finally {
-      ask.running = false
+      if (ask.attempt === attempt) {
+        ask.running = false
+        ask.attempt = undefined
+      }
     }
   }
 
-  async function present(requestId: string, ask: Ask) {
+  async function present(requestId: string, ask: Ask, attempt: symbol) {
+    const current = () => ask.attempt === attempt && !ask.settled.signal.aborted && !stopped.signal.aborted
     if (!ask.resolved) {
       const [id, s] = await top(ask.origin)
-      if (ask.settled.signal.aborted) return
+      if (!current()) return
       if (s.parent || s.deleted || sessions.get(ask.origin)?.deleted) { settle(requestId); return }
+      if (!openRoot(id)) return
       ask.sessionId = id
       ask.resolved = true
       s.isLive = true
@@ -914,17 +1072,17 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
       ...(origin !== sessionId ? { agentId: origin } : {}),
     })
     if (!asked) return
-    if (ask.settled.signal.aborted) {
-      finish(asked.id)
+    if (!current()) {
+      if (asked.id !== ask.slorpId || ask.settled.signal.aborted) finish(asked.id)
       return
     }
     ask.slorpId = asked.id
     ask.epoch = asked.epoch
     if (!asked.answerable) return
 
-    for (; !ask.settled.signal.aborted && ask.slorpId === asked.id && Date.now() < ask.deadline; ) {
+    for (; current() && ask.slorpId === asked.id && Date.now() < ask.deadline; ) {
       const decided = await post('/api/bridge/permission/wait', { id: asked.id }, AbortSignal.any([ask.settled.signal, AbortSignal.timeout(25_000)]))
-      if (ask.settled.signal.aborted || ask.slorpId !== asked.id) return
+      if (!current() || ask.slorpId !== asked.id || !openRoot(sessionId)) return
       if (decided?.state === 'waiting') continue
       if (decided?.state === 'allow' || decided?.state === 'deny') {
         const said = decided.message ? `The user denied this in Slorp and said: ${decided.message}` : undefined
@@ -936,16 +1094,16 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
         } else {
           await answer(origin, requestId, decided.state === 'allow', said)
         }
-        asks.delete(requestId)
+        if (current()) asks.delete(requestId)
       } else {
         ask.slorpId = undefined
       }
       return
     }
-    if (ask.slorpId === asked.id) settle(requestId)
+    if (current() && ask.slorpId === asked.id) settle(requestId)
   }
 
-  const timer = setInterval(() => void poll(), POLL_MS)
+  const timer = setInterval(tick, POLL_MS)
   timer.unref?.()
   void client.vcs
     .get()
@@ -956,6 +1114,7 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
     dispose: async () => {
       clearInterval(timer)
       presence.close()
+      if (managed) stopped.abort()
       for (const id of asks.keys()) settle(id)
       stopped.abort()
     },
@@ -963,7 +1122,7 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
     'chat.message': async (input, output) => {
       const sequence = ++eventSequence
       const [id, s] = await top(input.sessionID)
-      if (s.parent || s.deleted) return
+      if (!localRoot(id)) return
       const origin = sessions.get(input.sessionID)!
       if (origin.deleted) return
       const message = { ...output.message, id: output.message?.id ?? `hook_${++hookMessage}`, role: 'user', time: output.message?.time ?? { created: Date.now() } }
@@ -985,6 +1144,7 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
         origin.waitingFor = ''
         model(origin, input.model ?? output.message?.model)
         origin.variant = input.variant ?? origin.variant
+        origin.selectionRevision = ++selectionRevision
         return
       }
       if (!textOf(parts) && parts.some(p => p.type === 'text' && p.synthetic)) return
@@ -998,6 +1158,8 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
       s.prompt = textOf(parts)
       s.promptID = message.id
       s.promptAt = output.message?.time.created ?? Date.now()
+      s.metadataAt = Math.max(s.metadataAt ?? 0, s.promptAt)
+      s.selectionRevision = ++selectionRevision
       s.activeAt = s.promptAt
       s.reply = ''
       s.needsAnswer = false
@@ -1006,7 +1168,7 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
 
     'chat.params': async (input) => {
       const [id, s] = await top(input.sessionID)
-      if (id !== input.sessionID || s.parent || s.deleted) return
+      if (id !== input.sessionID || !localRoot(id)) return
       s.contextWindow = input.model.limit.context
     },
 
@@ -1043,7 +1205,7 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
             if (removed && removed.at > sequence) break
             if (removed) removed.cleared = true
             rememberMessage(origin, p.info)
-            if (id !== p.info.sessionID && !s.parent && !s.deleted) s.isLive = true
+            if (id !== p.info.sessionID && localRoot(id)) s.isLive = true
             break
           }
           case 'message.removed': {
@@ -1062,12 +1224,12 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
           case 'message.part.updated': {
             const part = p.part
             if (!part?.sessionID) break
-            const [, root] = await top(part.sessionID)
+            const [id, root] = await top(part.sessionID)
             const s = sessions.get(part.sessionID)!
             if (s.deleted) break
             if ((removedParts.get(part.sessionID)?.get(part.id)?.at ?? 0) > sequence) break
             rememberPart(part.sessionID, s, part)
-            if ((s.parent || part.tool === 'task') && !root.parent && !root.deleted) root.isLive = true
+            if ((s.parent || part.tool === 'task') && localRoot(id)) root.isLive = true
             if (s && part.type === 'compaction') s.compacting = { id: part.id, auto: part.auto, before: s.contextTokens ?? 0 }
             break
           }
@@ -1104,7 +1266,7 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
           case 'session.status': {
             if (!p.sessionID) break
             const [id, s] = await top(p.sessionID)
-            if (s.parent || s.deleted) break
+            if (!localRoot(id)) break
             if (id !== p.sessionID) {
               const origin = sessions.get(p.sessionID)!
               if (origin.deleted) break
@@ -1130,7 +1292,7 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
             const s = sessions.get(p.sessionID)
             if (s?.parent) {
               if (!s.deleted) {
-                if (id !== p.sessionID && !root.parent && !root.deleted) root.isLive = true
+                if (id !== p.sessionID && localRoot(id)) root.isLive = true
                 s.activeAt = Date.now()
               }
               break

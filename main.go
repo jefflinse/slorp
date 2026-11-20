@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/jefflinse/slorp/internal/claude"
@@ -72,7 +73,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	if *data == "" {
@@ -110,6 +111,7 @@ func main() {
 	oc := &opencode.Adapter{Hub: h, Interval: 2 * time.Second, Silence: 30 * time.Second,
 		Bin: *opencodeBin, Home: home, Data: *data, URL: "http://" + *addr,
 		ConfigDir: filepath.Join(configHome, "opencode"), ExtraConfigDir: os.Getenv("OPENCODE_CONFIG_DIR"), ConfigFile: os.Getenv("OPENCODE_CONFIG")}
+	defer func() { stop(); oc.Shutdown() }()
 	go oc.Run(ctx)
 	started := enrich.Startup{URL: *llm, Model: *model}
 	flag.Visit(func(f *flag.Flag) {
@@ -133,13 +135,13 @@ func main() {
 		},
 		opencode.Agent: oc.Exchanges,
 	}
-	srv := &http.Server{Addr: *addr, Handler: server.New(h, k, tools, poller, history, map[string]server.Launcher{claude.Agent: transcripts}, map[string]server.PluginManager{claude.Agent: transcripts, opencode.Agent: oc}, map[string]server.Delegates{claude.Agent: transcripts}, summarizer, server.Page(page, *ui))}
+	srv := &http.Server{Addr: *addr, Handler: server.New(h, k, tools, poller, history, map[string]server.Launcher{claude.Agent: transcripts, opencode.Agent: oc}, map[string]server.PluginManager{claude.Agent: transcripts, opencode.Agent: oc}, map[string]server.Delegates{claude.Agent: transcripts}, summarizer, server.Page(page, *ui))}
 	go func() {
 		<-ctx.Done()
 		srv.Close()
 	}()
 	log.Printf("slorp listening on http://%s", *addr)
 	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
-		log.Fatal(err)
+		log.Printf("server: %v", err)
 	}
 }
