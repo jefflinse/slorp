@@ -406,13 +406,18 @@ h1 .pen:hover { color: var(--accent); background: var(--sel); }
 .qh .t { flex: 1; min-width: 0; font-size: 14.5px; font-weight: 550; line-height: 1.35; }
 .qh .t.mono { font-size: 12px; font-weight: 400; line-height: 1.45; word-break: break-word; }
 .qh .w { flex: none; display: inline-flex; align-items: center; gap: 8px; color: var(--ink3); font-size: 12px; white-space: nowrap; }
-.qh .st { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin-top: 1px; color: var(--ink2); font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+.qh .st { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; white-space: normal; margin-top: 1px; color: var(--ink2); font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
 .qh .m { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin-top: 5px; color: var(--ink3); font-size: 12px; }
 .need.qb { margin: 0; padding: 2px 14px 10px 13px; border: 0; background: none; }
 .need.qb .ask { margin-top: 2px; }
 .need.qb .replies:empty { display: none; }
 .qf { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; }
 .qf .btn.quiet { margin-left: -8px; padding: 4px 8px; font-size: 12.5px; }
+.qf .acts { display: inline-flex; align-items: center; gap: 4px; }
+.qf .acts .btn.quiet { margin-left: 0; }
+.qsaid { max-height: 300px; overflow-y: auto; margin: 2px 0 12px; padding: 0 12px 0 0; }
+.qsaid .md { font-size: 13.5px; line-height: 1.55; }
+.queue + .link { display: inline-block; margin-top: 10px; font-size: 12.5px; }
 .tg + .tg { margin-top: 20px; }
 .tg .eff { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 650; }
 .tg .eff:hover, .th button:hover { color: var(--accent); }
@@ -425,6 +430,11 @@ h1 .pen:hover { color: var(--accent); background: var(--sel); }
 .tr li.you { color: var(--ink3); }
 .tr li.you::before { content: 'You: '; }
 .tr li.more { list-style: none; color: var(--ink3); font-size: 12px; }
+.tr .lead, .tr .last, .tr .tm { margin: 3px 0 0 13px; font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+.tr .lead { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; color: var(--ink2); }
+.tr .last { color: var(--ink3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tr .last.you::before { content: 'You: '; }
+.tr .tm { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; color: var(--ink3); font-size: 12px; }
 
 /* Detail */
 .crumb { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; color: var(--ink3); font-size: 12.5px; margin-bottom: 10px; }
@@ -970,7 +980,7 @@ const VIEWS = ['home', 'efforts', 'sessions', 'pulls', 'journal', 'knowledge', '
 const nav = () => VIEWS.filter(v => v !== 'settings' && !(v === 'pulls' && pullsOff()));
 const VIEW_NAMES = { pulls: 'PRs' };
 const fresh = () => ({ view: 'home', sel: null, effortSel: null, effortOrder: null, hideEmpty: true, kbSel: 'watch', setSel: 'general', pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', effortTab: 'sessions', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto', look: 'slorp',
-  handled: {}, moved: {}, sessMoved: {}, extra: [], arrived: {}, collapsed: {}, showHandled: false, variant: {}, rawOpen: {},
+  handled: {}, moved: {}, sessMoved: {}, extra: [], arrived: {}, collapsed: {}, left: {}, showHandled: false, variant: {}, rawOpen: {},
   actSel: null, pullSel: null, journalSel: null, pullTab: 'talk', expanded: {}, kb: structuredClone(KB_SEED), seq: 100 });
 let state = fresh();
 try { Object.assign(state, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch (e) { /* storage unavailable: run in memory */ }
@@ -1028,6 +1038,18 @@ const spark = '<span class="spark" title="Written by the local model">✦</span>
 
 /* What needs the user, the most pressing first: the order Home lists it in. */
 const queue = () => activeItems().sort(byUrgency);
+/* Markdown as one line of plain text, for where only its gist fits. */
+const gist = src => String(src || '').replace(/```[\s\S]*?(```|$)/g, ' ').replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+  .replace(/^\s{0,3}(#{1,6}|>|[-*+]|\d+\.)\s+/gm, '').replace(/[*`~]+/g, '').replace(/\s+/g, ' ').trim();
+/* The open sessions whose turn it is to hear from the user, the latest to stop first: each has replied and
+   stopped, has nothing in the queue above, and has done something since the user last set it aside. */
+const yourTurn = () => !live ? [] : live.filter(s => s.status !== 'working' && s.lastReply && !liveItems.some(i => i.session?.id === s.id)
+    && !(s.roleVia === 'you' && roleById(s.role)?.attention === 'none') && state.left[s.id] !== s.activeAt)
+  .sort((a, b) => new Date(b.activeAt) - new Date(a.activeAt));
+const TURNS_SHOWN = 5, turnKey = id => 't:' + id, isTurn = key => typeof key === 'string' && key.startsWith('t:');
+const turnsShown = () => state.expanded.turns ? yourTurn() : yourTurn().slice(0, TURNS_SHOWN);
+/* Everything Home's queue can have open, top to bottom. */
+const homeOrder = () => queue().map(x => x.id).concat(turnsShown().map(s => turnKey(s.id)));
 
 let toastTimer;
 function toast(msg, undo, label = 'Undo') {
@@ -1071,7 +1093,7 @@ function announce(items) {
 }
 
 function resolve(id, how, note, opts = {}) {
-  const order = queue().map(x => x.id), i = order.indexOf(id), it = itemById(id);
+  const order = homeOrder(), i = order.indexOf(id), it = itemById(id);
   state.handled[id] = { how, note: note || '', at: Date.now(), until: opts.until || 0 };
   if (state.sel === id) state.sel = order[i + 1] || order[i - 1] || null;
   const msg = opts.msg || { answered: `Sent to ${it.src}`, dismissed: 'Dismissed', snoozed: `Snoozed ${note}` }[how];
@@ -1171,38 +1193,62 @@ function queueItem(it, open) {
     <div class="need qb">${ask}${answer}<div class="qf"><span>${where}</span>${menu}</div></div></div>`;
 }
 
-/* What needs the user, the most pressing first and open, with what has been handled behind a button. */
+/* A session whose turn it is to hear from the user, as Home lists it: a row naming it and, when open, what
+   it last said, a box to answer in, and the ways to its page or to set it aside. */
+function turnItem(s, open) {
+  const key = turnKey(s.id);
+  const head = `<button class="qh" data-act="select" data-id="${esc(key)}" aria-expanded="${open}">
+      <span class="h">${state.fluent ? `<span class="t">${esc(clip(s.label, 90))}</span>` : `<span class="mono t">${esc(rawOf(s))}</span>`}<span class="w"><span>${ago(minsSince(s.activeAt))}</span></span></span>
+      ${open ? '' : `<span class="st">${esc(clip(gist(s.lastReply), 220))}</span>`}
+      <span class="m">${kindBadge(s.agent)}${effortChip(s.effort || 'unsorted')}${roleChip(s)}${pullChip(s)}${contextUse(s, true)}</span></button>`;
+  if (!open) return `<div class="qi" style="${kindColor(s.agent)}">${head}</div>`;
+  return `<div class="qi open" style="${kindColor(s.agent)}">${head}
+    <div class="need qb"><div class="qsaid" data-scroll="turn-${esc(s.id)}">${md(s.lastReply)}</div>${answerBox(s)}
+      <div class="qf"><button class="btn quiet" data-act="journalSession" data-id="${esc(s.id)}">Open session ›</button>
+        <span class="acts"><button class="btn quiet" data-act="turnLeave" data-id="${esc(s.id)}" title="Set it aside until it does something more (e)">Not now</button>${sessionMenu(s)}</span></div></div></div>`;
+}
+
+/* Home's queue: what needs the user, the most pressing first, with what has been handled behind a button,
+   and under it the sessions whose turn it is to hear from the user. One thing in it is open at a time. */
 function homeQueue() {
-  const items = queue(), done = allItems().filter(i => !isActive(i));
-  if (!items.some(i => i.id === state.sel)) state.sel = items[0]?.id || null;
-  return `<div class="sec"><div class="label"><span>Needs you${items.length ? ` (${items.length})` : ''}</span>
+  const items = queue(), done = allItems().filter(i => !isActive(i)), turns = yourTurn(), shown = turnsShown(), order = homeOrder();
+  if (!order.includes(state.sel)) state.sel = order[0] || null;
+  const needs = !items.length && !done.length && turns.length ? '' : `<div class="sec"><div class="label"><span>Needs you${items.length ? ` (${items.length})` : ''}</span>
       ${done.length ? `<button data-act="toggleHandled" aria-expanded="${!!state.showHandled}">${done.length} handled ${state.showHandled ? '▴' : '▾'}</button>` : ''}</div>
     ${items.length ? `<div class="queue">${items.map(i => queueItem(i, i.id === state.sel)).join('')}</div>` : '<div class="none">Nothing.</div>'}
     ${done.length && state.showHandled ? `<div class="handled">${done.map(i => `<div><span class="gen">${esc(i.title)}</span><span style="white-space:nowrap">${esc(state.handled[i.id].how)} · <button class="link" data-act="restore" data-id="${i.id}">restore</button></span></div>`).join('')}</div>` : ''}</div>`;
+  const more = turns.length - TURNS_SHOWN;
+  return `${needs}${turns.length ? `<div class="sec"><div class="label"><span>Your turn (${turns.length})</span></div>
+    <div class="queue">${shown.map(s => turnItem(s, turnKey(s.id) === state.sel)).join('')}</div>
+    ${more > 0 ? `<button class="link" data-act="expand" data-id="turns">${state.expanded.turns ? 'Show fewer' : `Show ${num(more)} more`}</button>` : ''}</div>` : ''}`;
 }
 
-/* What moved today, by effort in the user's order: each session that did anything, the latest first, with
-   what the model made of its last exchanges or, where it wrote nothing, what the user said. A session that
-   closed today says how it stood. */
+/* What moved today, by effort in the user's order: each session that did anything, the latest first. An
+   open one says how it stands now and how full its context is, then where it stopped (what it asks of the
+   user, else the model's line on it, else the start of its reply) and its latest exchange (the model's line on that, else what the user
+   said). A session that closed today says how it stood. */
 const isToday = at => !!at && new Date(at).toDateString() === new Date().toDateString();
-const TODAY_LINES = 2;
 function todayGroups() {
   if (!live) return (MOCK_JOURNAL.find(d => d.day === dayKey(0))?.efforts || []).map(e => ({ effort: effortById(e.id),
     rows: e.sessions.map(s => ({ id: s.id, label: s.label, dot: ['done', 'finished'], lines: e.points.filter(p => p.sessions.includes(s.id)).map(p => [p.text, true]), more: 0 })) }));
   const rows = live.map(s => {
     const moments = (s.timeline || []).filter(m => !m.compacted && isToday(m.at));
     if (!moments.length && !isToday(s.activeAt)) return null;
-    return { id: s.id, effort: s.effort || 'unsorted', label: s.label, at: s.activeAt, dot: statusOf(s),
-      lines: moments.slice(-TODAY_LINES).reverse().map(m => m.line ? [m.line, true] : [m.prompt, false]), more: Math.max(0, moments.length - TODAY_LINES) };
+    const stopped = s.status !== 'working', asked = itemOf(s), latest = moments.at(-1), said = latest ? (latest.line ? [latest.line, true] : [latest.prompt, false]) : s.lastPrompt ? [s.lastPrompt, false] : null;
+    return { id: s.id, effort: s.effort || 'unsorted', label: s.label, at: s.activeAt, dot: statusOf(s), open: s, count: moments.length,
+      lead: !stopped ? null : asked ? [asked.title || asked.ask, false] : s.pending ? [doingNow(s), false] : s.insight?.title ? [s.insight.title, true] : s.lastReply ? [gist(s.lastReply), false] : null, said };
   }).filter(Boolean).concat(archive.filter(a => isToday(a.endedAt) && !live.some(s => s.id === a.id))
     .map(a => ({ id: a.id, effort: a.effort || 'unsorted', label: a.label, at: a.endedAt, dot: ['done', 'closed'], lines: a.title ? [[a.title, true]] : [], more: 0 })));
   return liveEfforts.concat(LIVE_UNSORTED).map(e => ({ effort: e, rows: rows.filter(r => r.effort === e.id).sort((a, b) => new Date(b.at) - new Date(a.at)) })).filter(g => g.rows.length);
 }
 function homeToday() {
   const groups = todayGroups();
+  const now = r => `${r.lead ? `<div class="lead">${r.lead[1] ? spark : ''}${esc(clip(r.lead[0], 260))}</div>` : ''}
+      ${r.said ? `<div class="last ${r.said[1] ? '' : 'you'}" title="${esc(clip(r.said[0], 400))}">${r.said[1] ? spark : ''}${esc(clip(r.said[0], 160))}</div>` : ''}
+      <div class="tm">${contextUse(r.open, true)}${r.count > 1 ? `<span>${num(r.count)} exchanges today</span>` : ''}</div>`;
   const row = r => `<div class="tr"><div class="th"><span class="dot ${r.dot[0]}" title="${r.dot[1]}"></span>${live ? `<button data-act="journalSession" data-id="${esc(r.id)}">${esc(clip(r.label, 80))}</button>` : `<span>${esc(r.label)}</span>`}
-        ${r.at ? `<span class="w">${ago(minsSince(r.at))}</span>` : ''}</div>
-      ${r.lines.length ? `<ul>${r.lines.map(([text, written]) => `<li class="${written ? '' : 'you'}">${esc(clip(text, written ? 180 : 110))}</li>`).join('')}${r.more ? `<li class="more">and ${num(r.more)} earlier</li>` : ''}</ul>` : ''}</div>`;
+        ${r.at ? `<span class="w">${r.open ? `${r.dot[1]} · ` : ''}${ago(minsSince(r.at))}</span>` : ''}</div>
+      ${r.open ? now(r) : r.lines.length ? `<ul>${r.lines.map(([text, written]) => `<li class="${written ? '' : 'you'}">${esc(clip(text, written ? 180 : 110))}</li>`).join('')}${r.more ? `<li class="more">and ${num(r.more)} earlier</li>` : ''}</ul>` : ''}</div>`;
   return `<div class="sec"><div class="label"><span>Today</span><button data-act="wrapOpen" title="Today's page of the journal (w)">Journal ›</button></div>
     ${groups.length ? groups.map(g => `<div class="tg"><button class="eff" data-act="effort" data-id="${g.effort.id}">${effortMark(g.effort, 's')}${esc(g.effort.name)}</button>${g.rows.map(row).join('')}</div>`).join('')
       : '<div class="none">Nothing yet.</div>'}</div>`;
@@ -3655,6 +3701,12 @@ const actions = {
     else { state.sel = d.id; go('home'); }
   },
   homeMore: () => { captureStart(); homeMore = !homeMore; },
+  turnLeave: d => {
+    const order = homeOrder(), key = turnKey(d.id), i = order.indexOf(key);
+    state.left[d.id] = live.find(s => s.id === d.id)?.activeAt;
+    if (state.sel === key) state.sel = order[i + 1] || order[i - 1] || null;
+    toast('Set aside until it does something more', () => { delete state.left[d.id]; state.sel = key; });
+  },
   modelNoticeOff: () => { state.modelNoticeOff = true; },
   installMod: () => {
     if (installing || updating) return false;
@@ -4053,7 +4105,7 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'w') openToday();
   else if (e.key === '/' && live) openSearch();
   else if (att && (e.key === 'j' || e.key === 'k')) {
-    const order = queue().map(x => x.id), i = order.indexOf(state.sel) + (e.key === 'j' ? 1 : -1);
+    const order = homeOrder(), i = order.indexOf(state.sel) + (e.key === 'j' ? 1 : -1);
     if (order[i]) state.sel = order[i];
   }
   else if (state.view === 'sessions' && (e.key === 'j' || e.key === 'k')) {
@@ -4069,8 +4121,9 @@ document.addEventListener('keydown', e => {
     const order = journalShown().map(d => d.day), i = order.indexOf(state.journalSel) + (e.key === 'j' ? 1 : -1);
     if (order[i]) state.journalSel = order[i];
   }
+  else if (att && isTurn(state.sel) && e.key === 'e') actions.turnLeave({ id: state.sel.slice(2) });
   else if (att && state.sel && e.key === 'e') actions.dismiss({ id: state.sel });
-  else if (att && state.sel && e.key === 's') actions.snooze({ id: state.sel, for: 'hour' });
+  else if (att && state.sel && !isTurn(state.sel) && e.key === 's') actions.snooze({ id: state.sel, for: 'hour' });
   else return;
   e.preventDefault();
   save(); render();

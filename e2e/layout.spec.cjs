@@ -12,7 +12,7 @@ const session = (id, effort, label, status, mins) => ({ id, agent: 'claude', kin
 
 async function world(t, hash) {
   const data = {
-    sessions: [session('quiet', 'solo', 'Tidy the importer', 'idle', 8), session('asks', 'pair', 'Wire the outbox', 'waiting', 2), session('busy', 'pair', 'Benchmark the loader', 'working', 5),
+    sessions: [{ ...session('quiet', 'solo', 'Tidy the importer', 'idle', 8), lastReply: '**Done.** The importer is tidy.\n\n- Want the tests next?' }, session('asks', 'pair', 'Wire the outbox', 'waiting', 2), session('busy', 'pair', 'Benchmark the loader', 'working', 5),
       ...Array.from({ length: 8 }, (_, i) => session(`w${i}`, 'fleet', `Worker ${i + 1}`, 'idle', 10 + i))],
     efforts: [...['solo', 'pair', 'fleet', 'bare'].map(id => ({ id, name: id, about: '', dirs: [`/work/${id}`] })),
       { id: 'past', name: 'past', about: '', dirs: ['/work/past'], activeAt: ago(2880) }],
@@ -140,7 +140,13 @@ test('Home says what moved today, by effort and the latest first', async t => {
   await groups.first().waitFor()
   assert.deepEqual(await groups.locator('.eff').allInnerTexts(), ['S\nsolo', 'P\npair', 'F\nfleet'])
   assert.deepEqual(await groups.nth(1).locator('.th button').allInnerTexts(), ['Wire the outbox', 'Benchmark the loader'])
-  assert.deepEqual(await groups.nth(1).locator('.tr').first().locator('li').allInnerTexts(), ['Carry on'])
+  const pair = groups.nth(1).locator('.tr'), solo = groups.nth(0).locator('.tr')
+  assert.match(await pair.nth(1).locator('.th .w').innerText(), /^working · /)
+  assert.equal(await pair.nth(1).locator('.lead').count(), 0)
+  assert.equal(await pair.nth(1).locator('.last').innerText(), 'Carry on')
+  assert.match(await solo.locator('.th .w').innerText(), /^idle · /)
+  assert.equal(await solo.locator('.lead').innerText(), 'Done. The importer is tidy. Want the tests next?')
+  assert.equal(await solo.locator('.tm').innerText(), '25%')
   await groups.nth(1).locator('.th button').nth(1).click()
   assert.match(await page.locator('.pane.detail h1').innerText(), /^Benchmark the loader/)
 })
@@ -159,4 +165,24 @@ test('Home starts a session from its prompt box, in the directory of the effort 
   const [url, body] = page.posts.find(([url]) => url === '/api/sessions')
   assert.equal(url, '/api/sessions')
   assert.deepEqual([body.prompt, body.dir, body.effort], ['Add a dead-letter queue', '/work/pair', 'pair'])
+})
+
+test('Home lists a stopped session as your turn, with what it last said, a box to answer in and a way to set it aside', async t => {
+  const page = await world(t, 'home')
+  const turn = page.locator('.qi').filter({ hasText: 'Tidy the importer' })
+  await turn.waitFor()
+  assert.deepEqual(await page.locator('.home .sec > .label > span:first-child').allInnerTexts(), ['NEEDS YOU (1)', 'YOUR TURN (1)', 'TODAY'])
+  assert.equal(await page.locator('.qi').count(), 2)
+  assert.equal(await turn.locator('.st').innerText(), 'Done. The importer is tidy. Want the tests next?')
+  await page.keyboard.press('j')
+  assert.equal(await turn.locator('.qsaid b').innerText(), 'Done.')
+  await turn.getByPlaceholder('Say something to this session…').fill('Yes, the tests')
+  await turn.getByRole('button', { name: 'Send' }).click()
+  await page.waitForFunction(() => document.querySelector('.qi.open textarea')?.value === '')
+  assert.deepEqual(page.posts.find(([url]) => url === '/api/sessions/quiet/reply'), ['/api/sessions/quiet/reply', { text: 'Yes, the tests' }])
+  await turn.getByRole('button', { name: 'Not now' }).click()
+  await turn.waitFor({ state: 'detached' })
+  assert.equal(await page.locator('.qi.open .qh .t').innerText(), 'Which retry policy?')
+  await page.getByRole('button', { name: 'Undo' }).click()
+  await turn.locator('.qsaid').waitFor()
 })
