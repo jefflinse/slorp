@@ -11,9 +11,19 @@ An OpenCode plugin that connects the sessions of an OpenCode instance to the loc
 - Repeats the current state on every poll and restores outstanding prompts after Slorp restarts. Failed reply acknowledgements and prompt settlements are retried without resubmitting your reply.
 - Starts, stops and reopens conversations from Slorp, with choices drawn from the selected directory's OpenCode configuration.
 
-OpenCode's session list includes saved conversations, rather than a roster of open sessions, so the plugin is Slorp's view of what is live. In the local terminal, a conversation appears as soon as you open or resume it, even while idle. Opening it preserves the original exchange timestamps. Conversations observed by an instance remain listed until its bridge stops reporting; they leave about 30 seconds later. Unopened saved conversations are not listed.
+OpenCode's session list includes saved conversations, rather than a roster of open sessions, so the plugin is Slorp's view of what is live. In a local terminal or `opencode attach`, a conversation appears as soon as you open or resume it, even while idle. Opening it preserves the original exchange timestamps. Conversations observed by an instance remain listed until its bridge stops reporting; they leave about 30 seconds later. Unopened saved conversations are not listed.
 
-The terminal companion announces the selected session to the server bridge over an in-process channel. This supports the normal local `opencode` terminal; `opencode attach` uses a separate server process and currently still needs activity for discovery. Session usage includes descendants once; each subagent's usage counts only its own work. Provider account usage limits are not reported.
+The terminal companion announces its selected session through OpenCode's authenticated server client, supporting both local terminals and separate-process `opencode attach`. Session usage includes descendants once; each subagent's usage counts only its own work. Provider account usage limits are not reported.
+
+## Attached terminals
+
+Plugin **0.5.0** adds idle discovery for `opencode attach`. The attached OpenCode server needs the Slorp server plugin, and the terminal needs its TUI companion. Update both installations and restart their processes. The server bridge sends sessions to its configured Slorp address; on a remote host, that address must be reachable from the server.
+
+Every two seconds, the companion publishes a namespaced presence marker through the same OpenCode client used by the terminal, preserving attach credentials and server-side directory/workspace routing. Each terminal has its own identity and sequence, so switching conversations, returning home, and reconnecting can be handled independently. Server-side checks verify the selected conversation and its parent chain before discovery. Managed runtimes continue to admit only their privately assigned root.
+
+Presence uses `tui.publish` with the reserved `slorp.presence.v1:` command prefix. Stock OpenCode ignores this unknown command for navigation while the server bridge reads it as presence. Custom catch-all command handlers should leave that prefix alone. The companion indicator expires after about ten seconds without validated presence. Previously observed conversations keep the existing server-lifetime behavior: closing or switching an attached terminal does not retire them while the server bridge is still reporting.
+
+This is verified with the standard OpenCode 1.19.6 TUI. The distinct `attach --mini` interface is not covered.
 
 ## Start, stop and reopen
 
@@ -104,9 +114,10 @@ python3 integrations/opencode/history-smoke.py --overflow
 python3 integrations/opencode/history-smoke.py --overflow --replay-last
 python3 integrations/opencode/subagents-smoke.py
 python3 integrations/opencode/lifecycle-smoke.py
+python3 integrations/opencode/attach-smoke.py
 SLORP_NATIVE_TEST=1 go test -race ./internal/opencode -run Native -count=1
 ```
 
 Run these from the repository root. The first builds a standalone Slorp executable, installs the bundled plugin into isolated configuration, opens two idle conversations in pseudoterminals, and checks discovery, restart recovery and retirement. The history tests import synthetic native-format transcripts into an isolated OpenCode database, export them with the real CLI, and backfill twice through Slorp's HTTP API. They cover ordinary continuation and overflow replay, including a large export. The subagent test imports a nested task tree and uses native OpenCode API updates to verify live completion, background results, usage, restart recovery and archived reports without OpenCode running.
 
-The lifecycle smoke uses a loopback fixture provider to exercise actual prompts, replies, stop, same-ID reopening and process cleanup. Native Go tests compare ordinary and managed configuration behavior, including instructions, skills, custom tools and defaults. All use isolated OpenCode/Slorp data; no paid provider calls are made. Set `SLORP_SMOKE_KEEP=1` to retain Python smoke diagnostics and `TMPDIR` to choose their temporary parent.
+The lifecycle smoke uses a loopback fixture provider to exercise actual prompts, replies, stop, same-ID reopening and process cleanup. The attach smoke runs an authenticated server and separate terminal processes, checking idle discovery, switching/home, independent selections, reconnect recovery, unchanged native records, and retirement when the server stops. Native Go tests compare ordinary and managed configuration behavior, including instructions, skills, custom tools and defaults. All use isolated OpenCode/Slorp data; no paid provider calls are made. Set `SLORP_SMOKE_KEEP=1` to retain Python smoke diagnostics and `TMPDIR` to choose their temporary parent.

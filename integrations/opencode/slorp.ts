@@ -1,11 +1,11 @@
 import type { Plugin } from '@opencode-ai/plugin'
-import { BroadcastChannel } from 'node:worker_threads'
+import { parsePresence, presenceID, PresenceTracker, type PresenceLease } from './presence.ts'
 import { isDeepStrictEqual } from 'node:util'
 import { constants } from 'node:fs'
 import { open } from 'node:fs/promises'
 
 const AGENT = 'opencode'
-const VERSION = '0.4.0'
+const VERSION = '0.5.0'
 const DEFAULT_URL = 'http://127.0.0.1:4747'
 const POLL_MS = 2000
 const REQUEST_MS = 5000
@@ -37,6 +37,8 @@ type Info = {
   parentID?: string
   title?: string
   directory?: string
+  projectID?: string
+  workspaceID?: string
   agent?: string
   model?: { id?: string; providerID?: string; variant?: string }
   time?: { created: number; updated: number }
@@ -248,7 +250,7 @@ function describe(request: { patterns?: string[]; metadata?: Record<string, unkn
  * model and variant. Permissions and questions, including subagents', can
  * be answered in Slorp or OpenCode; Slorp only ever permits a single call.
  */
-export const Slorp: Plugin = async ({ client, directory }, options) => {
+export const Slorp: Plugin = async ({ client, directory, project }, options) => {
   const base = (process.env.SLORP_URL || String(options?.url ?? DEFAULT_URL)).replace(/\/+$/, '')
   const managedFile = process.env.SLORP_MANAGED_FILE
   const managedRun = process.env.SLORP_MANAGED_RUN
@@ -273,17 +275,85 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
   let settling = false
   let acknowledging = false
   const signal = (activity?: AbortSignal) => AbortSignal.any([stopped.signal, AbortSignal.timeout(REQUEST_MS), ...(activity ? [activity] : [])])
-  const presence = new BroadcastChannel('slorp.opencode.presence')
+  const presence = new PresenceTracker()
+  const presencePending = new Set<string>()
   const discovering = new Set<string>()
-  let tuiSeenAt: number | undefined
   let hookMessage = 0
   let eventSequence = 0
   let selectionRevision = 0
-  presence.unref()
-  presence.onmessage = ({ data }) => {
-    if (data?.directory !== directory || stopped.signal.aborted) return
-    tuiSeenAt = Date.now()
-    if (!managed && typeof data.sessionId === 'string') void enqueue(data.sessionId, () => discover(data.sessionId)).catch(() => {})
+
+  function receivePresence(command: unknown) {
+    const payload = parsePresence(command)
+    if (!payload || stopped.signal.aborted) return
+    const lease = presence.accept(payload)
+    if (!lease || payload.directory !== directory || payload.projectID && project?.id && payload.projectID !== project.id) return
+    if (!payload.sessionId) {
+      if (!managed) presence.confirm(lease)
+      return
+    }
+    if (managed && !managedOpen()) return
+    if (presencePending.has(payload.terminalId)) return
+    presencePending.add(payload.terminalId)
+    void enqueue(payload.sessionId, () => discoverPresence(lease)).catch(() => {
+      // Lookup failures retry on the terminal's next advertisement.
+    }).finally(() => { presencePending.delete(payload.terminalId) })
+  }
+
+  async function discoverPresence(lease: PresenceLease) {
+    const p = lease.payload
+    const current = () => !stopped.signal.aborted && presence.current(lease)
+    const records: { info: Info; revision: number }[] = []
+    const seen = new Set<string>()
+    let id = p.sessionId!
+    while (current() && seen.size <= 64) {
+      if (!presenceID(id) || seen.has(id) || deletedSessions.has(id)) return
+      seen.add(id)
+      const revision = selectionRevision
+      const query = { directory, ...(p.workspaceID ? { workspace: p.workspaceID } : {}) }
+      const res = await client.session.get({ path: { id }, query, signal: signal(lease.controller.signal) })
+      const info: Info | undefined = res.data
+      if (!current() || res.error || !info || info.id !== id || info.directory !== directory ||
+        !presenceID(info.projectID) || project?.id && info.projectID !== project.id ||
+        p.projectID && info.projectID !== p.projectID || info.workspaceID !== p.workspaceID ||
+        records.length && info.projectID !== records[0]!.info.projectID) return
+      records.push({ info, revision })
+      if (info.parentID) { id = info.parentID; continue }
+      const root = id
+      const activate = async () => {
+        if (!current() || records.some(({ info }) => deletedSessions.has(info.id) || sessions.get(info.id)?.deleted)) return
+        if (managed) {
+          if (managedOpen(root)) presence.confirm(lease, root)
+          return
+        }
+        let s = sessions.get(root)
+        const wasLive = s?.isLive
+        if (!s?.isLive) {
+          for (const { info, revision } of records) {
+            if (!sessions.get(info.id)?.isLive) learn(info, undefined, revision)
+          }
+          s = sessions.get(root)!
+          await hydrate(root, s)
+          if (!current() || s.deleted || s.parent || !s.hydrated) return
+          if (!s.isLive) {
+            const statuses = await client.session.status({ signal: signal(lease.controller.signal) })
+            if (!current() || statuses.error || s.deleted || s.parent) return
+            if (!s.isLive) {
+              const status = statuses.data?.[root]
+              s.isBusy = status?.type === 'busy' || status?.type === 'retry'
+              s.status = s.isBusy ? 'working' : 'idle'
+              s.waitingFor = status?.type === 'retry' ? `Retrying: ${status.message}` : ''
+              s.isLive = true
+            }
+          }
+        }
+        if (!current() || !localRoot(root)) return
+        presence.confirm(lease, root)
+        if (!wasLive) await poll()
+      }
+      if (root === p.sessionId) await activate()
+      else await enqueue(root, activate)
+      return
+    }
   }
 
   function managedOpen(id?: string) {
@@ -890,7 +960,7 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
           agent: AGENT, sessionId: id, cwd: s.cwd, title: s.title, branch, snapshot: snapshot(id, s),
           ...(agents.length ? { agents } : {}),
           pluginVersion: VERSION, pluginRevision: String(options?.revision ?? ''),
-          pluginTui: tuiSeenAt !== undefined && Date.now() - tuiSeenAt < 10_000,
+          pluginTui: presence.fresh(id),
         })
         return { claimed }
       })
@@ -1113,7 +1183,7 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
   return {
     dispose: async () => {
       clearInterval(timer)
-      presence.close()
+      presence.dispose()
       if (managed) stopped.abort()
       for (const id of asks.keys()) settle(id)
       stopped.abort()
@@ -1173,9 +1243,10 @@ export const Slorp: Plugin = async ({ client, directory }, options) => {
     },
 
     event: async ({ event }) => {
-      const sequence = ++eventSequence
       const e = event as { type: string; properties?: Record<string, any> }
       const p = e.properties ?? {}
+      if (e.type === 'tui.command.execute') { receivePresence(p.command); return }
+      const sequence = ++eventSequence
       if (['permission.replied', 'question.replied', 'question.rejected'].includes(e.type)) { settle(p.requestID); return }
       const pendingAtIdle = e.type === 'session.idle' ? [...asks.entries()] : []
       const key = p.sessionID ?? p.info?.sessionID ?? p.info?.id ?? p.part?.sessionID ?? ''

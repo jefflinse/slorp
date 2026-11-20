@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { test, type TestContext } from 'node:test'
 import { Slorp } from './slorp.ts'
-import { BroadcastChannel } from 'node:worker_threads'
+import { randomUUID } from 'node:crypto'
+import { PRESENCE_PREFIX } from './presence.ts'
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -24,7 +25,10 @@ async function world(t: TestContext, options?: Record<string, unknown>, managedE
     isDown: false,
     infos: {} as Record<string, object>,
     infoGates: {} as Record<string, Promise<void>>,
+    infoWait: undefined as ((id: string, signal: AbortSignal) => Promise<void>) | undefined,
     lookups: [] as string[],
+    lookupRequests: [] as any[],
+    infoErrors: {} as Record<string, unknown>,
     messages: {} as Record<string, Message[]>,
     prompted: [] as any[],
     promptError: undefined as unknown,
@@ -66,11 +70,13 @@ async function world(t: TestContext, options?: Record<string, unknown>, managedE
   const client = {
     session: {
       status: async () => { const data = structuredClone(w.statuses); await w.statusGate; return { data } },
-      get: async ({ path }: any) => {
+      get: async ({ path, ...request }: any) => {
         w.lookups.push(path.id)
-        const data = structuredClone(w.infos[path.id])
+        w.lookupRequests.push({ path, ...request })
+        const data = w.infos[path.id] && structuredClone({ directory: '/work/proj', projectID: 'project', ...w.infos[path.id] })
         await w.infoGates[path.id]
-        return { data }
+        await w.infoWait?.(path.id, request.signal)
+        return { data, error: w.infoErrors[path.id] }
       },
       children: async ({ path }: any) => {
         w.childLookups.push(path.id)
@@ -101,7 +107,7 @@ async function world(t: TestContext, options?: Record<string, unknown>, managedE
   }
 
   t.mock.timers.reset()
-  t.mock.timers.enable({ apis: ['setInterval', 'Date'] })
+  t.mock.timers.enable({ apis: ['setInterval', 'setTimeout', 'Date'] })
   const controlTicks: Promise<unknown>[] = []
   if (managedEnv.file !== undefined || managedEnv.run !== undefined) {
     const interval = globalThis.setInterval
@@ -119,7 +125,7 @@ async function world(t: TestContext, options?: Record<string, unknown>, managedE
   let hooks: any
   try {
     setEnv(managedEnv.file, managedEnv.run)
-    hooks = await Slorp({ client, directory: '/work/proj' } as any, options)
+    hooks = await Slorp({ client, directory: '/work/proj', project: { id: 'project' } } as any, options)
   } finally {
     setEnv(oldFile, oldRun)
   }
@@ -133,16 +139,19 @@ async function world(t: TestContext, options?: Record<string, unknown>, managedE
     await hooks.event({ event: { type, properties } })
     await settle()
   }
+  const terminalId = randomUUID()
+  let sequence = 0
+  const announce = (payload: object) => emit('tui.command.execute', { command: PRESENCE_PREFIX + JSON.stringify({
+    version: 1, terminalId, sequence: ++sequence, directory: '/work/proj', projectID: 'project', ...payload,
+  }) })
   return {
     w,
     settle,
     emit,
+    announce,
     dispatch: (type: string, properties: object) => hooks.event({ event: { type, properties } }),
     open: async (sessionId?: string, directory = '/work/proj') => {
-      const channel = new BroadcastChannel('slorp.opencode.presence')
-      t.after(() => channel.close())
-      channel.postMessage({ directory, sessionId })
-      await settle()
+      await announce({ directory, sessionId })
     },
     tick: async (ms = 2000) => {
       t.mock.timers.tick(ms)
@@ -154,6 +163,10 @@ async function world(t: TestContext, options?: Record<string, unknown>, managedE
       await settle()
     },
     dispose: () => hooks.dispose(),
+    restart: async () => {
+      await hooks.dispose()
+      hooks = await Slorp({ client, directory: '/work/proj', project: { id: 'project' } } as any, options)
+    },
     params: async (sessionID: string, context: number) => hooks['chat.params']({ sessionID, model: { limit: { context } } }),
     sayWith: async (input: object, message: object, ...parts: Message['parts']) => {
       await hooks['chat.message']({ sessionID: SID, ...input }, { message, parts })
@@ -165,6 +178,33 @@ async function world(t: TestContext, options?: Record<string, unknown>, managedE
 const text = (t: string, more: object = {}) => ({ type: 'text', text: t, ...more })
 const assistant = (...parts: Message['parts']): Message => ({ info: { role: 'assistant' }, parts })
 const user = (t: string): Message => ({ info: { role: 'user' }, parts: [text(t)] })
+
+async function timedPresenceWorld(t: TestContext) {
+  const o = await world(t)
+  const delays: Record<string, number> = {}
+  const reads: { id: string; signal: AbortSignal; completed: boolean; aborted: boolean }[] = []
+  t.mock.method(AbortSignal, 'timeout', (ms: number) => {
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(new DOMException('Request timed out', 'TimeoutError')), ms)
+    return controller.signal
+  })
+  o.w.infoWait = async (id, signal) => {
+    if (!delays[id]) return
+    const read = { id, signal, completed: false, aborted: false }
+    reads.push(read)
+    await new Promise<void>((resolve, reject) => {
+      const abort = () => { clearTimeout(timer); read.aborted = true; reject(signal.reason) }
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', abort)
+        read.completed = true
+        resolve()
+      }, delays[id])
+      if (signal.aborted) abort()
+      else signal.addEventListener('abort', abort, { once: true })
+    })
+  }
+  return { ...o, delays, reads }
+}
 
 async function managedWorld(t: TestContext) {
   const dir = await mkdtemp(join(tmpdir(), 'slorp-managed-'))
@@ -340,7 +380,7 @@ test('managed activation reports a promptless idle root with its original timest
   assert.deepEqual(o.w.prompted, [])
   await o.tick()
   await o.open(SID)
-  assert.deepEqual(o.w.lookups, [SID])
+  assert.deepEqual(o.w.lookups, [SID, SID])
   assert.equal(o.w.to('/api/bridge/poll').length, 2)
   assert.ok(o.w.posts.every(p => p.headers.get('X-Slorp-Run') === o.run), 'environment is captured at plugin creation, not reread on a tick')
 })
@@ -1543,7 +1583,7 @@ test('opening an idle saved conversation reports it without manufacturing a new 
   assert.equal(report.snapshot.lastReply, 'original answer')
   assert.deepEqual(o.w.to('/api/bridge/event'), [])
   await o.open(SID)
-  assert.equal(o.w.lookups.length, 1)
+  assert.equal(o.w.lookups.length, 2, 'repeated presence validates ownership without relearning live state')
 })
 
 test('presence is local to a directory and only discovers the selected conversation', async t => {
@@ -1589,6 +1629,344 @@ test('the home screen heartbeat keeps terminal companion status without discover
   assert.equal(o.w.polls().length, 3)
 })
 
+test('presence validates selected and ancestor scope before learning or activating anything', async t => {
+  const cases = [
+    { id: 'ses_wrong' }, { directory: '/foreign' }, { directory: undefined },
+    { projectID: 'foreign' }, { projectID: undefined }, { workspaceID: 'wrk_foreign' },
+  ]
+  for (const parent of [false, true]) for (const bad of cases) await t.test(`${parent ? 'parent' : 'selected'} ${JSON.stringify(bad)}`, async t => {
+    const o = await world(t)
+    o.w.infos[SID] = { id: SID, ...(parent ? { parentID: 'ses_parent' } : bad) }
+    o.w.infos.ses_parent = { id: 'ses_parent', ...bad }
+    await o.open(SID)
+    await o.tick()
+    assert.deepEqual(o.w.posts, [])
+    assert.deepEqual(o.w.childLookups, [])
+  })
+})
+
+test('presence rejects missing ancestors, cycles, excessive depth and failed lookups without phantom roots', async t => {
+  for (const kind of ['missing', 'cycle', 'depth', 'error']) await t.test(kind, async t => {
+    const o = await world(t)
+    o.w.infos[SID] = { id: SID, parentID: 'ses_parent' }
+    if (kind === 'cycle') o.w.infos.ses_parent = { id: 'ses_parent', parentID: SID }
+    if (kind === 'depth') {
+      o.w.infos[SID] = { id: SID, parentID: 'ses_0' }
+      for (let i = 0; i < 70; i++) o.w.infos[`ses_${i}`] = { id: `ses_${i}`, parentID: `ses_${i + 1}` }
+    }
+    if (kind === 'error') {
+      o.w.infos[SID] = { id: SID }
+      o.w.infoErrors[SID] = { message: 'unavailable' }
+    }
+    await o.open(SID)
+    await o.tick()
+    assert.deepEqual(o.w.posts, [])
+    assert.ok(o.w.lookups.length <= 65)
+    delete o.w.infoErrors[SID]
+    o.w.infos[SID] = { id: SID }
+    await o.open(SID)
+    assert.deepEqual(o.w.polls().map(p => p.sessionId), [SID], 'failed resolution did not learn a phantom parent chain')
+  })
+})
+
+test('presence carries explicit workspace routing and resolves descendants only to their owned root', async t => {
+  const o = await world(t)
+  o.w.infos.ses_child = { id: 'ses_child', parentID: SID, workspaceID: 'wrk_same' }
+  o.w.infos[SID] = { id: SID, workspaceID: 'wrk_same' }
+  await o.announce({ sessionId: 'ses_child', workspaceID: 'wrk_same' })
+  assert.deepEqual(o.w.polls().map(p => p.sessionId), [SID])
+  assert.ok(o.w.lookupRequests.every(r => r.query.directory === '/work/proj' && r.query.workspace === 'wrk_same'))
+  assert.equal(o.w.to('/api/bridge/poll')[0].pluginTui, true)
+})
+
+test('duplicate and out-of-order sequences cannot change selection or refresh companion freshness', async t => {
+  const o = await world(t)
+  const terminalId = randomUUID()
+  o.w.infos[SID] = { id: SID }
+  o.w.infos.ses_other = { id: 'ses_other' }
+  await o.announce({ terminalId, sequence: 3, sessionId: SID })
+  await o.announce({ terminalId, sequence: 2, sessionId: 'ses_other' })
+  await o.announce({ terminalId, sequence: 3, sessionId: 'ses_other' })
+  assert.deepEqual(o.w.lookups, [SID])
+  await o.tick(10000)
+  await o.announce({ terminalId, sequence: 1, sessionId: 'ses_other' })
+  await o.tick()
+  assert.equal(o.w.to('/api/bridge/poll').at(-1).pluginTui, false)
+  assert.ok(o.w.polls().every(p => p.sessionId === SID))
+})
+
+test('identical two-second heartbeats allow an abort-aware 2.1-second session lookup to activate', async t => {
+  const o = await timedPresenceWorld(t)
+  o.w.infos[SID] = { id: SID, time: { created: 100, updated: 150 } }
+  o.delays[SID] = 2100
+  await o.open(SID)
+  await o.tick(2000)
+  await o.open(SID)
+  await o.tick(100)
+  assert.equal(o.reads[0]!.aborted, false)
+  assert.equal(o.reads[0]!.completed, true)
+  assert.deepEqual(o.w.lookups, [SID])
+  const poll = o.w.to('/api/bridge/poll').at(-1)
+  assert.equal(poll.sessionId, SID)
+  assert.equal(poll.pluginTui, true)
+  assert.equal(poll.snapshot.activeAt, 150)
+  assert.deepEqual(o.w.to('/api/bridge/event'), [])
+})
+
+test('identical heartbeats allow an ancestor walk longer than the heartbeat interval to complete', async t => {
+  const o = await timedPresenceWorld(t)
+  o.w.infos.ses_child = { id: 'ses_child', parentID: SID }
+  o.w.infos[SID] = { id: SID }
+  o.delays.ses_child = o.delays[SID] = 1400
+  await o.open('ses_child')
+  await o.tick(1400)
+  assert.deepEqual(o.w.lookups, ['ses_child', SID])
+  await o.tick(600)
+  await o.open('ses_child')
+  await o.tick(800)
+  assert.ok(o.reads.every(r => r.completed && !r.aborted))
+  assert.deepEqual(o.w.polls().map(p => p.sessionId), [SID])
+  assert.equal(o.w.to('/api/bridge/poll').at(-1).pluginTui, true)
+})
+
+test('slow revalidation completes amid heartbeats and renews companion freshness beyond its original lease', async t => {
+  const o = await timedPresenceWorld(t)
+  o.w.infos[SID] = { id: SID }
+  await o.open(SID)
+  o.delays[SID] = 2100
+  await o.tick(2000)
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await o.open(SID)
+    await o.tick(2000)
+    await o.open(SID)
+    await o.tick(100)
+    assert.equal(o.reads[attempt]!.completed, true)
+    assert.equal(o.reads[attempt]!.aborted, false)
+    assert.equal(o.w.to('/api/bridge/poll').at(-1).pluginTui, true)
+    if (attempt < 2) await o.tick(1900)
+  }
+  assert.equal(Date.now(), 12100)
+  assert.deepEqual(o.w.lookups, [SID, SID, SID, SID])
+})
+
+test('two terminals renew independently while both have slow abort-aware validation in flight', async t => {
+  const o = await timedPresenceWorld(t)
+  const first = randomUUID(), second = randomUUID()
+  o.w.infos[SID] = { id: SID }
+  o.w.infos.ses_other = { id: 'ses_other' }
+  o.delays[SID] = 2100
+  o.delays.ses_other = 3100
+  const heartbeat = async () => {
+    await o.announce({ terminalId: first, sessionId: SID })
+    await o.announce({ terminalId: second, sessionId: 'ses_other' })
+  }
+  await heartbeat()
+  await o.tick(2000)
+  await heartbeat()
+  await o.tick(100)
+  assert.ok(o.w.polls().some(p => p.sessionId === SID))
+  await o.tick(1000)
+  assert.ok(o.w.polls().some(p => p.sessionId === 'ses_other'))
+  await o.tick(900)
+  await heartbeat()
+  await o.tick(2000)
+  await heartbeat()
+  await o.tick(100)
+  await o.tick(1000)
+  assert.equal(o.reads.length, 4)
+  assert.ok(o.reads.every(r => r.completed && !r.aborted))
+  for (const id of [SID, 'ses_other']) assert.equal(o.w.to('/api/bridge/poll').findLast(p => p.sessionId === id).pluginTui, true)
+})
+
+test('heartbeat renewal never extends the five-second request timeout and a later heartbeat retries', async t => {
+  const o = await timedPresenceWorld(t)
+  o.w.infos[SID] = { id: SID }
+  o.delays[SID] = 60000
+  await o.open(SID)
+  await o.tick(2000)
+  await o.open(SID)
+  await o.tick(2000)
+  await o.open(SID)
+  await o.tick(999)
+  assert.equal(o.reads[0]!.aborted, false)
+  await o.tick(1)
+  assert.equal(o.reads[0]!.aborted, true)
+  assert.equal(o.reads[0]!.signal.reason.name, 'TimeoutError')
+  assert.deepEqual(o.w.posts, [])
+  o.delays[SID] = 2100
+  await o.tick(1000)
+  await o.open(SID)
+  await o.tick(2000)
+  await o.open(SID)
+  await o.tick(100)
+  assert.equal(o.reads.length, 2)
+  assert.equal(o.reads[1]!.completed, true)
+  assert.equal(o.reads[1]!.aborted, false)
+  assert.deepEqual(o.w.polls().map(p => p.sessionId), [SID])
+})
+
+test('superseded, expired and disposed presence cannot activate after pending reads', async t => {
+  for (const stage of ['lookup', 'history', 'status']) for (const supersede of ['home', 'switch', 'foreign', 'expiry', 'dispose']) {
+    await t.test(`${stage}: ${supersede}`, async t => {
+      const o = await world(t)
+      o.w.infos[SID] = { id: SID }
+      o.w.infos.ses_other = { id: 'ses_other' }
+      let release = () => {}
+      const gate = new Promise<void>(resolve => { release = resolve })
+      if (stage === 'lookup') o.w.infoGates[SID] = gate
+      if (stage === 'history') o.w.messageGate = gate
+      if (stage === 'status') o.w.statusGate = gate
+      await o.open(SID)
+      if (supersede === 'home') await o.open()
+      if (supersede === 'switch') await o.open('ses_other')
+      if (supersede === 'foreign') await o.open(SID, '/foreign')
+      if (supersede === 'expiry') await o.tick(10000)
+      if (supersede === 'dispose') await o.dispose()
+      release()
+      await o.settle()
+      await o.tick()
+      assert.deepEqual(o.w.posts, [])
+      if (supersede === 'switch') {
+        await o.open('ses_other')
+        assert.deepEqual(o.w.polls().map(p => p.sessionId), ['ses_other'])
+      }
+    })
+  }
+})
+
+test('two terminals discover independently while one switches home during another pending lookup', async t => {
+  const o = await world(t)
+  const first = randomUUID(), second = randomUUID()
+  o.w.infos[SID] = { id: SID }
+  o.w.infos.ses_other = { id: 'ses_other' }
+  let release = () => {}
+  o.w.infoGates[SID] = new Promise(resolve => { release = resolve })
+  await o.announce({ terminalId: first, sessionId: SID })
+  await o.announce({ terminalId: second, sessionId: 'ses_other' })
+  await o.announce({ terminalId: second })
+  release()
+  await o.settle()
+  assert.deepEqual(new Set(o.w.polls().map(p => p.sessionId)), new Set([SID, 'ses_other']))
+  await o.tick(8000)
+  await o.announce({ terminalId: first, sessionId: SID })
+  await o.tick(4000)
+  const polls = o.w.to('/api/bridge/poll')
+  assert.equal(polls.findLast(p => p.sessionId === SID).pluginTui, true)
+  assert.equal(polls.findLast(p => p.sessionId === 'ses_other').pluginTui, false)
+  assert.ok(polls.some(p => p.sessionId === 'ses_other'), 'expiry never retires observed roots')
+})
+
+test('repeated presence and lease expiry preserve native idle timestamps and live error, retry and busy state', async t => {
+  for (const state of ['idle', 'error', 'retry', 'busy']) await t.test(state, async t => {
+    const o = await world(t)
+    o.w.infos[SID] = { id: SID, time: { created: 100, updated: 150 }, agent: 'build' }
+    await o.open(SID)
+    if (state === 'error') await o.emit('session.error', { sessionID: SID, error: { name: 'APIError', data: { message: 'failed' } } })
+    if (state === 'retry' || state === 'busy') await o.emit('session.status', { sessionID: SID, status: { type: state, message: 'rate limited' } })
+    await o.tick()
+    const before = o.w.to('/api/bridge/poll').at(-1).snapshot
+    o.w.infos[SID] = { id: SID, time: { created: 9000, updated: 9999 }, agent: 'stale' }
+    o.w.statuses[SID] = { type: state === 'idle' ? 'busy' : 'idle' }
+    await o.open(SID)
+    await o.tick(12000)
+    await o.tick()
+    const after = o.w.to('/api/bridge/poll').at(-1)
+    assert.deepEqual(after.snapshot, before)
+    assert.equal(after.pluginTui, false)
+    assert.deepEqual(o.w.prompted, [])
+    assert.ok(!o.w.to('/api/bridge/event').some(e => e.type === 'turn.start'))
+  })
+})
+
+test('managed presence cannot activate before control or refresh companion status for a foreign root or home', async t => {
+  const o = await managedWorld(t)
+  o.w.infos[SID] = { id: SID }
+  o.w.infos.ses_other = { id: 'ses_other' }
+  o.w.infos.ses_child = { id: 'ses_child', parentID: SID }
+  await o.open(SID)
+  assert.deepEqual(o.w.lookups, [])
+  await o.control()
+  await o.tick()
+  for (const sessionId of ['ses_other', undefined]) {
+    await o.open(sessionId)
+    await o.tick()
+    assert.equal(o.w.to('/api/bridge/poll').at(-1).pluginTui, false)
+  }
+  await o.open('ses_child')
+  await o.tick()
+  assert.equal(o.w.to('/api/bridge/poll').at(-1).pluginTui, true)
+  assert.ok(o.w.polls().every(p => p.sessionId === SID))
+  await o.open('ses_other')
+  await o.tick()
+  assert.equal(o.w.to('/api/bridge/poll').at(-1).pluginTui, false)
+  assert.ok(o.w.posts.every(p => p.body.sessionId === SID))
+})
+
+test('ordinary presence cannot overwrite a newer hook selection or hydrate over live messages', async t => {
+  const o = await world(t)
+  o.w.infos[SID] = { id: SID, agent: 'old', model: { id: 'old', providerID: 'provider' }, time: { created: 100, updated: 150 } }
+  await o.emit('session.updated', { info: o.w.infos[SID] })
+  let release = () => {}
+  o.w.infoGates[SID] = new Promise(resolve => { release = resolve })
+  await o.open(SID)
+  await o.sayWith({ agent: 'new', model: { providerID: 'provider', modelID: 'new' }, variant: 'high' },
+    { id: 'msg_live', role: 'user', time: { created: 200 } }, text('new prompt'))
+  release()
+  await o.settle()
+  await o.tick()
+  const snapshot = o.w.to('/api/bridge/poll').at(-1).snapshot
+  assert.equal(snapshot.model, 'provider/new')
+  assert.equal(snapshot.reasoning, 'high')
+  assert.equal(snapshot.promptAt, 200)
+  assert.equal(snapshot.activeAt, 200)
+  assert.equal(snapshot.lastPrompt, 'new prompt')
+  assert.equal(snapshot.status, 'working')
+})
+
+test('managed control removal fences pending companion validation', async t => {
+  const o = await managedWorld(t)
+  o.w.infos[SID] = { id: SID }
+  await o.control()
+  await o.tick()
+  let release = () => {}
+  o.w.infoGates[SID] = new Promise(resolve => { release = resolve })
+  await o.open(SID)
+  await rm(o.file)
+  await o.tick()
+  release()
+  await o.settle()
+  delete o.w.infoGates[SID]
+  await o.control()
+  await o.tick()
+  assert.equal(o.w.to('/api/bridge/poll').at(-1).pluginTui, false)
+})
+
+test('periodic advertisements recover a restarted server bridge without turns or changed timestamps', async t => {
+  const o = await world(t)
+  o.w.infos[SID] = { id: SID, time: { created: 100, updated: 150 } }
+  await o.open(SID)
+  const before = o.w.to('/api/bridge/poll')[0].snapshot
+  await o.restart()
+  await o.tick()
+  assert.equal(o.w.polls().length, 1)
+  await o.open(SID)
+  assert.equal(o.w.polls().length, 2)
+  assert.deepEqual(o.w.to('/api/bridge/poll').at(-1).snapshot, before)
+  assert.deepEqual(o.w.to('/api/bridge/event'), [])
+})
+
+test('unrelated commands and malformed presence markers never trigger discovery or companion freshness', async t => {
+  const o = await afterOneTurn(t)
+  const before = o.w.lookups.length
+  for (const command of ['session.new', 'slorp.presence.v2:{}', PRESENCE_PREFIX + '{}', PRESENCE_PREFIX + 'x'.repeat(4096)]) {
+    await o.emit('tui.command.execute', { command })
+  }
+  await o.emit('tui.session.select', { sessionID: SID })
+  await o.tick()
+  assert.equal(o.w.lookups.length, before)
+  assert.equal(o.w.to('/api/bridge/poll').at(-1).pluginTui, false)
+})
+
 test('bridge version and managed revision identify the loaded installation', async t => {
   const o = await world(t, { revision: 'managed-build' })
   await o.say(SID, text('hello'))
@@ -1596,14 +1974,14 @@ test('bridge version and managed revision identify the loaded installation', asy
   const manifest = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8'))
   const poll = o.w.to('/api/bridge/poll')[0]
   assert.equal(poll.pluginVersion, manifest.version)
-  assert.equal(poll.pluginVersion, '0.4.0')
+  assert.equal(poll.pluginVersion, '0.5.0')
   assert.equal(poll.pluginRevision, 'managed-build')
 })
 
 test('reopening after an overflow replay hydrates the original prompt and timestamp', async t => {
   const o = await world(t)
   const doc = JSON.parse(await readFile(new URL('../../internal/opencode/testdata/overflow.json', import.meta.url), 'utf8'))
-  o.w.infos[SID] = { ...doc.info, id: SID, directory: '/work/proj' }
+  o.w.infos[SID] = { ...doc.info, id: SID, directory: '/work/proj', projectID: 'project' }
   o.w.messages[SID] = doc.messages.filter((m: Message) => !['msg_repeat', 'msg_repeatanswer'].includes(m.info.id)).map((m: Message) => ({ ...m, info: { ...m.info, sessionID: SID } }))
   await o.open(SID)
   const s = o.w.to('/api/bridge/poll').at(-1).snapshot

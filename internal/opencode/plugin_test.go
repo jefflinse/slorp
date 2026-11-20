@@ -60,6 +60,9 @@ func TestBundledInstallWithoutCheckout(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(p.Path, "tui.ts")); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := os.Stat(filepath.Join(p.Path, "presence.ts")); err != nil {
+		t.Fatal(err)
+	}
 	manifestBytes, _ := os.ReadFile(filepath.Join(p.Path, "package.json"))
 	if strings.Contains(string(manifestBytes), "devDependencies") {
 		t.Fatal("installed development dependencies")
@@ -108,6 +111,37 @@ func TestManagedUpdatesFollowBundledContentAndAddress(t *testing.T) {
 	p, _ = a.inspect()
 	if p.UpdateAvailable || p.Revision == before.Revision {
 		t.Fatalf("address update: %+v", p)
+	}
+}
+
+func TestBundledPresenceAffectsRevisionAndUpdateDetection(t *testing.T) {
+	a := fixture(t)
+	if err := a.writeBundle(); err != nil {
+		t.Fatal(err)
+	}
+	files, version, err := bundled(a.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version != "0.5.0" || len(files["presence.ts"]) == 0 {
+		t.Fatalf("missing presence runtime or version: %q", version)
+	}
+	written, err := os.ReadFile(filepath.Join(a.managedPath(), "presence.ts"))
+	if err != nil || string(written) != string(files["presence.ts"]) {
+		t.Fatalf("installed presence differs from embedded runtime: %v", err)
+	}
+	before := fingerprint(files)
+	files["presence.ts"] = []byte("changed protocol")
+	if fingerprint(files) == before {
+		t.Fatal("presence changes did not change the runtime revision")
+	}
+	if err := a.Install(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	put(t, filepath.Join(a.managedPath(), "presence.ts"), "old protocol")
+	p, err := a.inspect()
+	if err != nil || !p.UpdateAvailable || p.Revision == before {
+		t.Fatalf("presence change was not detected: %+v, %v", p, err)
 	}
 }
 

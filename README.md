@@ -28,7 +28,7 @@ Slorp lists Claude Code sessions with or without the plugin. The plugin is what 
 
 Summaries, suggested replies, automatic filing and the journal are written by a local model. Slorp looks for an OpenAI-compatible LLM server, such as LM Studio, Ollama or llama.cpp, at `http://localhost:1234` and uses the model it has loaded. Settings on the page points it at another server, names the model where a server offers several, turns it off, and checks that it answers. `-llm` and `-model` do the same when Slorp starts, and stand over what Settings holds for as long as it runs. Without a model Slorp still lists your sessions and lets you answer them, and the page marks what is missing. `slorp -h` lists the other options.
 
-The [OpenCode plugin](integrations/opencode/README.md) is bundled in the Slorp executable, so installation needs no repository checkout. It discovers opened and resumed local terminal conversations even before you send a message, reports model and usage information, and lets you answer permissions and structured questions from Slorp. Settings offers updates when the installed plugin differs from the bundled copy.
+The [OpenCode plugin](integrations/opencode/README.md) is bundled in the Slorp executable, so installation needs no repository checkout. It discovers opened and resumed conversations in local terminals and `opencode attach` even before you send a message, reports model and usage information, and lets you answer permissions and structured questions from Slorp. Settings offers updates when the installed plugin differs from the bundled copy.
 
 ## Features
 
