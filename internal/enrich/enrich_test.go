@@ -39,6 +39,8 @@ type fakeLLM struct {
 			}
 		}
 	}
+	// finish is the finish_reason the server gives, empty for none.
+	finish   string
 	requests int
 	request  struct {
 		Model           string `json:"model"`
@@ -90,7 +92,7 @@ func (f *fakeLLM) enricher(t *testing.T) *Enricher {
 			if f.status != 0 {
 				w.WriteHeader(f.status)
 			}
-			json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": f.content}}}})
+			json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": f.content}, "finish_reason": f.finish}}})
 		default:
 			http.NotFound(w, r)
 		}

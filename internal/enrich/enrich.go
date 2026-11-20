@@ -34,7 +34,10 @@ const (
 
 	tick       = 2 * time.Second
 	retryAfter = time.Minute
-	idleCheck  = 30 * time.Second
+	// maxRetryAfter caps how long work that keeps failing waits between
+	// tries; each failure in a row doubles the wait from retryAfter.
+	maxRetryAfter = 6 * time.Hour
+	idleCheck     = 30 * time.Second
 	// missedCheck is how often, with nothing else to do, the journal is
 	// looked over for a day nobody asked to have written.
 	missedCheck = 10 * time.Minute
@@ -68,6 +71,8 @@ type Enricher struct {
 
 	client *http.Client
 	failed map[string]time.Time
+	// failures counts how many times in a row each piece of work has failed.
+	failures map[string]int
 	// checked is when the model was last asked after, and missed when the
 	// journal was last looked over.
 	checked, missed time.Time
@@ -146,6 +151,7 @@ func (e *Enricher) step(ctx context.Context) {
 			e.cfg, e.BaseURL, e.Model = cfg, cfg.URL, cfg.Model
 			e.checked = time.Time{}
 			clear(e.failed)
+			clear(e.failures)
 		}
 	}
 	said := hub.Summarizer{URL: e.BaseURL, Named: e.Model, FixedURL: e.cfg.FixedURL, FixedModel: e.cfg.FixedModel}
@@ -180,9 +186,16 @@ func (e *Enricher) step(ctx context.Context) {
 	err = job(ctx, model)
 	said.Doing = ""
 	e.Hub.SetSummarizer(said)
-	if err != nil && ctx.Err() == nil {
-		log.Printf("enrich: %s: %v", what, err)
+	switch {
+	case err == nil:
+		delete(e.failures, key)
+	case ctx.Err() == nil:
+		if e.failures == nil {
+			e.failures = map[string]int{}
+		}
+		e.failures[key]++
 		e.failed[key] = time.Now()
+		log.Printf("enrich: %s: %v (try again in %s)", what, err, e.retryWait(key))
 	}
 }
 
@@ -192,7 +205,7 @@ func (e *Enricher) step(ctx context.Context) {
 // an effort, guessing its role, rewriting an effort's note, and briefing
 // the other pull requests.
 func (e *Enricher) next() (key, what string, job func(context.Context, string) error) {
-	ready := func(key string) bool { return time.Since(e.failed[key]) > retryAfter }
+	ready := func(key string) bool { return time.Since(e.failed[key]) > e.retryWait(key) }
 	briefs := e.Hub.Unbriefed()
 	briefing := func(wanted bool) (key, what string, job func(context.Context, string) error) {
 		for _, w := range briefs {
@@ -626,6 +639,17 @@ func (e *Enricher) describe(ctx context.Context, model string, w hub.Undescribed
 	return in, nil
 }
 
+// retryWait is how long work that failed waits before it is tried again:
+// retryAfter after one failure, doubling with each one after, up to
+// maxRetryAfter.
+func (e *Enricher) retryWait(key string) time.Duration {
+	wait := retryAfter
+	for n := e.failures[key]; n > 1 && wait < maxRetryAfter; n-- {
+		wait *= 2
+	}
+	return min(wait, maxRetryAfter)
+}
+
 // ask sends one system and user message and decodes the reply, which the
 // server constrains to schema, into out.
 func (e *Enricher) ask(ctx context.Context, model, system, user, name string, schema json.RawMessage, out any) error {
@@ -641,13 +665,20 @@ func (e *Enricher) ask(ctx context.Context, model, system, user, name string, sc
 		return err
 	}
 	if err := json.Unmarshal([]byte(msg.Content), out); err != nil {
+		if msg.finish == "length" {
+			tail := []rune(msg.Content)
+			tail = tail[max(0, len(tail)-60):]
+			return fmt.Errorf("model ran out of tokens before finishing the requested JSON, ending %q", string(tail))
+		}
 		return fmt.Errorf("model did not return the requested JSON")
 	}
 	return nil
 }
 
 type message struct {
-	Content   string `json:"content"`
+	Content string `json:"content"`
+	// finish is why the model stopped: "length" when it hit max_tokens.
+	finish    string
 	ToolCalls []struct {
 		Function struct {
 			Name      string `json:"name"`
@@ -673,13 +704,16 @@ func (e *Enricher) chat(ctx context.Context, base string, request map[string]any
 	}
 	var reply struct {
 		Choices []struct {
-			Message message `json:"message"`
+			Message      message `json:"message"`
+			FinishReason string  `json:"finish_reason"`
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(raw, &reply); err != nil || len(reply.Choices) == 0 {
 		return message{}, fmt.Errorf("unreadable model response")
 	}
-	return reply.Choices[0].Message, nil
+	msg := reply.Choices[0].Message
+	msg.finish = reply.Choices[0].FinishReason
+	return msg, nil
 }
 
 func (e *Enricher) get(ctx context.Context, base, path string, v any) error {
