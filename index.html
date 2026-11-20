@@ -426,6 +426,12 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
 
 /* Efforts board: a card for each effort, in the order the user keeps them */
 .board { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+.phead { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 22px; }
+.opt { display: inline-flex; align-items: center; gap: 7px; color: var(--ink2); font-size: 12.5px; cursor: pointer; user-select: none; }
+.opt input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); }
+.opt .n { color: var(--ink3); }
+.opt .n::before { content: '· '; }
+.estack .opt { margin-top: 4px; padding: 0 2px; }
 .ecard { display: flex; flex-direction: column; gap: 10px; min-height: 168px; padding: 15px 16px 13px; border: 1px solid var(--line); border-radius: 12px; background: var(--raised); cursor: pointer; transition: border-color 0.12s, box-shadow 0.12s; }
 .ecard:hover { border-color: var(--ink3); box-shadow: 0 4px 16px rgb(0 0 0 / 0.07); }
 .ecard.dragging { opacity: 0.35; border-style: dashed; box-shadow: none; }
@@ -482,8 +488,7 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
 .ebig .tabbody .add { padding: 14px 0 0; border-top: 0; }
 /* Sessions that can be dragged onto an effort to file them there */
 .tray { margin-top: 14px; }
-.tray .label { margin-bottom: 2px; }
-.tray .none { padding: 0 0 6px; font-size: 12px; }
+.tray .label { margin-bottom: 6px; }
 .trow { display: flex; align-items: baseline; gap: 2px; padding: 6px 8px; border-radius: 7px; cursor: grab; }
 .trow:hover { background: var(--sel); }
 .trow button { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
@@ -904,7 +909,7 @@ const VIEWS = ['attention', 'efforts', 'sessions', 'pulls', 'journal', 'knowledg
 /* The views the top bar names, in its order; Settings is reached by its own button. Pull requests are named only while GitHub is turned on to list them. */
 const nav = () => VIEWS.filter(v => v !== 'settings' && !(v === 'pulls' && pullsOff()));
 const VIEW_NAMES = { pulls: 'PRs' };
-const fresh = () => ({ view: 'attention', sel: null, effortSel: null, effortOrder: null, kbSel: 'watch', setSel: 'general', groupBy: 'effort', srcFilter: 'all', pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', effortTab: 'sessions', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto', look: 'slorp',
+const fresh = () => ({ view: 'attention', sel: null, effortSel: null, effortOrder: null, hideEmpty: true, kbSel: 'watch', setSel: 'general', groupBy: 'effort', srcFilter: 'all', pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', effortTab: 'sessions', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto', look: 'slorp',
   handled: {}, moved: {}, sessMoved: {}, extra: [], arrived: {}, collapsed: {}, showHandled: false, variant: {}, rawOpen: {},
   actSel: null, pullSel: null, journalSel: null, pullTab: 'talk', expanded: {}, kb: structuredClone(KB_SEED), seq: 100 });
 let state = fresh();
@@ -1125,7 +1130,7 @@ function itemDetail(it) {
     <div class="titled"><h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>${itemMenu(it, `<button data-act="park" data-id="${it.id}">Park as open question</button>
       ${menuPart('move', 'Move to', menuTo('moveTo', it.id, EFFORTS.concat(UNSORTED).filter(e => e.id !== eff.id).map(e => [e.id, e.name])))}`)}</div>
     <div class="need"><div class="label">${spark}What's needed from you</div><p class="ask">${esc(it.ask)}</p>${answer}</div>
-    <div class="sec"><div class="label"><span>${spark}What's going on</span><button data-act="rephrase" data-id="${it.id}">↻ ${v === 0 ? 'Shorter' : 'Fuller'}</button></div>
+    <div class="sec"><div class="label"><span>${spark}Recap</span><button data-act="rephrase" data-id="${it.id}">↻ ${v === 0 ? 'Shorter' : 'Fuller'}</button></div>
       <p class="prose" id="summary">${esc(it.summary[v])}</p></div>
     <div class="sec"><div class="label"><span>From the source, verbatim</span><button data-act="toggleRaw" data-id="${it.id}">${rawOpen ? 'Hide' : 'Show'}</button></div>
       ${rawOpen ? rawBlock(it.lines) : `<div class="none mono">${esc(it.raw)}</div>`}</div>
@@ -1742,6 +1747,22 @@ function effortFacts(e) {
       .map(s => ({ id: s.id, kind: s.agent, name: state.fluent ? `<span class="gen nt">${esc(clip(s.label, 90))}</span>` : `<span class="mono nt">${esc(rawOf(s))}</span>`, status: statusOf(s), mins: minsSince(s.activeAt) })),
     dots: sess.map(s => [statusOf(s)[0], `${clip(s.label, 60)}: ${statusOf(s)[1]}`]) };
 }
+/* Whether an effort has nothing to show: no session open or closed, nothing that needs the user, no pull
+   request and no open question. One added since the page loaded does not count, so that it stays in sight. */
+const madeHere = new Set();
+const emptyEffort = e => {
+  if (e.id === 'unsorted' || madeHere.has(e.id)) return false;
+  const { needs, dots, idle } = effortFacts(e);
+  return !needs.length && !dots.length && idle == null && !allPulls().some(p => p.effort === e.id)
+    && !(live ? knowledge : state.kb).questions.some(q => q.effort === e.id);
+};
+/* The efforts whose cards are in sight, which leaves out the empty ones while those are hidden. */
+const shownEfforts = () => cardEfforts().filter(e => !state.hideEmpty || !emptyEffort(e));
+/* The switch that hides empty efforts, with how many it is hiding. There is none while no effort is empty. */
+function hideEmptyToggle() {
+  const n = cardEfforts().filter(emptyEffort).length;
+  return n ? `<label class="opt"><input type="checkbox" data-change="hideEmpty" ${state.hideEmpty ? 'checked' : ''}>Hide empty Efforts${state.hideEmpty ? `<span class="n">${n} hidden</span>` : ''}</label>` : '';
+}
 /* The name a card keeps on the board and in the column. */
 const cardName = e => `view-transition-name:effort-${e.id}`;
 
@@ -1769,13 +1790,12 @@ function effortCard(e, mini, sel) {
   </div>`;
 }
 
-const BOARD_LEDE = 'The work you have declared, in the order you keep it. Drag a card to move it, and Attention lists its groups the same way.';
 const newEffortCard = () => `<form class="ecard new" data-form="effort">
       <span class="label">New effort</span>
       <input name="name" data-keep="effort-name" placeholder="Name, e.g. Snapshot store" required aria-label="Name of the effort">
       <input name="about" data-keep="effort-about" placeholder="One line on what it covers" aria-label="What it covers">
       <button class="btn go">Add effort</button>
-      <p class="none">${modelless() ? `${NO_MODEL}, so sessions are filed by an effort's directories or by you.` : liveEfforts.length ? 'The description is what the model reads when it files sessions.' : 'Declare an effort and Slorp will start filing sessions under it.'}</p>
+      ${modelless() ? `<p class="none">${NO_MODEL}, so sessions are filed by an effort's directories or by you.</p>` : ''}
     </form>`;
 
 /* Whether the form for a new effort is open in the column, and whether its box still wants the cursor. */
@@ -1791,7 +1811,7 @@ const dragsFrom = (id, from) => `draggable="true" data-session="${esc(id)}" data
 function unsortedTray() {
   const list = live ? live.filter(s => !s.effort).map(s => [s.id, statusOf(s), s.label]) : SESSIONS.filter(s => sessEffort(s) === 'unsorted').map(s => [s.id, [s.status, STATUS[s.status]], s.title || s.name]);
   if (!list.length || state.effortSel === 'unsorted') return '';
-  return `<div class="tray"><div class="label">Unsorted sessions</div><div class="none">Drag one onto an effort to file it there.</div>
+  return `<div class="tray"><div class="label">Unsorted sessions</div>
     ${list.map(([id, [dot, word], label]) => `<div class="trow" ${dragsFrom(id, 'unsorted')}><span class="dot ${dot}" title="${word}"></span>${live ? `<button data-act="openSession" data-id="${esc(id)}">${esc(clip(label, 60))}</button>` : `<span>${esc(clip(label, 60))}</span>`}</div>`).join('')}</div>`;
 }
 /* Files a session under an effort, or under none when given Unsorted, as the menu on a session does. */
@@ -1816,17 +1836,17 @@ function shelf() {
 function viewEfforts() {
   if (live && state.effortSel && state.effortSel !== 'unsorted' && !liveEfforts.some(e => e.id === state.effortSel)) state.effortSel = null;
   if (!state.effortSel) return `<div class="full" data-scroll="eff-board"><div class="page">
-    <h1>Efforts</h1><p class="lede">${live && !liveEfforts.length ? 'The work you track across sessions. Nothing is declared yet.' : BOARD_LEDE}</p>
-    <div class="board">${cardEfforts().map(e => effortCard(e)).join('')}${live ? newEffortCard() : ''}</div>
+    <div class="phead"><h1>Efforts</h1>${hideEmptyToggle()}</div>
+    <div class="board">${shownEfforts().map(e => effortCard(e)).join('')}${live ? newEffortCard() : ''}</div>
     ${shelf()}
   </div></div>`;
   /* The column always has Unsorted, so that a session can be dragged out of an effort, and the open effort, shelved or not. */
-  const e = effortById(state.effortSel), all = cardEfforts();
+  const e = effortById(state.effortSel), all = shownEfforts();
   if (live && !all.includes(LIVE_UNSORTED)) all.push(LIVE_UNSORTED);
   if (!all.some(x => x.id === e.id)) all.push(e);
   return `<div class="split efx">
     <section class="pane estack" data-scroll="eff-stack"><button class="back" data-act="effortBoard" title="Back to the board (Esc)">‹ All efforts</button>
-      ${all.map(x => effortCard(x, true, x.id === e.id)).join('')}${live ? newEffortMini() : ''}${unsortedTray()}</section>
+      ${all.map(x => effortCard(x, true, x.id === e.id)).join('')}${live ? newEffortMini() : ''}${hideEmptyToggle()}${unsortedTray()}</section>
     <section class="pane detail" data-scroll="eff-${e.id}"><div class="ebig ${e.id === 'unsorted' ? 'loose' : ''}">${live ? effortDetailLive(e) : effortDetail(e)}</div></section>
   </div>`;
 }
@@ -2179,7 +2199,7 @@ function feedItemDetail(it) {
     ${onBranch(it)}
     ${it.point && p ? `<div class="sec"><div class="label"><span>${p.brief ? spark : ''}Where it stands</span></div>${pullStands(p)}
         <div class="none" style="margin-top:8px">${spark}The local model picked this out of the discussion of <span class="mono">${esc(it.pull)}</span>, as ${esc(it.src)} had it ${ago(minsSince(p.readAt || it.at))}.</div></div>`
-      : `<div class="sec"><div class="label"><span>What's going on</span></div><p class="prose">${esc(it.summary)}</p>
+      : `<div class="sec"><div class="label"><span>Recap</span></div><p class="prose">${esc(it.summary)}</p>
       <div class="none" style="margin-top:8px">As ${esc(it.src)} reported it ${ago(minsSince((feeds[it.source] || {}).at || it.at))}. No model wrote any of this.</div></div>`}
     ${alsoIn(it.effort, '')}
   </div>`;
@@ -2447,7 +2467,7 @@ function sessionPage(s, it, stands) {
     ${subtitle && state.fluent ? `<p class="subt">${spark}${esc(subtitle)}</p>` : ''}
     ${it ? '' : roleNote(s)}
     <div class="need ${needs ? '' : 'bare'}">${needs}${answerBox(s, it)}</div>
-    <div class="sec going"><div class="label"><span>${summary ? spark : ''}What's going on</span></div>${goingOn(s, summary, !it && s.status === 'working')}</div>
+    <div class="sec going"><div class="label"><span>${summary ? spark : ''}Recap</span></div>${goingOn(s, summary, !it && s.status === 'working')}</div>
     ${detailTabs(s)}
     <div class="going">${aboutSession(s)}${timeline(s, true)}</div>
   </div>`;
@@ -2455,9 +2475,9 @@ function sessionPage(s, it, stands) {
 
 /* The pane beside a session's page: the model's account of it, its particulars and its timeline, or the rail that brings them back. */
 function sessionSide(s, summary, stale, key) {
-  const label = `<span class="label">${summary ? spark : ''}What's going on</span>`;
+  const label = `<span class="label">${summary ? spark : ''}Recap</span>`;
   return state.sideShut
-    ? `<aside class="pane side"><button class="rail" data-act="side" title="Show what's going on" aria-expanded="false"><span>‹</span>${label}</button></aside>`
+    ? `<aside class="pane side"><button class="rail" data-act="side" title="Show the recap" aria-expanded="false"><span>‹</span>${label}</button></aside>`
     : `<aside class="pane side" data-scroll="${key}">${vitals(s)}<div class="head">${label}<button data-act="side" title="Hide this panel" aria-expanded="true">›</button></div>${goingOn(s, summary, stale)}${aboutSession(s)}${timeline(s, true)}</aside>`;
 }
 
@@ -3733,6 +3753,7 @@ const actions = {
   },
 };
 const changes = {
+  hideEmpty: (d, el) => { state.hideEmpty = el.checked; },
   liveMove: (d, el) => {
     const to = el.value, s = live.find(x => x.id === d.id);
     if (!to) return false;
@@ -3833,6 +3854,7 @@ document.addEventListener('submit', e => {
         clear(); adding = false;
         await refresh(true);
         const made = liveEfforts.find(e => !had.has(e.id));
+        if (made) { madeHere.add(made.id); render(); }
         if (beside && made && state.view === 'efforts' && state.effortSel) { openEffort(made.id); save(); render(); }
       }).catch(err => toast(err instanceof TypeError ? 'Could not reach the Slorp service' : `That did not work: ${err.message}`));
     return;
@@ -3928,7 +3950,7 @@ document.addEventListener('keydown', e => {
     const order = pullsShown().map(pullKey), i = order.indexOf(state.pullSel) + (e.key === 'j' ? 1 : -1);
     if (order[i]) state.pullSel = order[i];
   } else if (state.view === 'efforts' && state.effortSel && (e.key === 'j' || e.key === 'k')) {
-    const order = cardEfforts().map(x => x.id), i = order.indexOf(state.effortSel) + (e.key === 'j' ? 1 : -1);
+    const order = shownEfforts().map(x => x.id), i = order.indexOf(state.effortSel) + (e.key === 'j' ? 1 : -1);
     if (order[i]) openEffort(order[i]);
   } else if (state.view === 'journal' && (e.key === 'j' || e.key === 'k')) {
     const order = journalShown().map(d => d.day), i = order.indexOf(state.journalSel) + (e.key === 'j' ? 1 : -1);

@@ -14,7 +14,7 @@ async function world(t, hash) {
   const data = {
     sessions: [session('quiet', 'solo', 'Tidy the importer', 'idle', 8), session('asks', 'pair', 'Wire the outbox', 'waiting', 2), session('busy', 'pair', 'Benchmark the loader', 'working', 5),
       ...Array.from({ length: 8 }, (_, i) => session(`w${i}`, 'fleet', `Worker ${i + 1}`, 'idle', 10 + i))],
-    efforts: ['solo', 'pair', 'fleet'].map(id => ({ id, name: id, about: '', dirs: [`/work/${id}`] })),
+    efforts: ['solo', 'pair', 'fleet', 'bare'].map(id => ({ id, name: id, about: '', dirs: [`/work/${id}`] })),
     items: [{ id: 'item', sessionId: 'asks', kind: 'question', title: 'Which retry policy?', ask: 'Pick one.', urgency: 'awaiting', at: ago(2), replies: [] }],
     summarizer: { model: 'fixture' }, capabilities: {},
   }
@@ -51,12 +51,34 @@ test('an effort card lists what needs you and then every other open session', as
   assert.match(await page.locator('.pane.detail h1').innerText(), /^Tidy the importer/)
 })
 
+test('an effort with nothing filed under it is hidden until asked for, on the board and in the column', async t => {
+  const page = await world(t, 'efforts')
+  const cards = () => page.locator('.ecard[data-id]').evaluateAll(els => els.map(el => el.dataset.id))
+  const toggle = page.getByLabel('Hide empty Efforts')
+  await page.locator('.ecard[data-id="solo"]').waitFor()
+  assert.deepEqual(await cards(), ['solo', 'pair', 'fleet'])
+  assert.equal(await toggle.isChecked(), true)
+  assert.match(await page.locator('.phead .opt').innerText(), /1 hidden/)
+  await toggle.uncheck()
+  assert.deepEqual(await cards(), ['solo', 'pair', 'fleet', 'bare'])
+  await page.reload()
+  await page.locator('.ecard[data-id="bare"]').waitFor()
+  await page.locator('.ecard[data-id="solo"] .eh').click()
+  await page.locator('.estack .ecard[data-id="bare"]').waitFor()
+  await page.locator('.estack').getByLabel('Hide empty Efforts').check()
+  assert.deepEqual(await cards(), ['solo', 'pair', 'fleet', 'unsorted'])
+  await page.locator('.estack').getByLabel('Hide empty Efforts').uncheck()
+  await page.locator('.estack .ecard[data-id="bare"]').click()
+  await page.locator('.estack').getByLabel('Hide empty Efforts').check()
+  assert.deepEqual(await cards(), ['solo', 'pair', 'fleet', 'unsorted', 'bare'])
+})
+
 test('the pane beside a session leads with its vitals and keeps Details folded until asked', async t => {
   const page = await world(t, 'sessions')
   const side = page.locator('.pane.side')
   await side.locator('.tl').waitFor()
   assert.deepEqual(await side.locator('.facts.vitals dt').allInnerTexts(), ['Context', 'Model', 'Last active'])
-  assert.ok((await side.innerText()).indexOf('Last active') < (await side.innerText()).toUpperCase().indexOf("WHAT'S GOING ON"))
+  assert.ok((await side.innerText()).indexOf('Last active') < (await side.innerText()).toUpperCase().indexOf('RECAP'))
   const details = side.getByRole('button', { name: 'Details' })
   assert.equal(await details.getAttribute('aria-expanded'), 'false')
   assert.equal(await side.locator('dt', { hasText: 'Directory' }).count(), 0)

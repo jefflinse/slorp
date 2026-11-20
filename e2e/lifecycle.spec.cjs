@@ -25,7 +25,7 @@ async function waitUntil(check) {
 
 async function world(t, hash = 'sessions') {
   const data = { sessions: [session('owned'), session('terminal', { kind: 'interactive', canStop: false, job: 'not-ownership' })],
-    efforts: [{ id: 'project', name: 'Project', about: '', dirs: ['/work/project'] }], items: [],
+    efforts: [{ id: 'project', name: 'Project', about: '', dirs: ['/work/project'], activeAt: at }], items: [],
     archive: [{ ...session('archived'), endedAt: at }], summarizer: { model: 'fixture' },
     knowledge: { watch: [], questions: [], context: [], routing: [], roles: [{ id: 'reviewer', name: 'Reviewer', attention: 'all' }] },
     capabilities: { claude: { history: true, start: true, resume: true, resumeCommand: true, launchOptions: false },
