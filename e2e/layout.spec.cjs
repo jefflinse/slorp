@@ -210,3 +210,11 @@ test('the legacy Attention view is there only while Settings keeps it, and the l
   await page.locator('.home').waitFor()
   assert.equal(await page.locator('.brief').count(), 0)
 })
+
+test('a session page puts the box to answer in after its last exchange', async t => {
+  const page = await world(t, 'sessions')
+  const inner = page.locator('.pane.detail .inner')
+  await inner.locator('.need textarea').waitFor()
+  const parts = await inner.evaluate(el => [...el.children].map(child => child.classList[0]))
+  assert.ok(parts.indexOf('tabbody') >= 0 && parts.indexOf('tabbody') < parts.indexOf('need'), parts.join(' '))
+})

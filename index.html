@@ -2728,7 +2728,7 @@ function answerBox(s, it) {
     <button class="btn go" data-act="${it ? 'liveItemSend' : 'liveSend'}" data-id="${it ? it.id : s.id}">Send</button></div>`;
 }
 
-/* A session's page. With the item it has on Home it leads with what is needed; stands is how it stands, for its first line. */
+/* A session's page: its recap, its last exchange, then what is needed of the user and the means of answering. stands is how it stands, for its first line. */
 function sessionPage(s, it, stands) {
   const subtitle = it ? it.subtitle : s.status !== 'working' && s.insight?.title;
   const summary = it ? it.summary : s.insight?.summary;
@@ -2743,9 +2743,9 @@ function sessionPage(s, it, stands) {
       : `<h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? s.label : rawOf(s))}${state.fluent ? `<button class="pen" data-act="rename" data-id="${s.id}" title="${s.labelVia === 'you' ? 'You named this session. Rename it' : 'Give this session a name of your own'}" aria-label="Rename this session">✎</button>` : ''}</h1>`}${sessionMenu(s, it)}</div>
     ${subtitle && state.fluent ? `<p class="subt">${spark}${esc(subtitle)}</p>` : ''}
     ${it ? '' : roleNote(s)}
-    <div class="need ${needs ? '' : 'bare'}">${needs}${answerBox(s, it)}</div>
     <div class="sec going"><div class="label"><span>${summary ? spark : ''}Recap</span></div>${goingOn(s, summary, !it && s.status === 'working')}</div>
     ${detailTabs(s)}
+    <div class="need ${needs ? '' : 'bare'}">${needs}${answerBox(s, it)}</div>
     <div class="going">${aboutSession(s)}${timeline(s, true)}</div>
   </div>`;
 }
