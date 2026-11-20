@@ -16,8 +16,6 @@ type Reply = { id: string; text: string }
 
 let base = ''
 let cwd = ''
-/** Prompts whose tool name or command this matches are answered in the terminal only. */
-let terminalOnly: RegExp | undefined
 /** What the session's model can take, in tokens; zero until the engine says. */
 let contextWindow = 0
 /** The engine's estimate of the session's cost so far, in US dollars. */
@@ -100,25 +98,25 @@ async function poll($: EngineInterface) {
  * Offers a permission prompt to Slorp while the session's own dialog is also
  * asking, and resolves to the user's `allow` or `deny` from Slorp. Resolves to
  * `terminal` when the answer will not come from Slorp: the dialog was
- * answered or the turn interrupted, the tool needs the person, the input is
- * too long to judge there, or Slorp is not running. agentId is the subagent
- * that asks, when one does.
+ * answered or the turn interrupted, the prompt must stay in the terminal,
+ * or Slorp is not running. agentId is the subagent that asks, when one does.
  */
-async function askSlorp($: EngineInterface, tool: string, input: unknown, agentId: string | undefined, abandoned: AbortSignal) {
+async function askSlorp($: EngineInterface, tool: string, input: unknown, agentId: string | undefined, abandoned: AbortSignal, terminalOnly: RegExp | undefined) {
   const { command, questions } = (input ?? {}) as { command?: unknown; questions?: unknown }
-  const full = typeof command === 'string' ? command : JSON.stringify(input, null, 2)
+  const full = typeof command === 'string' ? command : JSON.stringify(input ?? {}, null, 2)
   const asks = tool === 'AskUserQuestion' && Array.isArray(questions) ? questions.map(q => String(q?.question ?? '')).join(' ') : full
+  const canAnswer = !NEEDS_PERSON.has(tool) && full.length <= INPUT_LIMIT && !terminalOnly?.test(tool) && !terminalOnly?.test(full)
   const asked = await post($, '/api/bridge/permission', {
     agent: AGENT,
     sessionId: await $.session.id(),
     tool,
     summary: asks.slice(0, SUMMARY_LIMIT),
     input: full.slice(0, INPUT_LIMIT),
-    canAnswer: !NEEDS_PERSON.has(tool) && full.length <= INPUT_LIMIT && !(terminalOnly?.test(tool) || terminalOnly?.test(full)),
+    canAnswer,
     question: tool === 'AskUserQuestion',
     agentId,
   })
-  if (!asked?.answerable) return { state: 'terminal' }
+  if (!canAnswer || !asked?.answerable) return { state: 'terminal' }
 
   // Answering in the terminal abandons this hook; tell Slorp at once so it
   // stops offering a request that is already decided.
@@ -145,16 +143,18 @@ async function askSlorp($: EngineInterface, tool: string, input: unknown, agentI
  * windows as this session last read them, and how its subagents stand.
  */
 export const register: Register = (on, options) => {
+  let terminalOnly: RegExp | undefined
+  const pattern = String(options.terminalOnly ?? '')
+  try {
+    terminalOnly = pattern === '' ? undefined : new RegExp(pattern)
+  } catch {
+    // Keep every prompt in the terminal if the pattern is invalid.
+    terminalOnly = /(?:)/
+  }
+
   on('session.start', async ($, e, next) => {
     base = ((await $.env.get('SLORP_URL')) || String(options.url)).replace(/\/+$/, '')
     cwd = e.cwd
-    const pattern = String(options.terminalOnly ?? '').trim()
-    try {
-      terminalOnly = pattern ? new RegExp(pattern) : undefined
-    } catch {
-      // A pattern that doesn't compile holds back every prompt rather than none.
-      terminalOnly = /[\s\S]/
-    }
     void $.session
       .usage()
       .then(usage => measured(usage, 0))
@@ -179,7 +179,7 @@ export const register: Register = (on, options) => {
   })
 
   on('classic.PermissionRequest', async ($, e, next) => {
-    const answer = await askSlorp($, e.tool_name, e.tool_input, e.agent_id, next.signal).catch(() => ({ state: 'terminal' }))
+    const answer = await askSlorp($, e.tool_name, e.tool_input, e.agent_id, next.signal, terminalOnly).catch(() => ({ state: 'terminal' }))
     if (answer.state === 'allow' && e.tool_name === 'AskUserQuestion') {
       if (!answer.answers) return next(e)
       return { decision: { behavior: 'allow' as const, updatedInput: { ...(e.tool_input as object), answers: answer.answers } } }

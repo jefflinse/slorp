@@ -31,7 +31,7 @@ claude plugin update slorp@slorp
 | Key | Default | Notes |
 |---|---|---|
 | `url` | `http://127.0.0.1:4747` | Where the Slorp service listens. Env: `SLORP_URL`, which wins when set. |
-| `terminalOnly` | empty | A regular expression. Prompts whose tool name or command it matches are shown in Slorp but answered only in the terminal, for example ones a guard hook raises with context Slorp doesn't see. A pattern that doesn't compile holds back every prompt. |
+| `terminalOnly` | empty | A JavaScript regular expression matched separately against the tool name and the command (or JSON input for tools with no command). Matching prompts appear in Slorp and can only be answered in the terminal. An invalid pattern makes every prompt terminal-only. |
 
 Set it at install time with `--config url=...`, or later with `/plugin configure slorp@slorp`.
 
@@ -41,4 +41,4 @@ Set it at install time with `--config url=...`, or later with `/plugin configure
 claude --plugin-dir ./integrations/claude-code
 ```
 
-The folder is watched, so saving `hooks/register.ts` reloads the plugin in that session. `claude plugin validate ./integrations/claude-code` checks the manifest and the hooks module.
+The folder is watched, so saving `hooks/register.ts` reloads the plugin in that session. `claude plugin validate ./integrations/claude-code` checks the manifest and the hooks module. Run the hook tests with `node --test integrations/claude-code/hooks/register.test.mjs`.

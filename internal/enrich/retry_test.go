@@ -6,13 +6,18 @@ import (
 	"time"
 
 	"github.com/jefflinse/slorp/internal/hub"
+	"github.com/jefflinse/slorp/internal/integrations"
+	"github.com/jefflinse/slorp/internal/testdb"
 )
 
 func TestAskSaysWhenTheModelRanOutOfTokens(t *testing.T) {
-	llm := fakeLLM{content: `{"title":"t","summary":"` + strings.Repeat("\n", 80), finish: "length"}
+	llm := fakeLLM{content: `{"title":"t","summary":"private session content`, finish: "length"}
 	_, err := llm.enricher(t).describe(ctx, "m", hub.Undescribed{})
 	if err == nil || !strings.Contains(err.Error(), "ran out of tokens") {
 		t.Fatalf("got %v, want an error saying the model ran out of tokens", err)
+	}
+	if strings.Contains(err.Error(), "private session content") {
+		t.Error("the error included part of the model response")
 	}
 
 	llm = fakeLLM{content: "Sure! Here is a summary.", finish: "stop"}
@@ -22,25 +27,39 @@ func TestAskSaysWhenTheModelRanOutOfTokens(t *testing.T) {
 	}
 }
 
-func TestWorkThatKeepsFailingWaitsLongerEachTime(t *testing.T) {
-	e := &Enricher{failures: map[string]int{}}
-	for _, tt := range []struct {
-		failures int
-		want     time.Duration
-	}{
-		{0, retryAfter},
-		{1, retryAfter},
-		{2, 2 * retryAfter},
-		{3, 4 * retryAfter},
-		{5, 16 * retryAfter},
-		{40, maxRetryAfter},
-	} {
-		e.failures["k"] = tt.failures
-		if got := e.retryWait("k"); got != tt.want {
-			t.Errorf("after %d failures in a row, wait %s; want %s", tt.failures, got, tt.want)
-		}
+func TestBriefRetryWaitsAndClearsOnSuccess(t *testing.T) {
+	f := &fakeLLM{listed: `{"data":[{"id":"m"}]}`, content: `{"stands":"partial`, finish: "length"}
+	e := f.enricher(t)
+	st := testdb.Open(t)
+	e.Hub = hub.New(testdb.KB(t, st), st)
+	e.Hub.SetFeed("github", nil, []integrations.PullRequest{{Repo: "acme/widgets", Number: 1, At: time.Now(), Mine: true}}, nil)
+	refs := e.Hub.Undiscussed(1)
+	if len(refs) != 1 {
+		t.Fatalf("expected one PR to discuss, got %v", refs)
 	}
-	if got := e.retryWait("never failed"); got != retryAfter {
-		t.Errorf("work that never failed waits %s; want %s", got, retryAfter)
+	e.Hub.SetDiscussion(refs[0], integrations.Discussion{}, nil)
+	key, _, job := e.next()
+	if job == nil {
+		t.Fatal("expected a brief to be ready")
+	}
+
+	for i, minutes := range []time.Duration{1, 2, 4, 8, 16, 32, 64, 128, 256, 360, 360} {
+		e.step(ctx)
+		state := e.retries[key]
+		if want := minutes * time.Minute; state.wait != want {
+			t.Fatalf("after %d failures, wait %s, want %s", i+1, state.wait, want)
+		}
+		e.step(ctx)
+		if f.requests != i+1 {
+			t.Fatalf("got %d requests after %d failures, want no retry before the delay", f.requests, i+1)
+		}
+		state.readyAt = time.Now().Add(-time.Second)
+		e.retries[key] = state
+	}
+
+	f.content, f.finish = `{"stands":"Ready for review.","next":"The reviewer goes next.","points":[]}`, "stop"
+	e.step(ctx)
+	if _, ok := e.retries[key]; ok || len(e.Hub.Unbriefed()) != 0 {
+		t.Fatal("a successful brief should finish the job and clear its retry state")
 	}
 }

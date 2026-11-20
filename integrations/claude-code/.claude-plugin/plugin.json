@@ -15,7 +15,7 @@
     "terminalOnly": {
       "type": "string",
       "title": "Terminal-only prompts",
-      "description": "A regular expression. A permission prompt whose tool name or command it matches is still shown in Slorp but can only be answered in the terminal. Empty: Slorp can answer any prompt it can show.",
+      "description": "A regular expression matched against the tool name and command or JSON input. Matching prompts appear in Slorp and can only be answered in the terminal. Leave empty to use Slorp's usual permission handling.",
       "default": ""
     }
   }
