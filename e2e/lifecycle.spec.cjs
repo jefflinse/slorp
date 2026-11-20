@@ -25,7 +25,7 @@ async function waitUntil(check) {
 
 async function world(t, hash = 'sessions') {
   const data = { sessions: [session('owned'), session('terminal', { kind: 'interactive', canStop: false, job: 'not-ownership' })],
-    efforts: [{ id: 'project', name: 'Project', about: '', dirs: ['/work/project'], activeAt: at }], items: [],
+    efforts: [{ id: 'project', name: 'Project', about: '', dirs: ['/work/project'] }], items: [],
     archive: [{ ...session('archived'), endedAt: at }], summarizer: { model: 'fixture' },
     knowledge: { watch: [], questions: [], context: [], routing: [], roles: [{ id: 'reviewer', name: 'Reviewer', attention: 'all' }] },
     capabilities: { claude: { history: true, start: true, resume: true, resumeCommand: true, launchOptions: false },
@@ -143,6 +143,7 @@ async function openCode(o) {
 for (const entry of ['sessions', 'effort']) test(`start OpenCode from ${entry} with agent, provider/model, variant and Slorp role`, async t => {
   const o = await world(t, entry === 'effort' ? 'efforts' : 'sessions')
   if (entry === 'effort') {
+    await o.page.getByLabel('Hide empty Efforts').uncheck()
     await o.page.locator('[data-act="effort"][data-id="project"]').first().click()
   }
   const dialog = await o.open()

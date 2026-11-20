@@ -14,7 +14,8 @@ async function world(t, hash) {
   const data = {
     sessions: [session('quiet', 'solo', 'Tidy the importer', 'idle', 8), session('asks', 'pair', 'Wire the outbox', 'waiting', 2), session('busy', 'pair', 'Benchmark the loader', 'working', 5),
       ...Array.from({ length: 8 }, (_, i) => session(`w${i}`, 'fleet', `Worker ${i + 1}`, 'idle', 10 + i))],
-    efforts: ['solo', 'pair', 'fleet', 'bare'].map(id => ({ id, name: id, about: '', dirs: [`/work/${id}`] })),
+    efforts: [...['solo', 'pair', 'fleet', 'bare'].map(id => ({ id, name: id, about: '', dirs: [`/work/${id}`] })),
+      { id: 'past', name: 'past', about: '', dirs: ['/work/past'], activeAt: ago(2880) }],
     items: [{ id: 'item', sessionId: 'asks', kind: 'question', title: 'Which retry policy?', ask: 'Pick one.', urgency: 'awaiting', at: ago(2), replies: [] }],
     summarizer: { model: 'fixture' }, capabilities: {},
   }
@@ -51,16 +52,16 @@ test('an effort card lists what needs you and then every other open session', as
   assert.match(await page.locator('.pane.detail h1').innerText(), /^Tidy the importer/)
 })
 
-test('an effort with nothing filed under it is hidden until asked for, on the board and in the column', async t => {
+test('an effort with nothing open, even one with past work, is hidden until asked for, on the board and in the column', async t => {
   const page = await world(t, 'efforts')
   const cards = () => page.locator('.ecard[data-id]').evaluateAll(els => els.map(el => el.dataset.id))
   const toggle = page.getByLabel('Hide empty Efforts')
   await page.locator('.ecard[data-id="solo"]').waitFor()
   assert.deepEqual(await cards(), ['solo', 'pair', 'fleet'])
   assert.equal(await toggle.isChecked(), true)
-  assert.match(await page.locator('.phead .opt').innerText(), /1 hidden/)
+  assert.match(await page.locator('.phead .opt').innerText(), /2 hidden/)
   await toggle.uncheck()
-  assert.deepEqual(await cards(), ['solo', 'pair', 'fleet', 'bare'])
+  assert.deepEqual(await cards(), ['solo', 'pair', 'fleet', 'bare', 'past'])
   await page.reload()
   await page.locator('.ecard[data-id="bare"]').waitFor()
   await page.locator('.ecard[data-id="solo"] .eh').click()

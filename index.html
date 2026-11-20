@@ -1091,9 +1091,8 @@ function rowHtml(it, act = 'select') {
 function handledFooter() {
   const done = allItems().filter(i => !isActive(i));
   const legend = modelless()
-    ? `<p>${NO_MODEL}, so only permission prompts, questions a session puts to you, failures and full contexts are raised here. A session that has simply stopped is under Sessions.</p>`
-    : `<p>${spark}marks text written by the local model. <span class="mono">Mono</span> is verbatim from the source.</p>`;
-  if (!done.length) return `<div class="foot">${legend}</div>`;
+    ? `<p>${NO_MODEL}, so only permission prompts, questions a session puts to you, failures and full contexts are raised here. A session that has simply stopped is under Sessions.</p>` : '';
+  if (!done.length) return legend ? `<div class="foot">${legend}</div>` : '';
   const list = state.showHandled ? `<div class="handled">${done.map(i => `<div><span class="gen">${esc(i.title)}</span><span style="white-space:nowrap">${esc(state.handled[i.id].how)} · <button class="link" data-act="restore" data-id="${i.id}">restore</button></span></div>`).join('')}</div>` : '';
   return `<div class="foot"><p style="margin-bottom:8px">${done.length} handled or snoozed · <button class="link" data-act="toggleHandled">${state.showHandled ? 'hide' : 'show'}</button></p>${list}${legend}</div>`;
 }
@@ -1189,7 +1188,7 @@ function effortDetail(e) {
     <div class="titled"><h1>${effortMark(e, 'l')}${esc(e.name)}</h1></div>
     <div class="sec"><div class="label"><span>${spark}Where this stands</span></div><p class="prose">${esc(e.stands)}</p></div>
     <div class="sec"><div class="label"><span>Needs you (${needs.length})</span></div>
-      ${needs.length ? `<div style="margin:0 -18px">${needs.map(i => rowHtml(i, 'openItem')).join('')}</div>` : '<div class="none">Nothing. This effort is moving without you.</div>'}</div>
+      ${needs.length ? `<div style="margin:0 -18px">${needs.map(i => rowHtml(i, 'openItem')).join('')}</div>` : '<div class="none">Nothing.</div>'}</div>
     ${effortTabs([
       ['sessions', 'Sessions', sess.length, sess.length ? `<div class="rows plain">${sess.map(s => sessionRow(s, e.id)).join('')}</div>` : '<div class="none">Nothing running.</div>'],
       effortPulls(e),
@@ -1613,8 +1612,7 @@ function effortUsage(sess, past) {
   return `<div class="sec"><div class="label"><span title="${about}">What it has used</span></div>
       <dl class="facts"><dt>In all</dt><dd><b>${said([open[0] + closed[0], open[1] + closed[1]])}</b></dd>
         <dt>${plural(sess.length, 'open session')}</dt><dd>${said(open)}</dd>
-        ${past?.closedCount ? `<dt>${plural(past.closedCount, 'closed session')}</dt><dd>${said(closed)}</dd>` : ''}</dl>
-      <div class="none" style="margin-top:8px">The cost is each agent's own estimate at list prices; inside a subscription it is not a charge. A session that closed before Slorp kept what it used counts for nothing.</div></div>`;
+        ${past?.closedCount ? `<dt>${plural(past.closedCount, 'closed session')}</dt><dd>${said(closed)}</dd>` : ''}</dl></div>`;
 }
 
 /* The effort whose name and description are being edited, and whether its box still wants the cursor. */
@@ -1651,7 +1649,7 @@ function effortDetailLive(e) {
     ${e.shelved ? `<div class="shelved"><span>Shelved. It is off the board and the model files nothing new here. Everything filed under it is kept.</span><button class="btn" data-act="effortShelve" data-id="${e.id}" data-to="0">Bring it back</button></div>` : ''}
     <div class="sec"><div class="label"><span>${real && e.stands && sess.length ? spark : ''}Where this stands</span></div><p class="prose">${esc(stands)}</p></div>
     <div class="sec"><div class="label"><span>Needs you (${needs.length})</span></div>
-      ${needs.length ? `<div style="margin:0 -18px">${needs.map(i => rowHtml(i, 'openItem')).join('')}</div>` : '<div class="none">Nothing. This is moving without you, or not moving at all.</div>'}</div>
+      ${needs.length ? `<div style="margin:0 -18px">${needs.map(i => rowHtml(i, 'openItem')).join('')}</div>` : '<div class="none">Nothing.</div>'}</div>
     ${effortTabs([
       ['sessions', 'Sessions', sess.length, `${sess.length ? `<div class="rows plain">${sess.map(x => `<div class="srow" ${dragsFrom(x.id, e.id)}><span class="dot ${statusOf(x)[0]}"></span>
           <div class="body"><div class="ttl"><button data-act="openSession" data-id="${x.id}" title="Open this session">${esc(clip(x.label, 90))}</button></div>
@@ -1747,13 +1745,13 @@ function effortFacts(e) {
       .map(s => ({ id: s.id, kind: s.agent, name: state.fluent ? `<span class="gen nt">${esc(clip(s.label, 90))}</span>` : `<span class="mono nt">${esc(rawOf(s))}</span>`, status: statusOf(s), mins: minsSince(s.activeAt) })),
     dots: sess.map(s => [statusOf(s)[0], `${clip(s.label, 60)}: ${statusOf(s)[1]}`]) };
 }
-/* Whether an effort has nothing to show: no session open or closed, nothing that needs the user, no pull
-   request and no open question. One added since the page loaded does not count, so that it stays in sight. */
+/* Whether an effort has nothing open: no open session, nothing that needs the user, no pull request and no
+   open question. Past work does not count. One added since the page loaded stays in sight regardless. */
 const madeHere = new Set();
 const emptyEffort = e => {
   if (e.id === 'unsorted' || madeHere.has(e.id)) return false;
-  const { needs, dots, idle } = effortFacts(e);
-  return !needs.length && !dots.length && idle == null && !allPulls().some(p => p.effort === e.id)
+  const { needs, dots } = effortFacts(e);
+  return !needs.length && !dots.length && !allPulls().some(p => p.effort === e.id)
     && !(live ? knowledge : state.kb).questions.some(q => q.effort === e.id);
 };
 /* The efforts whose cards are in sight, which leaves out the empty ones while those are hidden. */
@@ -2195,7 +2193,7 @@ function feedItemDetail(it) {
     <div class="need"><div class="label">${it.point ? spark : ''}What's needed from you</div>${point ? pointHtml(p, point) : `<p class="ask">${esc(it.ask)}</p>`}
       ${/^https:\/\//.test(it.url || '') ? `<div class="replies" ${point ? 'style="margin-top:14px"' : ''}>${point ? '' : `<a class="btn go" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">Open on ${esc(it.src)} ↗</a>`}
         ${p ? `<button class="btn" data-act="pullOpen" data-id="${esc(pullKey(p))}">Its discussion, under PRs ›</button>` : ''}
-        <span class="none" style="align-self:center">Slorp only reads ${esc(it.src)}. Anything you do there, you do there.</span></div>` : ''}</div>
+        <span class="none" style="align-self:center">Slorp only ever reads ${esc(it.src)}.</span></div>` : ''}</div>
     ${onBranch(it)}
     ${it.point && p ? `<div class="sec"><div class="label"><span>${p.brief ? spark : ''}Where it stands</span></div>${pullStands(p)}
         <div class="none" style="margin-top:8px">${spark}The local model picked this out of the discussion of <span class="mono">${esc(it.pull)}</span>, as ${esc(it.src)} had it ${ago(minsSince(p.readAt || it.at))}.</div></div>`
@@ -2690,7 +2688,7 @@ function viewSessionsLive() {
   } else if (sel) detail = closedPage(sel);
   return sessionsView([
     ['active', 'Active', open.length, line, open.map(sessionRowLive).join('')],
-    ['closed', 'Closed', closed.length, closed.length ? 'Each as it stood when it closed.' : 'Sessions are kept here once they close.', closed.map(a => closedRow(a)).join('')],
+    ['closed', 'Closed', closed.length, closed.length ? '' : 'Sessions are kept here once they close.', closed.map(a => closedRow(a)).join('')],
   ], detail, side);
 }
 
@@ -2813,7 +2811,7 @@ function pullNeeds(p) {
     ${open.length ? '' : `<p class="ask">${esc(p.needs)}</p>`}${open.map(x => pointHtml(p, x)).join('')}${reading}
     ${open.length && !sorted ? `<div class="none">${modelless() ? `${NO_MODEL}, so these are everything where someone else spoke last, unsorted.` : 'Not sorted by the model yet: these are everything where someone else spoke last.'}</div>` : ''}
     ${rest.length ? `<button class="link" data-act="expand" data-id="settled:${esc(pullKey(p))}">${more ? 'Hide' : 'Show'} ${plural(rest.length, 'more')} the model reads as needing nothing</button>${more ? rest.map(x => pointHtml(p, x)).join('') : ''}` : ''}
-    <div class="replies" style="margin-top:14px">${link}<span class="none" style="align-self:center">Slorp only reads GitHub. Anything you do there, you do there.</span></div></div>`;
+    <div class="replies" style="margin-top:14px">${link}<span class="none" style="align-self:center">Slorp only ever reads GitHub.</span></div></div>`;
 }
 
 /* A pull request's discussion as conversations, the latest spoken in first: each thread on a line of the change, and each comment or review on its own. */
