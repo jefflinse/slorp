@@ -5,13 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 )
 
 func TestConfigPureRejectsEmptyConfig(t *testing.T) {
-	for _, value := range []string{"true", "1", "yes", "on", "y"} {
+	for _, value := range []string{"true", "1", "TRUE"} {
 		t.Run(value, func(t *testing.T) {
 			a := fixture(t)
 			r := &runtime{dir: a.Home, private: t.TempDir(), cmd: a.command(context.Background())}
@@ -42,7 +41,7 @@ func TestConfigToolsRejectAncestorDependencyScopes(t *testing.T) {
 				put(t, filepath.Join(root, "project", "package.json"), fmt.Sprintf(`{%q:{"project-dep":"1.0.0"}}`, field))
 			}
 			target := filepath.Join(root, "private", "root", strings.TrimPrefix(source, string(filepath.Separator)))
-			if err := privateToolScope(source, target, 0); err == nil || !strings.Contains(err.Error(), "ancestor dependency scope") {
+			if err := privateToolScope(source, target); err == nil || !strings.Contains(err.Error(), "ancestor dependency scope") {
 				t.Fatalf("ancestor package resolution was silently changed: %v", err)
 			}
 			if _, err := os.Stat(target); !os.IsNotExist(err) {
@@ -52,7 +51,7 @@ func TestConfigToolsRejectAncestorDependencyScopes(t *testing.T) {
 	}
 }
 
-func TestConfigExternalSkillsIncludeHiddenAndSymlinkDirectories(t *testing.T) {
+func TestConfigSkillsKeepNativeDiscoveryRoots(t *testing.T) {
 	root := t.TempDir()
 	hidden := filepath.Join(root, "skills", ".internal", "review")
 	visible := filepath.Join(root, "skills", "visible")
@@ -67,14 +66,13 @@ func TestConfigExternalSkillsIncludeHiddenAndSymlinkDirectories(t *testing.T) {
 	if err := os.Symlink(filepath.Join(root, "skills"), filepath.Join(hidden, "cycle")); err != nil {
 		t.Fatal(err)
 	}
-	dirs, err := externalSkillDirs(filepath.Join(root, "skills"))
-	if err != nil {
+	r := &runtime{}
+	config := map[string]any{"skills": []any{filepath.Join(root, "skills")}}
+	if err := r.runtimeSkills(config, root, root, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{hidden, visible, linked}
-	slices.Sort(dirs)
-	slices.Sort(want)
-	if !slices.Equal(dirs, want) {
-		t.Fatalf("external skill directories = %v; want %v", dirs, want)
+	paths, _ := config["skills"].([]any)
+	if len(paths) != 1 || paths[0] != filepath.Join(root, "skills") {
+		t.Fatalf("skill roots were expanded instead of deferring to V2 discovery: %v", paths)
 	}
 }

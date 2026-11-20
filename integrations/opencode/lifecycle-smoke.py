@@ -1,4 +1,4 @@
-"""Native lifecycle smoke for installed OpenCode 1.19.6; no paid model calls.
+"""Native lifecycle smoke for installed OpenCode 2.3.2; no paid model calls.
 
 Run with python3 -B integrations/opencode/lifecycle-smoke.py. TMPDIR selects
 the temporary parent; SLORP_SMOKE_KEEP=1 retains diagnostics and fixture data.
@@ -20,7 +20,7 @@ import urllib.parse
 import urllib.request
 import uuid
 
-from smoke import port, request, stop, terminal, wait_for, workspace
+from smoke import environment, model_config, native, port, request, stop, terminal, wait_for, workspace, version as require_version
 
 
 ANSWER = 'Fixture answer'
@@ -177,16 +177,8 @@ def main():
         # The build deliberately uses the ambient Go cache, not the fixture HOME.
         binary = root/'slorp'
         subprocess.run(['go', 'build', '-o', str(binary), '.'], cwd=repo, check=True)
-        env = {key: os.environ[key] for key in ('PATH', 'LANG', 'LC_ALL') if key in os.environ}
-        env.update(HOME=str(home), OPENCODE_TEST_HOME=str(home), TMPDIR=str(root/'tmp'),
-                   XDG_CONFIG_HOME=str(root/'config'), XDG_DATA_HOME=str(root/'data'),
-                   XDG_STATE_HOME=str(root/'state'), XDG_CACHE_HOME=str(root/'cache'),
-                   npm_config_cache=str(root/'npm-cache'), TERM='xterm-256color',
-                   OPENCODE_DISABLE_EXTERNAL_SKILLS='true', OPENCODE_DISABLE_DEFAULT_PLUGINS='true',
-                   OPENCODE_DISABLE_MODELS_FETCH='true', OPENCODE_DISABLE_UPDATE_CHECK='true',
-                   GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull)
-        version = subprocess.check_output([executable, '--version'], env=env, cwd=root, text=True).strip()
-        assert version == '1.19.6', f'This smoke targets OpenCode 1.19.6, installed: {version}'
+        env = environment(root)
+        version = require_version(executable, root, env)
         subprocess.run(['git', 'init', '--quiet', str(project)], env=env, cwd=root, check=True)
         fixture = Fixture()
         trees = ProcessTrees()
@@ -209,7 +201,7 @@ def main():
             return next((s for s in state()['sessions'] if s['id'] == session_id), None)
 
         def export():
-            result = subprocess.run([executable, 'export', '--pure', session_id], cwd=project,
+            result = subprocess.run([executable, 'session', 'export', '--standalone', session_id], cwd=project,
                                     env=env, text=True, capture_output=True, timeout=30)
             assert result.returncode == 0, result.stderr
             data = json.loads(result.stdout)
@@ -220,24 +212,24 @@ def main():
             data = export()
             assert data['info']['id'] == session_id, data['info']
             assert data['info']['title'] == 'Native lifecycle fixture', data['info']
-            users = [m for m in data['messages'] if m['info']['role'] == 'user']
-            texts = ['\n'.join(p['text'] for p in m['parts'] if p['type'] == 'text'
-                               and not p.get('synthetic')) for m in users]
+            users = [m for m in data['messages'] if m['type'] == 'user']
+            texts = [m['text'] for m in users]
             assert texts == expected, ('native user turns', texts, expected)
             for message in users:
-                info = message['info']
-                assert info['agent'] == OPTIONS['agentName'], info
-                assert info['model'] == {'providerID': 'mock', 'modelID': 'fixture', 'variant': 'high'}, info
-                answers = [m for m in data['messages'] if m['info'].get('parentID') == info['id']
-                           and m['info']['role'] == 'assistant']
-                assert len(answers) == 1, ('native assistant count', answers)
-                answer = answers[0]
-                if any(p.get('text') == BLOCK for p in message['parts']):
-                    assert answer['info'].get('error', {}).get('name') == 'MessageAbortedError', answer
+                index = data['messages'].index(message)
+                end = next((i for i in range(index + 1, len(data['messages']))
+                            if data['messages'][i]['type'] == 'user'), len(data['messages']))
+                answers = [m for m in data['messages'][index + 1:end] if m['type'] == 'assistant']
+                if message['text'] == BLOCK:
+                    assert data['info']['outcome'] == 'interrupted', data['info']
                 else:
-                    assert answer['info']['time'].get('completed') and answer['info'].get('finish') == 'stop', answer
-                    assert ''.join(p['text'] for p in answer['parts'] if p['type'] == 'text') == ANSWER, answer
-            return [m['info']['id'] for m in users]
+                    assert len(answers) == 1, ('native assistant count', answers)
+                    answer = answers[0]
+                    assert answer['agent'] == OPTIONS['agentName'], answer
+                    assert answer['model'] == {'providerID': 'mock', 'id': 'fixture', 'variant': 'high'}, answer
+                    assert answer['time'].get('completed') and answer.get('finish') == 'stop', answer
+                    assert ''.join(p['text'] for p in answer['content'] if p['type'] == 'text') == ANSWER, answer
+            return [m['id'] for m in users]
 
         def completed(expected):
             def ready():
@@ -281,21 +273,16 @@ def main():
             unrelated.mkdir()
             (unrelated/'package.json').write_text(json.dumps(
                 {'name': 'unrelated-smoke-plugin', 'type': 'module', 'main': 'index.js'}))
-            (unrelated/'index.js').write_text('export default async () => ({})\n')
+            (unrelated/'index.js').write_text("import { Plugin } from '@opencode/plugin'; export default Plugin.define({id:'smoke.unrelated',setup(){}})\n")
             global_file = config/'opencode.jsonc'
-            global_file.write_text('// Preserve fixture user config, comments, and plugin tuple.\n' + json.dumps({
-                'username': 'lifecycle-smoke-user', 'autoupdate': False, 'share': 'disabled',
-                'enabled_providers': ['mock'], 'model': 'mock/fixture', 'small_model': 'mock/fixture',
-                'plugin': [[str(unrelated), {'marker': 'kept'}]],
-                'provider': {'mock': {'name': 'Mock fixture', 'npm': '@ai-sdk/openai-compatible',
-                    'options': {'apiKey': 'fixture-only-not-a-secret', 'includeUsage': True,
-                                'baseURL': f'http://127.0.0.1:{fixture.server_port}/v1'},
-                    'models': {'fixture': {'name': 'Fixture', 'limit': {'context': 32000, 'output': 1000},
-                                           'variants': {'high': {}}}}}}}, indent=2))
+            configured = model_config(f'http://127.0.0.1:{fixture.server_port}')
+            configured['plugins'] = [{'package': str(unrelated), 'options': {'marker': 'kept'}}]
+            global_file.write_text('// Preserve fixture user config, comments, and plugin options.\n' +
+                                   json.dumps(configured, indent=2))
             project_file = project/'opencode.json'
             project_file.write_text(json.dumps({'$schema': 'https://opencode.ai/config.json',
-                'default_agent': 'review', 'agent': {
-                'review': {'description': 'Fixture review agent', 'mode': 'primary', 'variant': 'high'}}}))
+                'default_agent': 'review', 'agents': {
+                'review': {'description': 'Fixture review agent', 'mode': 'primary', 'model': 'mock/fixture#high'}}}))
             sentinel = home/'unrelated-user-file'
             sentinel.write_text('User-owned fixture data must survive.\n')
             protected = {path: digest(path) for path in
@@ -327,12 +314,13 @@ def main():
 
             # A real, unrelated terminal must not acquire the runtime-only bridge.
             other_url = f'http://127.0.0.1:{port()}'
-            seed = service([executable, 'serve', '--pure', '--hostname', '127.0.0.1',
+            seed = service([executable, 'serve', '--hostname', '127.0.0.1',
                             '--port', other_url.rsplit(':', 1)[1]], cwd=project)
-            wait_for(lambda: request(other_url, '/global/health'))
-            other = request(other_url, '/session', {'title': 'Unrelated terminal root'}, timeout=120)
+            wait_for(lambda: native(other_url, '/api/info'))
+            other = native(other_url, '/api/session', {'title': 'Unrelated terminal root',
+                                                     'location': {'directory': str(project)}})
             stop(seed)
-            term = terminal([executable, '--session', other['id']], project, env)
+            term = terminal([executable, '--standalone', '--session', other['id']], project, env)
             children.append(term)
             trees.add(term)
             time.sleep(3)
@@ -349,7 +337,7 @@ def main():
                           prompt=expected[0], name='Native lifecycle fixture', effort=effort,
                           role=role, requestId=str(uuid.uuid4())), expected=202)
             session_id = started['sessionId']
-            assert session_id.startswith('ses_'), started
+            assert session_id.startswith('ses'), started
             completed(expected)
             print(f'PASS: initial prompt and deterministic SSE response observed through Slorp ({session_id}); native fields and usage verified', flush=True)
 
@@ -408,11 +396,11 @@ def main():
             for path, original in protected.items():
                 assert digest(path) == original, f'User file changed: {path}'
             print('PASS: graceful Slorp shutdown reaps its native children, removes private runtimes and preserves unrelated terminal/config', flush=True)
-            print('SKIP: optional interactive tool-permission allow/deny scenario', flush=True)
             print(f'PASS: OpenCode {version}; {len(fixture.captured())} loopback fixture requests; no external model configured', flush=True)
         except BaseException:
             log.flush()
-            print('\n=== Slorp / standalone OpenCode logs ===\n' + log_path.read_text(), flush=True)
+            print('\n=== Slorp / standalone OpenCode logs (last 40 lines) ===\n' +
+                  '\n'.join(log_path.read_text().splitlines()[-40:]), flush=True)
             for proc in children:
                 print(f'=== Owned process tree {proc.pid}: {trees.remaining(proc)} ===', flush=True)
             try:
@@ -433,7 +421,8 @@ def main():
                                                                           if m['role'] != 'system']})
             print('=== Fixture requests (without system prompt/tool schemas) ===\n' + json.dumps(captured, indent=2), flush=True)
             for path in (root/'data').glob('opencode/log/*.log'):
-                print(f'=== {path.name} ===\n{path.read_text(errors="replace")}', flush=True)
+                print(f'=== {path.name} (last 20 lines) ===\n' +
+                      '\n'.join(path.read_text(errors='replace').splitlines()[-20:]), flush=True)
             raise
         finally:
             fixture.close()

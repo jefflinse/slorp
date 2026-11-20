@@ -1,12 +1,14 @@
-"""Offline native OpenCode 1.19.6 account-quota smoke.
+"""Offline native OpenCode 2.3.2 account-quota smoke.
 
 Run: python3 -B integrations/opencode/quotas-smoke.py. TMPDIR selects the
 temporary parent; SLORP_SMOKE_KEEP=1 retains synthetic-only diagnostics.
-No auth loader, provider.options.fetch, collector, or bridge payload is mocked.
-Only the final global-fetch network boundary is redirected to loopback.
+No credential resolver, collector, or bridge payload is mocked.
+Only the final network boundary is redirected to loopback, using a fixture TLS
+proxy for the native HTTP client and fetch interception for plugin requests.
 """
 
 from contextlib import closing
+import argparse
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -15,13 +17,14 @@ from pathlib import Path
 import shutil
 import signal
 import sqlite3
+import ssl
 import subprocess
 import threading
 import time
 import urllib.parse
 import urllib.request
 
-from smoke import port, request, stop, wait_for, workspace
+from smoke import environment, headless_config, native as native_request, port, request, stop, version as require_version, wait_for, workspace
 
 
 ACCESS = 'quota-fixture-codex-access-not-a-credential'
@@ -49,10 +52,10 @@ CATALOG_URLS = {
     'https://api.individual.githubcopilot.com/models',
 }
 
-# This plugin observes the real hook without changing its input or output. In
-# particular it has no auth.loader and never assigns provider.options.fetch.
+# Observe the native context hook and redirect only the final network boundary.
 PLUGIN = r'''
 import { appendFileSync } from 'node:fs'
+import { Plugin } from '@opencode/plugin'
 const settings = SETTINGS
 const record = data => appendFileSync(settings.audit, JSON.stringify({at: Date.now(), ...data}) + '\n')
 const original = globalThis.fetch
@@ -95,16 +98,15 @@ globalThis.WebSocket = class {
     throw new Error('Offline fixture requires native HTTP fallback')
   }
 }
-export default async () => ({
-  'chat.params': async input => {
-    const p = input.provider, m = input.model
-    record({type: 'params', sessionID: input.sessionID, provider: p.id,
-      apiURL: m.api.url, model: m.id, context: m.limit.context,
-      nativeFetch: typeof p.options?.fetch === 'function',
-      keyKind: p.options?.apiKey === 'opencode-oauth-dummy-key' ? 'oauth-sentinel' :
-        p.options?.apiKey === '' ? 'empty-sentinel' : 'other'})
+export default Plugin.define({
+  id: 'quota.network-fixture',
+  async setup(ctx) {
+    await ctx.session.hook('context', input => {
+      record({type: 'context', sessionID: input.sessionID,
+        provider: input.model.providerID, model: input.model.id})
+    })
+    return () => record({type: 'dispose', outstanding})
   },
-  dispose: async () => record({type: 'dispose', outstanding}),
 })
 '''
 
@@ -138,9 +140,27 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_CONNECT(self):
-        with self.server.lock:
-            self.server.errors.append('Denied proxy CONNECT: ' + self.path)
-        self.send_error(502)
+        host = self.path.split(':')[0]
+        allowed = {urllib.parse.urlsplit(url).hostname for url in MODEL_URLS | CATALOG_URLS | {CODEX, COPILOT, GO, REFRESH_URL}}
+        if host not in allowed:
+            with self.server.lock:
+                self.server.errors.append('Denied proxy CONNECT: ' + self.path)
+            self.send_error(502)
+            return
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.flush()
+        try:
+            self.connection = self.server.tls.wrap_socket(self.connection, server_side=True)
+            self.rfile = self.connection.makefile('rb')
+            self.wfile = self.connection.makefile('wb')
+            self.tunnel_host = host
+            self.close_connection = False
+            self.handle_one_request()
+        except (OSError, ssl.SSLError):
+            pass
+        finally:
+            self.close_connection = True
 
     def do_GET(self):
         self.handle_fixture()
@@ -162,14 +182,16 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith('/registry/'):
             self.respond(404, {'error': 'Dependency downloads disabled in offline smoke'})
             return
-        url = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get('url', [''])[0]
+        url = ('https://' + self.tunnel_host + self.path) if hasattr(self, 'tunnel_host') else \
+            urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get('url', [''])[0]
         body = self.rfile.read(int(self.headers.get('Content-Length', '0')))
         headers = {key.lower(): value for key, value in self.headers.items()}
         with self.server.lock:
             self.server.records.append({'url': url, 'method': self.command, 'headers': headers,
+                                        'transport': 'native' if hasattr(self, 'tunnel_host') else 'plugin',
                                         'at': time.time()})
         try:
-            assert self.path.startswith('/fetch?'), ('Unexpected direct network/proxy call', self.path)
+            assert self.path.startswith('/fetch?') or hasattr(self, 'tunnel_host'), ('Unexpected direct network/proxy call', self.path)
             if url in (CODEX, COPILOT, GO):
                 assert self.command == 'GET', (url, self.command)
                 token = {CODEX: ACCESS, COPILOT: GITHUB, GO: GO_KEY}[url]
@@ -218,7 +240,7 @@ class Handler(BaseHTTPRequestHandler):
                 if token == ACCESS:
                     assert headers.get('chatgpt-account-id') == ACCOUNT, headers
                 # A nonretryable provider error still leaves a real, replyable
-                # native root and its chat.params capability available to Slorp.
+                # native root and its resolved credential capability available to Slorp.
                 self.respond(400, {'error': {'message': 'Synthetic offline model error',
                                             'type': 'invalid_request_error', 'code': 'fixture'}})
             else:
@@ -244,10 +266,14 @@ def sanitized(value):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--native-only', action='store_true', help='verify native credential/model transports without the Slorp collector')
+    parser.add_argument('--case', choices=('codex', 'go', 'copilot', 'api-key'))
+    args = parser.parse_args()
     if not __debug__:
         raise SystemExit('Run without -O: this smoke uses assertions')
     executable = shutil.which('opencode')
-    assert executable, 'OpenCode 1.19.6 must be installed'
+    assert executable, 'OpenCode 2.3.2 must be installed'
     repo = Path(__file__).resolve().parents[2]
     urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
     with workspace() as temporary:
@@ -257,25 +283,31 @@ def main():
             directory.mkdir(parents=True)
         binary = root/'slorp'
         # Retain ambient Go caches; disallow fetching dependencies during build.
-        subprocess.run(['go', 'build', '-o', str(binary), '.'], cwd=repo,
-                       env=dict(os.environ, GOPROXY='off', GOSUMDB='off'), check=True)
-        env = {key: os.environ[key] for key in ('PATH', 'LANG', 'LC_ALL') if key in os.environ}
-        env.update(HOME=str(root/'home'), OPENCODE_TEST_HOME=str(root/'home'), TMPDIR=str(root/'tmp'),
-                   XDG_CONFIG_HOME=str(root/'config'), XDG_DATA_HOME=str(root/'data'),
-                   XDG_STATE_HOME=str(root/'state'), XDG_CACHE_HOME=str(root/'cache'),
-                   npm_config_cache=str(root/'npm-cache'), TERM='xterm-256color',
-                   OPENCODE_DISABLE_EXTERNAL_SKILLS='true', OPENCODE_DISABLE_DEFAULT_PLUGINS='false',
-                   OPENCODE_DISABLE_MODELS_FETCH='true', OPENCODE_DISABLE_UPDATE_CHECK='true',
-                   OPENCODE_DISABLE_LSP_DOWNLOAD='true',
-                   GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull)
-        version = subprocess.check_output([executable, '--version'], env=env, cwd=root, text=True).strip()
-        assert version == '1.19.6', f'Expected native OpenCode 1.19.6, got {version}'
+        if not args.native_only:
+            subprocess.run(['go', 'build', '-o', str(binary), '.'], cwd=repo,
+                           env=dict(os.environ, GOPROXY='off', GOSUMDB='off'), check=True)
+        env = environment(root)
+        version = require_version(executable, root, env)
         subprocess.run(['git', 'init', '--quiet', str(project)], env=env, cwd=root, check=True)
         fixture = Fixture()
+        certificate, key = root/'fixture-ca.pem', root/'fixture-key.pem'
+        hosts = sorted({urllib.parse.urlsplit(url).hostname for url in
+                        MODEL_URLS | CATALOG_URLS | {CODEX, COPILOT, GO, REFRESH_URL}})
+        openssl_config = root/'openssl.cnf'
+        openssl_config.write_text('[req]\ndistinguished_name=dn\nx509_extensions=ext\nprompt=no\n'
+            '[dn]\nCN=Isolated quota fixture\n[ext]\nbasicConstraints=critical,CA:TRUE\n'
+            'keyUsage=critical,keyCertSign,digitalSignature,keyEncipherment\n'
+            'subjectAltName=' + ','.join('DNS:' + host for host in hosts) + '\n')
+        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+                        '-keyout', str(key), '-out', str(certificate), '-config', str(openssl_config)],
+                       env=env, cwd=root, check=True, capture_output=True)
+        fixture.tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        fixture.tls.load_cert_chain(certificate, key)
         fixture_url = f'http://127.0.0.1:{fixture.server_port}'
         base, native = f'http://127.0.0.1:{port()}', f'http://127.0.0.1:{port()}'
         env.update(SLORP_URL=base, HTTP_PROXY=fixture_url, HTTPS_PROXY=fixture_url,
                    ALL_PROXY=fixture_url, NO_PROXY='127.0.0.1,localhost,::1',
+                   NODE_EXTRA_CA_CERTS=str(certificate),
                    npm_config_registry=fixture_url + '/registry/', NPM_CONFIG_REGISTRY=fixture_url + '/registry/')
         plugin = root/'network-fixture'
         plugin.mkdir()
@@ -286,7 +318,7 @@ def main():
                     'urls': sorted(MODEL_URLS | CATALOG_URLS | {CODEX, COPILOT, GO, REFRESH_URL})}
         (plugin/'index.js').write_text(PLUGIN.replace('SETTINGS', json.dumps(settings)))
         config_file = config/'opencode.json'
-        config_file.write_text(json.dumps({'plugin': [str(plugin)], 'autoupdate': False, 'share': 'disabled'}))
+        config_file.write_text(json.dumps({'plugins': [str(plugin)], 'update': 'disable'}))
         children = []
         log_path = root/'processes.log'
         log = log_path.open('w')
@@ -308,61 +340,81 @@ def main():
             return next((r for r in state().get('providerLimits', []) if r['sessionId'] == sid), None)
 
         try:
-            slorp = service([str(binary), '-addr', base.removeprefix('http://'), '-data', str(root/'slorp-data'),
-                             '-claude', str(root/'no-claude'), '-opencode', executable, '-llm', ''])
-            wait_for(lambda: state().get('plugins', {}).get('opencode'))
-            request(base, '/api/plugins/opencode', {}, timeout=120)
-            installed = state()['plugins']['opencode']
-            assert installed['installed'], installed
+            if not args.native_only:
+                slorp = service([str(binary), '-addr', base.removeprefix('http://'), '-data', str(root/'slorp-data'),
+                                 '-claude', str(root/'no-claude'), '-opencode', executable, '-llm', ''])
+                wait_for(lambda: state().get('plugins', {}).get('opencode'))
+                request(base, '/api/plugins/opencode', {}, timeout=120)
+                installed = state()['plugins']['opencode']
+                assert installed['installed'], installed
             installed_config = json.loads(config_file.read_text())
+            if not args.native_only:
+                installed_config = headless_config(installed_config, installed['path'], native)
             cases = [
-                ('codex', 'openai', 'gpt-5.4', 'openai-codex', CODEX),
+                ('codex', 'openai', 'gpt-6-fixture', 'openai-codex', CODEX),
                 ('go', 'opencode-go', 'quota-fixture', 'opencode-go', GO),
                 ('copilot', 'github-copilot', 'gpt-4.1', 'github-copilot', COPILOT),
-                ('api-key', 'openai', 'gpt-5.4', 'openai-codex', None),
+                ('api-key', 'openai', 'gpt-6-fixture', 'openai-codex', None),
             ]
             for name, provider, model, source, quota_url in cases:
+                if args.case and name != args.case:
+                    continue
                 fixture.throttle = False
-                auth = {'openai': {'type': 'oauth', 'access': ACCESS, 'refresh': REFRESH,
-                                  'expires': int(time.time() * 1000) + 86400000, 'accountId': ACCOUNT},
-                        'github-copilot': {'type': 'oauth', 'access': GITHUB, 'refresh': GITHUB,
-                                           'expires': int(time.time() * 1000) + 86400000},
-                        'opencode-go': {'type': 'api', 'key': GO_KEY}}
+                auth = {'openai': {'type': 'oauth', 'methodID': 'chatgpt-browser', 'access': ACCESS, 'refresh': REFRESH,
+                                  'expires': int(time.time() * 1000) + 86400000,
+                                  'metadata': {'accountID': ACCOUNT}},
+                        'github-copilot': {'type': 'oauth', 'methodID': 'device', 'access': GITHUB, 'refresh': GITHUB,
+                                           'expires': int(time.time() * 1000) + 86400000,
+                                           'metadata': {'apiEndpoint': 'https://api.githubcopilot.com'}},
+                        'opencode-go': {'type': 'key', 'key': GO_KEY}}
                 if name == 'api-key':
-                    auth['openai'] = {'type': 'api', 'key': API_KEY}
-                (root/'data'/'opencode'/'auth.json').write_text(json.dumps({provider: auth[provider]}))
+                    auth['openai'] = {'type': 'key', 'key': API_KEY}
                 official = {'openai': 'https://api.openai.com/v1',
                             'github-copilot': 'https://api.githubcopilot.com',
                             'opencode-go': 'https://opencode.ai/zen/go/v1'}[provider]
-                provider_config = {'api': official, 'whitelist': [model], 'models': {model: {
+                provider_config = {'settings': {'baseURL': official, 'transport': 'http', 'encoding': 'none'}, 'models': {model: {
                     'name': 'Quota fixture', 'limit': {'context': 32000, 'output': 1000}}}}
+                if name in ('codex', 'api-key'):
+                    del provider_config['settings']['baseURL']
                 if name == 'go':
-                    provider_config.update(npm='@ai-sdk/openai-compatible',
-                                           options={'baseURL': 'https://opencode.ai/zen/go/v1'})
-                configured = dict(installed_config, enabled_providers=[provider],
-                                  model=f'{provider}/{model}', small_model=f'{provider}/{model}',
-                                  provider={provider: provider_config})
+                    provider_config.update(package='@opencode/ai/providers/openai-compatible')
+                configured = dict(installed_config, policies=[
+                    {'action': 'provider.use', 'resource': '*', 'effect': 'deny'},
+                    {'action': 'provider.use', 'resource': provider, 'effect': 'allow'}],
+                    model=f'{provider}/{model}', agents={'title': {'disabled': True}},
+                    providers={provider: provider_config})
                 config_file.write_text(json.dumps(configured))
                 before = len(fixture.captured())
                 audit_start = len(audit(audit_path))
                 agent = service([executable, 'serve', '--hostname', '127.0.0.1',
                                  '--port', native.rsplit(':', 1)[1], '--print-logs'])
-                wait_for(lambda: request(native, '/global/health'))
-                session = request(native, '/session', {'title': f'Quota smoke {name}'}, timeout=120)
+                wait_for(lambda: native_request(native, '/api/info'))
+                location = '?' + urllib.parse.urlencode({'location[directory]': str(project)})
+                native_request(native, '/api/config' + location)
+                for credential in native_request(native, '/api/credential'):
+                    native_request(native, '/api/credential/' + credential['id'], method='DELETE')
+                native_request(native, '/api/credential', {'integrationID': provider,
+                    'value': auth[provider], 'activate': True})
+                session = native_request(native, '/api/session', {'title': f'Quota smoke {name}',
+                    'location': {'directory': str(project)}, 'model': {'providerID': provider, 'id': model}})
                 sid = session['id']
-                assert not report(sid), 'Catalog/config inferred account quotas before chat.params'
-                assert not [r for r in fixture.captured()[before:] if r['url'] in (CODEX, COPILOT, GO)]
-                request(native, f'/session/{sid}/message', {
-                    'model': {'providerID': provider, 'modelID': model},
-                    'parts': [{'type': 'text', 'text': 'Return the offline fixture answer.'}]}, timeout=120)
+                if not args.native_only:
+                    assert not report(sid), 'Catalog/config inferred account quotas before session observation'
+                assert not [r for r in fixture.captured()[before:]
+                            if r['url'] in (CODEX, COPILOT, GO) and
+                            not (r['url'] == COPILOT and r['transport'] == 'native')]
+                native_request(native, f'/api/session/{sid}/prompt', {'text': 'Return the offline fixture answer.'})
                 params = wait_for(lambda: next((e for e in audit(audit_path)[audit_start:]
-                    if e['type'] == 'params' and e['sessionID'] == sid), None))
-                assert params['provider'] == provider and params['context'] == 32000 and params['apiURL'] == official, params
-                if name in ('codex', 'copilot'):
-                    assert params['nativeFetch'], ('Native auth loader did not provide fetch', params)
-                    assert params['keyKind'] == ('oauth-sentinel' if name == 'codex' else 'empty-sentinel'), params
-                else:
-                    assert not params['nativeFetch'], params
+                    if e['type'] == 'context' and e['sessionID'] == sid), None))
+                assert params['provider'] == provider and params['model'] == model, params
+                (root/f'{name}-provider.json').write_text(json.dumps(
+                    native_request(native, f'/api/provider/{provider}' + location), indent=2))
+                wait_for(lambda: any(r['url'] in MODEL_URLS for r in fixture.captured()[before:]))
+                assert not fixture.errors, fixture.errors
+                if args.native_only:
+                    print(f'PASS: {name}: native V2 credential, context and model HTTP authentication reached the isolated fixture', flush=True)
+                    stop(agent)
+                    continue
                 wait_for(lambda: (live(sid) or {}).get('canReply'))
                 expected_status = 'ok' if quota_url else 'unsupported'
                 reading = wait_for(lambda: r if (r := report(sid)) and r['status'] == expected_status else None)
@@ -392,7 +444,7 @@ def main():
                     assert not [r for r in fixture.captured()[before:] if r['url'] in (CODEX, COPILOT, GO)]
                 assert any(r['url'] in MODEL_URLS for r in fixture.captured()[before:]), 'Native model transport not exercised'
                 assert not fixture.errors, fixture.errors
-                print(f'PASS: {name}: real chat.params -> {source} {expected_status}; native transport headers and UIState verified', flush=True)
+                print(f'PASS: {name}: real V2 credential/context -> {source} {expected_status}; native transport headers and UIState verified', flush=True)
 
                 if name == 'codex':
                     fixture.throttle = True
@@ -409,7 +461,9 @@ def main():
                     assert live(sid)['canReply'], live(sid)
                     print('PASS: 429 Retry-After: 3600 clears OAuth measurements without breaking heartbeats or canReply', flush=True)
 
-                request(native, '/instance/dispose', {}, timeout=30)
+                for loaded in native_request(native, '/api/debug/location'):
+                    query = '?' + urllib.parse.urlencode({'location[directory]': loaded['directory']})
+                    native_request(native, '/api/debug/location' + query, method='DELETE')
                 wait_for(lambda: any(e['type'] == 'dispose' for e in audit(audit_path)[audit_start:]))
                 time.sleep(1)
                 after_dispose = len(fixture.captured())
@@ -417,12 +471,14 @@ def main():
                 # Leave the process alive beyond a collector period: process exit
                 # must not conceal a leaked interval. Go has no Retry-After delay.
                 time.sleep(65 if name == 'go' else 3)
-                assert agent.poll() is None and request(native, '/global/health')
+                assert agent.poll() is None and native_request(native, '/api/info')
                 assert len(fixture.captured()) == after_dispose, 'Provider polling survived native disposal'
                 assert not any(e['type'] in ('heartbeat', 'fetch') for e in audit(audit_path)[audit_end:])
                 assert all(e['outstanding'] == 0 for e in audit(audit_path)[audit_start:] if e['type'] == 'dispose')
                 assert not any(e['type'] == 'denied' for e in audit(audit_path)[audit_start:]), audit(audit_path)[audit_start:]
                 stop(agent)
+            if args.native_only:
+                return
             slorp.send_signal(signal.SIGINT)
             slorp.wait(timeout=15)
             assert slorp.returncode == 0, slorp.returncode
@@ -436,10 +492,11 @@ def main():
                     sanitized(path.read_bytes().decode('utf8', errors='replace'))
             assert not fixture.errors, fixture.errors
             print('PASS: native disposal stops polling in a live process; no private provider data in Slorp API or SQLite', flush=True)
-            print('SKIP: live account endpoint verification; all credentials and provider responses were synthetic', flush=True)
+            print(f'PASS: OpenCode {version}; all credentials and provider responses were synthetic', flush=True)
         except BaseException:
             log.flush()
-            print('=== Native / Slorp logs ===\n' + log_path.read_text(), flush=True)
+            print('=== Native / Slorp logs (last 40 lines) ===\n' +
+                  '\n'.join(log_path.read_text().splitlines()[-40:]), flush=True)
             print('=== Native hook / transport audit ===\n' + json.dumps(audit(audit_path), indent=2), flush=True)
             print('=== Synthetic fixture requests ===\n' + json.dumps(fixture.captured(), indent=2), flush=True)
             try:

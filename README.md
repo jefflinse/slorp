@@ -6,7 +6,7 @@ Slorp helps make sense of the dozens of agent sessions running on your machine.
 
 ## Getting Started
 
-You need [Go](https://go.dev/dl/) 1.27 or later and [Claude Code](https://claude.com/claude-code) or [OpenCode](https://opencode.ai).
+You need [Go](https://go.dev/dl/) 1.27 or later and [Claude Code](https://claude.com/claude-code) or [OpenCode](https://opencode.ai) 2.x.
 
 1. Install Slorp.
 
@@ -20,7 +20,7 @@ You need [Go](https://go.dev/dl/) 1.27 or later and [Claude Code](https://claude
    slorp
    ```
 
-3. Slorp detects missing agent plugins and offers to install them on the page or under **Settings → Integrations**. Claude Code sessions load their plugin after `/reload-plugins` or a restart. OpenCode needs a restart.
+3. Slorp detects missing agent plugins and offers to install them on the page or under **Settings → Integrations**. Claude Code sessions load their plugin after `/reload-plugins` or a restart. OpenCode reloads its configuration automatically; use `/reload` if needed.
 
 To try Slorp without installing it, `go run github.com/jefflinse/slorp@latest` does the same as steps 1 and 2.
 

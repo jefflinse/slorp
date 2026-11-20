@@ -27,9 +27,14 @@ type manifest struct {
 	Managed bool              `json:"slorpManaged,omitempty"`
 }
 
+var bundleFiles = []string{"package.json", "slorp.ts", "tui.ts", "presence.ts", "quotas.ts", "native.ts", "forms.ts", "service.js", "server.ts"}
+
 func bundled(address string) (map[string][]byte, string, error) {
 	files := map[string][]byte{}
-	for _, name := range []string{"slorp.ts", "tui.ts", "presence.ts", "quotas.ts", "package.json"} {
+	for _, name := range bundleFiles {
+		if name == "server.ts" {
+			continue
+		}
 		b, err := opencodeplugin.Files.ReadFile(name)
 		if err != nil {
 			return nil, "", err
@@ -41,10 +46,13 @@ func bundled(address string) (map[string][]byte, string, error) {
 		return nil, "", err
 	}
 	m.Main, m.Type, m.Managed = "server.ts", "module", true
-	m.Exports = map[string]string{".": "./server.ts", "./tui": "./tui.ts"}
+	if m.Exports == nil {
+		m.Exports = map[string]string{}
+	}
+	m.Exports["."], m.Exports["./tui"] = "./server.ts", "./tui.ts"
 	files["package.json"], _ = json.MarshalIndent(m, "", "  ")
 	url, _ := json.Marshal(address)
-	files["server.ts"] = []byte("import { Slorp } from './slorp.ts'\nimport { revision } from './revision.ts'\nexport default (input, options) => Slorp(input, { url: " + string(url) + ", ...options, revision })\n")
+	files["server.ts"] = []byte("import { Slorp } from './slorp.ts'\nimport { revision } from './revision.ts'\nexport default { id: 'slorp', setup: ctx => Slorp(ctx, { url: " + string(url) + ", ...ctx.options, revision }) }\n")
 	files["revision.ts"] = []byte("export const revision = '" + fingerprint(files) + "'\n")
 	return files, m.Version, nil
 }
@@ -57,10 +65,6 @@ func (a *Adapter) configDirs() []string {
 		dir = filepath.Join(a.Home, ".config", "opencode")
 	}
 	dirs := []string{dir}
-	legacy := filepath.Join(a.Home, ".opencode")
-	if !samePath(dir, legacy) {
-		dirs = append(dirs, legacy)
-	}
 	if a.ExtraConfigDir != "" && !samePath(dir, a.ExtraConfigDir) {
 		dirs = append(dirs, a.ExtraConfigDir)
 	}
@@ -68,21 +72,22 @@ func (a *Adapter) configDirs() []string {
 }
 
 func (a *Adapter) configs(tui bool) []string {
-	name := "opencode"
 	if tui {
-		name = "tui"
+		return []string{filepath.Join(a.configDirs()[0], "cli.json")}
 	}
-	var paths []string
-	for _, dir := range a.configDirs() {
-		if !tui {
-			paths = append(paths, filepath.Join(dir, "config.json"))
-		}
-		paths = append(paths, filepath.Join(dir, name+".json"), filepath.Join(dir, name+".jsonc"))
-	}
-	if !tui && a.ConfigFile != "" && !slices.Contains(paths, a.ConfigFile) {
+	dir := a.serverConfigDir()
+	paths := []string{filepath.Join(dir, "opencode.json"), filepath.Join(dir, "opencode.jsonc")}
+	if a.ConfigFile != "" && !slices.Contains(paths, a.ConfigFile) {
 		paths = append(paths, a.ConfigFile)
 	}
 	return paths
+}
+
+func (a *Adapter) serverConfigDir() string {
+	if a.ExtraConfigDir != "" {
+		return a.ExtraConfigDir
+	}
+	return a.configDirs()[0]
 }
 
 func pluginAt(path string) (manifest, bool) {
@@ -91,11 +96,7 @@ func pluginAt(path string) (manifest, bool) {
 	if err == nil && json.Unmarshal(b, &m) == nil && m.Name == "opencode-slorp" {
 		return m, true
 	}
-	if filepath.Ext(path) != ".ts" && filepath.Ext(path) != ".js" {
-		return m, false
-	}
-	b, err = os.ReadFile(path)
-	return m, err == nil && strings.Contains(string(b), "const AGENT = 'opencode'") && strings.Contains(string(b), "/api/bridge/poll")
+	return m, false
 }
 
 func (a *Adapter) inspect() (hub.Plugin, error) {
@@ -121,15 +122,13 @@ func (a *Adapter) inspect() (hub.Plugin, error) {
 			}
 		}
 	}
-	for _, dir := range a.configDirs() {
-		for _, folder := range []string{"plugin", "plugins"} {
-			children, _ := os.ReadDir(filepath.Join(dir, folder))
-			for _, child := range children {
-				paths = append(paths, filepath.Join(dir, folder, child.Name()))
-			}
-		}
+	dir := filepath.Join(a.serverConfigDir(), "plugins")
+	children, _ := os.ReadDir(dir)
+	for _, child := range children {
+		paths = append(paths, filepath.Join(dir, child.Name()))
 	}
 	serverPaths := slices.Clone(paths)
+	var terminalPaths []string
 	for _, cfg := range a.configs(true) {
 		b, err := os.ReadFile(cfg)
 		if os.IsNotExist(err) {
@@ -145,6 +144,7 @@ func (a *Adapter) inspect() (hub.Plugin, error) {
 		for _, e := range list {
 			if path := localPath(e.spec, cfg); path != "" {
 				paths = append(paths, path)
+				terminalPaths = append(terminalPaths, path)
 			}
 		}
 	}
@@ -158,9 +158,6 @@ func (a *Adapter) inspect() (hub.Plugin, error) {
 			return p, errors.New("multiple Slorp plugins are configured; remove the duplicate before changing setup")
 		}
 		p = hub.Plugin{Installed: true, Enabled: true, Path: path, Version: m.Version, Source: "local", NeedsSetup: true}
-		if m.Name == "" {
-			p.Source = "file"
-		}
 		if m.Managed && samePath(path, a.managedPath()) {
 			p.Source = "managed"
 			files, version, err := bundled(a.URL)
@@ -185,41 +182,34 @@ func (a *Adapter) inspect() (hub.Plugin, error) {
 		return p, nil
 	}
 	p.Enabled = slices.ContainsFunc(serverPaths, func(path string) bool { return samePath(path, p.Path) })
-	var tuiEnabled *bool
-	for _, cfg := range a.configs(true) {
-		b, err := os.ReadFile(cfg)
-		if os.IsNotExist(err) {
-			continue
-		}
-		if err != nil {
-			return p, err
-		}
-		list, err := entries(b)
-		if err != nil {
-			return p, fmt.Errorf("%s: %w", cfg, err)
-		}
-		var control struct {
-			Enabled map[string]bool `json:"plugin_enabled"`
-		}
-		if json.Unmarshal(jsonConfig(b), &control) == nil {
-			if enabled, exists := control.Enabled["slorp"]; exists {
-				tuiEnabled = &enabled
+	p.NeedsSetup = !p.Enabled ||
+		slices.ContainsFunc(terminalPaths, func(path string) bool { return samePath(path, p.Path) })
+	for _, configs := range [][]string{a.configs(false), a.configs(true)} {
+		enabled := true
+		for _, cfg := range configs {
+			b, err := os.ReadFile(cfg)
+			if os.IsNotExist(err) {
+				continue
 			}
-		}
-		for _, e := range list {
-			if samePath(localPath(e.spec, cfg), p.Path) {
-				m, _ := pluginAt(p.Path)
-				if target := m.Exports["./tui"]; target != "" {
-					if _, err := os.Stat(filepath.Join(p.Path, target)); err == nil {
-						p.NeedsSetup = !p.Enabled
-					}
+			if err != nil {
+				return p, err
+			}
+			list, err := entries(b)
+			if err != nil {
+				return p, err
+			}
+			for _, e := range list {
+				switch e.spec {
+				case "-slorp", "-*":
+					enabled = false
+				case "slorp", "*":
+					enabled = true
 				}
 			}
 		}
-	}
-	if tuiEnabled != nil && !*tuiEnabled {
-		p.NeedsSetup = true
-		return p, errors.New("the Slorp terminal companion is disabled in OpenCode's TUI configuration; enable it there")
+		if !enabled {
+			p.Enabled = false
+		}
 	}
 	return p, nil
 }
@@ -240,24 +230,69 @@ func (a *Adapter) CheckPlugin() {
 	a.publish(a.inspect())
 }
 
-// install registers the plugin at path in OpenCode's global configuration, with
-// "plugin <path> --global" or, where OpenCode rejects that, "plugin add <path>".
+// install registers the local package in OpenCode's global server configuration.
 func (a *Adapter) install(ctx context.Context, path string) error {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
-	out, err := a.command(ctx, "plugin", path, "--global").CombinedOutput()
-	if err != nil && strings.Contains(string(out), "Unknown subcommand") {
-		out, err = a.command(ctx, "plugin", "add", path).CombinedOutput()
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	if err != nil {
-		return fmt.Errorf("OpenCode plugin installation failed: %w: %s", err, strings.TrimSpace(string(out)))
+	registered := false
+	for _, cfg := range a.configs(false) {
+		b, err := os.ReadFile(cfg)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		list, err := entries(b)
+		if err != nil {
+			return fmt.Errorf("%s: %w", cfg, err)
+		}
+		for _, entry := range list {
+			if samePath(localPath(entry.spec, cfg), path) {
+				registered = true
+			}
+		}
+	}
+	if !registered {
+		cfg := filepath.Join(a.serverConfigDir(), "opencode.json")
+		if _, err := os.Stat(cfg + "c"); err == nil {
+			cfg += "c"
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		if err := addReference(cfg, path); err != nil {
+			return err
+		}
+	}
+	for _, cfg := range a.configs(true) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := removeReference(cfg, path); err != nil {
+			return err
+		}
 	}
 	p, err := a.inspect()
 	if err != nil {
 		return err
 	}
 	if !p.Installed || p.NeedsSetup || !samePath(p.Path, path) {
-		return errors.New("OpenCode did not register both Slorp plugin entry points")
+		return errors.New("OpenCode did not register the Slorp plugin package")
+	}
+	return nil
+}
+
+func (a *Adapter) requireV2(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	out, err := a.command(ctx, "--version").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("checking OpenCode version: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	version := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(string(out)), "opencode "), "v")
+	if !strings.HasPrefix(version, "2.") {
+		return fmt.Errorf("Slorp requires OpenCode 2.x; found %s", strings.TrimSpace(string(out)))
 	}
 	return nil
 }
@@ -293,7 +328,7 @@ func (a *Adapter) writeBundle() error {
 		return err
 	}
 	// The manifest marks a newly created directory before an interrupted write.
-	for _, name := range []string{"package.json", "slorp.ts", "tui.ts", "presence.ts", "quotas.ts", "server.ts", "revision.ts"} {
+	for _, name := range append(slices.Clone(bundleFiles), "revision.ts") {
 		if err := atomicFile(filepath.Join(path, name), files[name], 0o600); err != nil {
 			return err
 		}
@@ -305,12 +340,15 @@ func (a *Adapter) writeBundle() error {
 func (a *Adapter) Install(ctx context.Context) error {
 	a.pluginMu.Lock()
 	defer a.pluginMu.Unlock()
+	if err := a.requireV2(ctx); err != nil {
+		return err
+	}
 	p, err := a.inspect()
 	if err != nil {
 		return err
 	}
-	if p.Installed && !p.NeedsSetup {
-		return nil
+	if p.Installed && !p.NeedsSetup && !(p.Source == "managed" && p.UpdateAvailable) {
+		return a.install(ctx, p.Path)
 	}
 	path := p.Path
 	if !p.Installed || p.Source == "managed" {
@@ -318,8 +356,6 @@ func (a *Adapter) Install(ctx context.Context) error {
 			return err
 		}
 		path = a.managedPath()
-	} else if p.Source == "file" {
-		return errors.New("the single-file Slorp plugin must be removed from OpenCode before installing the bundled package")
 	} else {
 		m, _ := pluginAt(path)
 		if m.Exports["./tui"] == "" {
@@ -335,6 +371,9 @@ func (a *Adapter) Install(ctx context.Context) error {
 func (a *Adapter) Update(ctx context.Context) error {
 	a.pluginMu.Lock()
 	defer a.pluginMu.Unlock()
+	if err := a.requireV2(ctx); err != nil {
+		return err
+	}
 	p, err := a.inspect()
 	if err != nil {
 		return err
@@ -380,7 +419,7 @@ func (a *Adapter) Uninstall(ctx context.Context) error {
 // fingerprint identifies the bundled runtime, including its configured address.
 func fingerprint(files map[string][]byte) string {
 	h := sha256.New()
-	for _, name := range []string{"package.json", "slorp.ts", "tui.ts", "presence.ts", "quotas.ts", "server.ts"} {
+	for _, name := range bundleFiles {
 		h.Write(files[name])
 	}
 	return hex.EncodeToString(h.Sum(nil))[:12]

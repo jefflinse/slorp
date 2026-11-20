@@ -27,7 +27,7 @@ func slorpSpec(spec string) bool {
 }
 
 func (a *Adapter) runtimeConfig(r *runtime, config map[string]any) error {
-	if runtimeEffectFlag(r, "OPENCODE_PURE") {
+	if runtimeFlag(r, "OPENCODE_PURE") {
 		return fmt.Errorf("managed OpenCode requires the Slorp bridge plugin; OPENCODE_PURE is unsupported")
 	}
 	private, err := filepath.EvalSymlinks(r.private)
@@ -35,18 +35,6 @@ func (a *Adapter) runtimeConfig(r *runtime, config map[string]any) error {
 		return fmt.Errorf("resolving private configuration directory: %w", err)
 	}
 	r.private = private
-	if err := validateRemoteSlorp(r, config); err != nil {
-		return err
-	}
-	if origins, ok := config["plugin_origins"].([]any); ok {
-		for _, item := range origins {
-			origin, _ := item.(map[string]any)
-			source, _ := origin["source"].(string)
-			if (strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://")) && slorpSpec(pluginSpec(origin["spec"])) {
-				return fmt.Errorf("managed OpenCode cannot replace a remote-origin Slorp plugin; remove Slorp from the remote configuration and configure it locally")
-			}
-		}
-	}
 	if err := a.runtimeDiscovery(r, config); err != nil {
 		return fmt.Errorf("preserving native OpenCode discovery: %w", err)
 	}
@@ -64,31 +52,48 @@ func (a *Adapter) runtimeConfig(r *runtime, config map[string]any) error {
 		}
 	}
 	plugins := []any{}
-	if list, ok := config["plugin"].([]any); ok {
+	if list, ok := config["plugins"].([]any); ok {
 		for _, entry := range list {
-			spec, _ := entry.(string)
-			if pair, ok := entry.([]any); ok && len(pair) > 0 {
-				spec, _ = pair[0].(string)
-			}
+			spec := pluginSpec(entry)
 			if strings.HasPrefix(spec, ".") {
 				spec = filepath.Join(r.dir, spec)
-				if pair, ok := entry.([]any); ok {
-					pair[0] = spec
+				if object, ok := entry.(map[string]any); ok {
+					object["package"] = spec
 				} else {
 					entry = spec
 				}
 			}
 			if !slorpSpec(spec) {
+				if source := localPath(spec, filepath.Join(r.dir, "opencode.json")); source != "" && !withinToolScope(r.private, source) {
+					info, err := os.Stat(source)
+					if err != nil {
+						return fmt.Errorf("reading OpenCode plugin: %w", err)
+					}
+					if !info.IsDir() {
+						return fmt.Errorf("OpenCode V2 plugins must be package directories: %s", source)
+					}
+					source, err = filepath.EvalSymlinks(source)
+					if err != nil {
+						return err
+					}
+					target := filepath.Join(r.private, "plugin-sources", fmt.Sprint(len(plugins)), "root", strings.TrimPrefix(source, string(filepath.Separator)))
+					if err := privateToolScope(source, target); err != nil {
+						return fmt.Errorf("copying OpenCode plugin privately: %w", err)
+					}
+					spec = (&url.URL{Scheme: "file", Path: target}).String()
+					if object, ok := entry.(map[string]any); ok {
+						object["package"] = spec
+					} else {
+						entry = spec
+					}
+				}
 				plugins = append(plugins, entry)
 			}
 		}
 	}
-	config["plugin"] = append(plugins, (&url.URL{Scheme: "file", Path: bundle}).String())
-	delete(config, "plugin_origins")
+	config["plugins"] = append(plugins, (&url.URL{Scheme: "file", Path: bundle}).String())
 	config["$schema"] = "https://opencode.ai/config.json"
-	order, _ := config[configOrderKey].(json.RawMessage)
-	delete(config, configOrderKey)
-	data, err := marshalConfigOrder(config, order)
+	data, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("encoding private OpenCode configuration: %w", err)
 	}
@@ -100,20 +105,18 @@ func (a *Adapter) runtimeConfig(r *runtime, config map[string]any) error {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return err
 	}
-	// v1.19.6 merges local plugin origins by file URL, not package name. A
-	// resolved snapshot avoids loading both the bundled and installed Slorp.
-	// Only config discovery changes; HOME and native data/state/cache stay put.
+	// Only configuration discovery changes; native data/state/cache stay put.
 	replaceEnv(r.cmd, "XDG_CONFIG_HOME", filepath.Join(r.private, "config"))
 	replaceEnv(r.cmd, "OPENCODE_TEST_HOME", filepath.Join(r.private, "home"))
 	replaceEnv(r.cmd, "OPENCODE_CONFIG_DIR", r.private)
-	replaceEnv(r.cmd, "OPENCODE_CONFIG", path)
+	replaceEnv(r.cmd, "OPENCODE_CONFIG", "")
 	replaceEnv(r.cmd, "OPENCODE_CONFIG_CONTENT", "")
 	replaceEnv(r.cmd, "OPENCODE_DISABLE_PROJECT_CONFIG", "true")
+	replaceEnv(r.cmd, "OPENCODE_CONFIG_PROJECT_DISABLE", "true")
 	return nil
 }
 
-// Native uses object insertion order for provider/agent defaults and permission
-// precedence. Keep the probe's order while replacing values and adding private inputs.
+// marshalConfigOrder preserves order-sensitive package export conditions.
 func marshalConfigOrder(value any, original json.RawMessage) ([]byte, error) {
 	switch value := value.(type) {
 	case map[string]any:
@@ -195,46 +198,9 @@ func marshalConfigOrder(value any, original json.RawMessage) ([]byte, error) {
 	}
 }
 
-func validateRemoteSlorp(r *runtime, config map[string]any) error {
-	plugins, _ := config["plugin"].([]any)
-	if !slices.ContainsFunc(plugins, func(entry any) bool { return slorpSpec(pluginSpec(entry)) }) {
-		return nil
-	}
-	// The v1.19.6 HTTP config schema can omit plugin_origins. In that case a
-	// well-known source cannot be safely distinguished from an overridden local
-	// Slorp entry: native will merge the remote plugin again on the final launch.
-	data := []byte(runtimeEnv(r, "OPENCODE_AUTH_CONTENT"))
-	if !json.Valid(data) {
-		root := runtimeEnv(r, "XDG_DATA_HOME")
-		if root == "" {
-			root = filepath.Join(runtimeEnv(r, "HOME"), ".local", "share")
-		}
-		var err error
-		data, err = os.ReadFile(filepath.Join(root, "opencode", "auth.json"))
-		if os.IsNotExist(err) {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("checking remote OpenCode configuration: %w", err)
-		}
-	}
-	var auth map[string]struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(data, &auth); err != nil {
-		return fmt.Errorf("checking remote OpenCode configuration: invalid authentication data")
-	}
-	for _, entry := range auth {
-		if entry.Type == "wellknown" {
-			return fmt.Errorf("managed OpenCode cannot safely replace a remote-origin Slorp plugin while well-known configuration is active; configure Slorp locally without a remote configuration source")
-		}
-	}
-	return nil
-}
-
 func pluginSpec(entry any) string {
-	if pair, ok := entry.([]any); ok && len(pair) > 0 {
-		entry = pair[0]
+	if object, ok := entry.(map[string]any); ok {
+		entry = object["package"]
 	}
 	spec, _ := entry.(string)
 	return spec
@@ -252,16 +218,13 @@ func runtimeEnv(r *runtime, key string) string {
 }
 
 func runtimeFlag(r *runtime, key string) bool {
+	if key == "OPENCODE_DISABLE_PROJECT_CONFIG" && r.cmd != nil {
+		for _, entry := range r.cmd.Env {
+			if value, ok := strings.CutPrefix(entry, "OPENCODE_CONFIG_PROJECT_DISABLE="); ok {
+				return value == "1" || strings.EqualFold(value, "true")
+			}
+		}
+	}
 	v := strings.ToLower(runtimeEnv(r, key))
 	return v == "true" || v == "1"
-}
-
-// RuntimeFlags uses Effect's boolean codec, unlike the legacy Flag getters.
-func runtimeEffectFlag(r *runtime, key string) bool {
-	switch runtimeEnv(r, key) {
-	case "true", "1", "yes", "on", "y":
-		return true
-	default:
-		return false
-	}
 }

@@ -1,4 +1,6 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import type { Credential, Plugin } from '@opencode/plugin'
+import type { ConnectionInfo, ModelInfo, ModelRef, ProviderInfo } from '@opencode/client'
 
 export type ProviderLimit = {
   provider: 'openai-codex' | 'github-copilot' | 'opencode-go'
@@ -11,7 +13,7 @@ export type ProviderLimit = {
 
 type QuotaWindow = { kind: string; label: string; percentUsed: number; resetsAt: string; windowSeconds?: number }
 type QuotaFetch = (url: string, init: RequestInit) => Promise<Response>
-type Source = {
+export type Source = {
   provider: ProviderLimit['provider']
   identity: unknown[]
   fetch?: QuotaFetch
@@ -20,7 +22,7 @@ type Source = {
 }
 type Observation = { sequence: number; source?: Source }
 type Entry = { observation: Observation; source: Source; report: ProviderLimit }
-type Slot = { entry?: Entry; pending?: { origin: string; sequence: number }; controller?: AbortController; timer?: ReturnType<typeof setTimeout>; running: boolean; next: number; failures: number }
+type Slot = { entry?: Entry; pending?: { origin: string; sequence: number; report: ProviderLimit }; controller?: AbortController; timer?: ReturnType<typeof setTimeout>; running: boolean; next: number; failures: number }
 type Root = { id: string; origins: Map<string, Observation>; slots: Map<ProviderLimit['provider'], Slot>; revision: number }
 
 const PERIOD = 60_000
@@ -29,61 +31,127 @@ const MAX_BODY = 64 * 1024
 const MAX_BACKOFF = 15 * 60_000
 // Retry-After is capped at one day for both scheduling and the bridge wire contract.
 const MAX_RETRY = 24 * 60 * 60_000
-const OAUTH_DUMMY_KEY = 'opencode-oauth-dummy-key'
 const URLS = {
   'openai-codex': 'https://chatgpt.com/backend-api/wham/usage',
   'github-copilot': 'https://api.github.com/copilot_internal/user',
   'opencode-go': 'https://opencode.ai/zen/go/v1/usage',
 } as const
+const PACKAGES = {
+  'openai-codex': ['@opencode/ai/providers/openai', '@opencode/ai/providers/openai/responses'],
+  'github-copilot': [
+    '@opencode/ai/providers/openai', '@opencode/ai/providers/openai/chat', '@opencode/ai/providers/openai/responses',
+    '@opencode/ai/providers/openai-compatible', '@opencode/ai/providers/openai-compatible/responses',
+    '@opencode/ai/providers/openai-compatible-responses', '@opencode/ai/providers/anthropic',
+  ],
+  'opencode-go': [
+    '@opencode/ai/providers/openai', '@opencode/ai/providers/openai/chat', '@opencode/ai/providers/openai/responses',
+    '@opencode/ai/providers/openai-compatible', '@opencode/ai/providers/openai-compatible/responses',
+    '@opencode/ai/providers/openai-compatible-responses', '@opencode/ai/providers/anthropic',
+  ],
+}
+const COPILOT_BASES = [
+  'https://api.githubcopilot.com', 'https://api.individual.githubcopilot.com',
+  'https://api.business.githubcopilot.com', 'https://api.enterprise.githubcopilot.com',
+]
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
 }
 
 function headerContext(value: unknown) {
-  if (value === undefined) return { auth: false, identity: '' }
   try {
     const headers = new Headers(value as RequestInit['headers'])
-    const auth = ['authorization', 'proxy-authorization', 'x-api-key', 'api-key', 'cookie'].some(key => headers.has(key))
-    return { auth, identity: auth ? '' : JSON.stringify([...headers].sort(([a], [b]) => a.localeCompare(b))) }
+    const auth = ['authorization', 'proxy-authorization', 'x-api-key', 'api-key', 'cookie', 'copilot-session-token'].some(key => headers.has(key))
+    return { auth, account: headers.get('chatgpt-account-id'), identity: fingerprint([...headers].sort(([a], [b]) => a.localeCompare(b))) }
   } catch {
-    return { auth: true, identity: '' }
+    return { auth: true, account: null, identity: '' }
   }
 }
 
-function source(provider: unknown, model: unknown, directFetch: QuotaFetch): Source | undefined {
-  const p = record(provider), m = record(model), options = record(p?.options) ?? {}, api = record(m?.api)
-  const id = p?.id ?? m?.providerID
+function fingerprint(value: unknown) {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex')
+}
+
+function connectionIdentity(connection: ConnectionInfo | undefined) {
+  return connection ? JSON.stringify(connection.type === 'credential' ?
+    [connection.type, connection.id, connection.method] : [connection.type, connection.name]) : undefined
+}
+
+function credentialIdentity(provider: Source['provider'], credential: Credential.Value) {
+  return fingerprint([credential.type, credential.metadata?.accountID, credential.metadata?.enterpriseUrl,
+    credential.metadata?.apiEndpoint, credential.metadata?.orgID,
+    credential.type === 'key' ? credential.key : credential.methodID,
+    provider === 'github-copilot' && credential.type === 'oauth' ? credential.refresh : undefined])
+}
+
+export async function quotaSource(ctx: Plugin.Context, p: ProviderInfo, m: ModelInfo, directFetch: QuotaFetch = fetch, selection?: ModelRef): Promise<Source | undefined> {
+  const id = p.id
   const name = id === 'openai' ? 'openai-codex' : id === 'github-copilot' || id === 'github-copilot-enterprise' ? 'github-copilot' : id === 'opencode-go' ? id : undefined
   if (!name) return
-  const base = name === 'openai-codex' ? 'https://api.openai.com/v1' : name === 'github-copilot' ? 'https://api.githubcopilot.com' : 'https://opencode.ai/zen/go/v1'
-  const modelOptions = record(m?.options) ?? {}
-  const headers = [options.headers, m?.headers, modelOptions.headers].map(headerContext)
-  const official = (url: unknown) => url === base || url === base + '/'
-  const valid = p?.id === id && m?.providerID === id && official(api?.url) &&
-    [options.baseURL, modelOptions.baseURL].every(url => url === undefined || official(url)) &&
-    modelOptions.apiKey === undefined && modelOptions.fetch === undefined
+  const variantID = selection?.variant === 'default' ? undefined : selection?.variant
+  const selectedVariant = variantID === undefined ? undefined : m.variants?.find(v => v.id === variantID)
+  const variants = selection ? selectedVariant ? [selectedVariant] : [] : m.variants ?? []
+  const settings = [p.settings, m.settings, ...variants.map(v => v.settings)].map(value => value ?? {})
+  const headers = [p.headers, m.headers, ...variants.map(v => v.headers)].map(headerContext)
+  const packages = PACKAGES[name]
+  const valid = m.providerID === id &&
+    (!selection || selection.providerID === id && selection.id === m.id && (variantID === undefined || selectedVariant !== undefined)) &&
+    settings.every(options => options.apiKey === undefined) &&
+    !headers.some(h => h.auth) && packages.includes(p.package) && (!m.package || packages.includes(m.package))
   const s: Source = {
     provider: name, status: 'unsupported',
-    identity: [id, options.fetch, options.apiKey, p?.key, api?.url, options.baseURL, modelOptions.baseURL, modelOptions.apiKey, modelOptions.fetch,
-      ...headers.flatMap(h => [h.auth, h.identity])],
+    identity: [id, p.integrationID, p.package, m.package, fingerprint(settings), ...headers.map(h => h.identity)],
   }
   if (!valid || id === 'github-copilot-enterprise') return s
-  if (name !== 'opencode-go') {
-    const sentinel = name === 'openai-codex' ? OAUTH_DUMMY_KEY : ''
-    if (options.apiKey === sentinel && typeof options.fetch === 'function') {
-      s.fetch = options.fetch as QuotaFetch
-      s.status = 'unavailable'
-    }
+  const integration = p.integrationID ?? id
+  const active = await ctx.integration.connection.active(integration)
+  if (!active) { s.status = 'auth_required'; return s }
+  const connection = { ...active }, identity = connectionIdentity(connection)
+  s.identity.push(identity)
+  const credential = await ctx.integration.connection.resolve(connection)
+  if (connectionIdentity(await ctx.integration.connection.active(integration)) !== identity) {
+    s.status = 'unavailable'
     return s
   }
-  // Go has no native OAuth loader. A custom transport is not proof of a Go account.
-  if (options.fetch !== undefined || headers.some(h => h.auth)) return s
-  const key = options.apiKey === undefined ? p?.key : options.apiKey
-  if (key === OAUTH_DUMMY_KEY || key === 'opencode_dummy_key') return s
-  if (typeof key !== 'string' || !key || /\s/.test(key)) { s.status = 'auth_required'; return s }
-  s.fetch = directFetch
-  s.key = key
+  if (!credential) { s.status = 'auth_required'; return s }
+  if (name === 'openai-codex' && credential.type !== 'oauth' ||
+    name === 'github-copilot' && credential.type !== 'oauth' ||
+    name === 'opencode-go' && credential.type !== 'key') return s
+  if (name === 'github-copilot' && credential.type === 'oauth' && credential.metadata?.enterpriseUrl) return s
+  const endpoint = credential.metadata?.apiEndpoint
+  const base = typeof endpoint === 'string' ? endpoint.replace(/\/$/, '') : COPILOT_BASES[0]!
+  if (name === 'github-copilot' && (endpoint !== undefined && typeof endpoint !== 'string' || !COPILOT_BASES.includes(base))) return s
+  const bases = name === 'openai-codex' ? ['https://chatgpt.com/backend-api/codex', 'https://api.openai.com/v1'] :
+    name === 'github-copilot' ? [COPILOT_BASES[0]!, base] : ['https://opencode.ai/zen/go/v1']
+  const official = (url: unknown, index: number) => url === undefined || bases.some(base => url === base || url === base + '/' ||
+    name === 'github-copilot' && index > 0 && (m.package ?? p.package) === '@opencode/ai/providers/anthropic' &&
+      (url === base + '/v1' || url === base + '/v1/'))
+  if (!settings.every((options, index) => official(options.baseURL, index))) return s
+  const account = credential.type === 'oauth' && typeof credential.metadata?.accountID === 'string' ? credential.metadata.accountID : undefined
+  if (headers.some(h => h.account !== null && (name !== 'openai-codex' || h.account !== account))) return s
+  const credentialID = credentialIdentity(name, credential)
+  s.identity.push(credentialID)
+  s.fetch = async (url, init) => {
+    if (url !== URLS[name] || init.method !== 'GET') throw new Error('Unsupported quota request')
+    if (init.signal?.aborted) throw new Error('Aborted')
+    if (connectionIdentity(await ctx.integration.connection.active(integration)) !== identity) return new Response(null, { status: 401 })
+    const current = await ctx.integration.connection.resolve(connection)
+    if (init.signal?.aborted) throw new Error('Aborted')
+    if (connectionIdentity(await ctx.integration.connection.active(integration)) !== identity || init.signal?.aborted)
+      throw new Error('Credential changed')
+    if (!current) return new Response(null, { status: 401 })
+    if (credentialIdentity(name, current) !== credentialID) throw new Error('Credential changed')
+    const token = current?.type === 'oauth' ? name === 'github-copilot' ? current.refresh : current.access : current?.type === 'key' ? current.key : undefined
+    if (!token) return new Response(null, { status: 401 })
+    const response = await directFetch(url, { ...init, redirect: 'error', headers: { authorization: `Bearer ${token}`,
+      ...(name === 'openai-codex' && account ? { 'ChatGPT-Account-Id': account } : {}),
+      ...(name === 'github-copilot' ? { accept: 'application/json', 'user-agent': `opencode/${ctx.app.version}`, 'X-GitHub-Api-Version': '2025-04-01' } : {}) } })
+    if (connectionIdentity(await ctx.integration.connection.active(integration)) !== identity || init.signal?.aborted) {
+      void response.body?.cancel().catch(() => {})
+      throw new Error('Credential changed')
+    }
+    return response
+  }
   s.status = 'unavailable'
   return s
 }
@@ -210,7 +278,7 @@ async function read(s: Source, signal: AbortSignal): Promise<Pick<ProviderLimit,
 }
 
 function same(a: Source, b: Source) {
-  return a.provider === b.provider && a.status === b.status && a.identity.every((v, i) => v === b.identity[i])
+  return a.provider === b.provider && a.status === b.status && a.identity.length === b.identity.length && a.identity.every((v, i) => v === b.identity[i])
 }
 
 /** Tracks only observed runtime capabilities; snapshots contain no credentials or provider objects. */
@@ -220,11 +288,9 @@ export class QuotaCollector {
   private sequence = 0
   private disposed = false
   private isOpen: (root: string) => boolean
-  private directFetch: QuotaFetch
 
-  constructor(isOpen: (root: string) => boolean, directFetch: QuotaFetch = (url, init) => fetch(url, init)) {
+  constructor(isOpen: (root: string) => boolean) {
     this.isOpen = isOpen
-    this.directFetch = directFetch
   }
 
   /** Allocates hook-entry order and fences prior OAuth reads for an already associated origin. */
@@ -238,16 +304,15 @@ export class QuotaCollector {
       if (!slot || !entry || entry.source.provider === 'opencode-go' || !entry.source.fetch) continue
       slot.controller?.abort()
       clearTimeout(slot.timer)
-      slot.pending = { origin, sequence }
+      slot.pending = { origin, sequence, report: slot.pending?.report ?? entry.report }
       slot.entry = { ...entry, report: { provider: entry.source.provider, status: 'unavailable', checkedAt: Date.now(), windows: [] } }
       this.bump(root)
     }
     return sequence
   }
 
-  observe(rootID: string, origin: string, provider: unknown, model: unknown, defer = false, sequence = this.nextSequence()) {
+  observe(rootID: string, origin: string, next: Source | undefined, defer = false, sequence = this.nextSequence()) {
     if (this.disposed || !this.isOpen(rootID) && !defer) return
-    const next = source(provider, model, this.directFetch)
     let root = this.roots.get(rootID)
     if (!root && !next) return
     if (!root) { root = { id: rootID, origins: new Map(), slots: new Map(), revision: 0 }; this.roots.set(rootID, root) }
@@ -266,20 +331,29 @@ export class QuotaCollector {
     let changed = false
     for (const [provider, slot] of root.slots) {
       const observation = selected.get(provider), next = observation?.source, entry = slot.entry
+      const report = slot.pending?.report ?? entry?.report
       if (slot.pending) {
         const pending = root.origins.get(slot.pending.origin)
         if (pending && pending.sequence < slot.pending.sequence && (observation?.sequence ?? 0) < slot.pending.sequence) continue
         slot.pending = undefined
       }
       if (!entry && !next) continue
-      if (entry && next && same(entry.source, next) &&
+      const equivalent = entry && next && same(entry.source, next)
+      if (equivalent &&
         (provider === 'opencode-go' || !next.fetch || entry.observation === observation)) {
         entry.observation = observation!
         continue
       }
       slot.controller?.abort()
       clearTimeout(slot.timer)
-      slot.entry = next ? { observation: observation!, source: next, report: { provider, status: next.status, checkedAt: Date.now(), windows: [] } } : undefined
+      slot.entry = next ? {
+        observation: observation!, source: next,
+        report: equivalent && report ? report : { provider, status: next.status, checkedAt: Date.now(), windows: [] },
+      } : undefined
+      if (!equivalent) {
+        slot.next = 0
+        slot.failures = 0
+      }
       changed = true
     }
     if (changed) this.bump(root)
@@ -296,7 +370,7 @@ export class QuotaCollector {
     const entry = slot.entry
     if (this.disposed || !entry?.source.fetch || slot.running || slot.pending) return
     if (!this.isOpen(root.id)) { this.clear(root.id); return }
-    if (Date.now() < slot.next) { this.schedule(root, slot); return }
+    if (Date.now() < slot.next) { this.schedule(root, slot, entry); return }
     clearTimeout(slot.timer)
     slot.running = true
     slot.next = Date.now() + PERIOD
@@ -309,22 +383,26 @@ export class QuotaCollector {
       controller.signal.addEventListener('abort', onAbort, { once: true })
     })
     let finished = false
+    const resume = () => {
+      if (slot.entry === entry) this.schedule(root, slot, entry)
+      else this.start(root, slot)
+    }
     // A slot outlives its presentation and holds the lock until the transport actually settles.
     const operation = read(entry.source, controller.signal).then(result => {
-      slot.next = Math.max(slot.next, result.retryAt)
+      if (slot.entry === entry) slot.next = Math.max(slot.next, result.retryAt)
       return result
     }).finally(() => {
       slot.running = false
-      if (finished) this.schedule(root, slot)
+      if (finished) resume()
     })
     void Promise.race([operation, aborted]).catch(() => ({ status: 'unavailable' as const, windows: [], retryAt: 0 })).then(result => {
       if (this.disposed) return
+      if (slot.entry !== entry) return
       const now = Date.now()
       const transient = result.status === 'unavailable' || result.status === 'throttled'
       slot.failures = transient ? Math.min(slot.failures + 1, 5) : 0
       slot.next = Math.max(slot.next, now + Math.min(MAX_BACKOFF, PERIOD * 2 ** Math.max(0, slot.failures - 1)), result.retryAt)
       if (!this.isOpen(root.id)) { this.clear(root.id); return }
-      if (slot.entry !== entry) return
       const retain = transient && entry.source.provider === 'opencode-go'
       entry.report = {
         provider: entry.source.provider, status: result.status, checkedAt: now,
@@ -337,15 +415,18 @@ export class QuotaCollector {
       clearTimeout(timer)
       controller.signal.removeEventListener('abort', onAbort!)
       finished = true
-      this.schedule(root, slot)
+      resume()
     })
   }
 
-  private schedule(root: Root, slot: Slot) {
+  private schedule(root: Root, slot: Slot, entry: Entry) {
+    if (slot.entry !== entry) return
     clearTimeout(slot.timer)
     if (this.disposed || slot.running || slot.pending || !slot.entry?.source.fetch) return
     if (!this.isOpen(root.id)) { this.clear(root.id); return }
-    slot.timer = setTimeout(() => this.start(root, slot), Math.max(1, slot.next - Date.now()))
+    slot.timer = setTimeout(() => {
+      if (slot.entry === entry) this.start(root, slot)
+    }, Math.max(1, slot.next - Date.now()))
     slot.timer.unref?.()
   }
 
@@ -381,6 +462,8 @@ export class QuotaCollector {
       clearTimeout(slot.timer)
       slot.entry = undefined
       slot.pending = undefined
+      slot.next = 0
+      slot.failures = 0
     }
     root.origins.clear()
     this.bump(root)

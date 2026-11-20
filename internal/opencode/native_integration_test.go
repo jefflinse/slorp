@@ -49,14 +49,15 @@ func TestNativeConfigPrecedenceAndBundledRuntime(t *testing.T) {
 	}))
 	defer bridge.Close()
 	a.URL = bridge.URL
+	model, calls := configPromptModel(t)
 	old := filepath.Join(a.Home, "old-plugin")
-	put(t, filepath.Join(old, "package.json"), `{"name":"opencode-slorp","type":"module","main":"server.ts"}`)
-	put(t, filepath.Join(old, "server.ts"), `throw new Error("old Slorp plugin must not load")`)
-	global := `{"model":"mock/global","plugin":[` + stringJSON(old) + `],"provider":{"mock":{"name":"Mock provider","npm":"@ai-sdk/openai-compatible","options":{"apiKey":"test-only","baseURL":"http://127.0.0.1:1/v1"},"models":{"global":{"name":"Global"},"project":{"name":"Project","variants":{"high":{}}}}}}}`
+	put(t, filepath.Join(old, "package.json"), `{"name":"opencode-slorp","type":"module","exports":{".":"./index.ts"}}`)
+	put(t, filepath.Join(old, "index.ts"), `export default {id:"slorp",setup(){throw new Error("unmanaged Slorp plugin must not load")}}`)
+	global := `{"model":"mock/global","plugins":[` + stringJSON(old) + `],"providers":{"mock":{"name":"Mock provider","package":"aisdk:@ai-sdk/openai-compatible","settings":{"apiKey":"test-only","baseURL":` + stringJSON(model.URL+"/v1") + `},"models":{"global":{"name":"Global"},"project":{"name":"Project","variants":[{"id":"high"}]}}}}}`
 	globalPath := filepath.Join(a.ConfigDir, "opencode.json")
 	put(t, globalPath, global)
 	dir := filepath.Join(a.Home, "project 'quoted\"")
-	project := `{"model":"mock/project","default_agent":"review","agent":{"review":{"description":"Review root","mode":"primary","variant":"high"}}}`
+	project := `{"model":"mock/project","default_agent":"review","agents":{"review":{"description":"Review root","mode":"primary","model":"mock/project#high"}}}`
 	projectPath := filepath.Join(dir, "opencode.json")
 	put(t, projectPath, project)
 	setup, stopSetup := context.WithTimeout(context.Background(), 5*time.Second)
@@ -65,12 +66,11 @@ func TestNativeConfigPrecedenceAndBundledRuntime(t *testing.T) {
 		t.Fatalf("isolating project config discovery: %s %v", out, err)
 	}
 	a.ConfigFile = filepath.Join(a.Home, "explicit.json")
-	put(t, a.ConfigFile, `{"model":"mock/global","agent":{"review":{"description":"Explicit"}}}`)
+	put(t, a.ConfigFile, `{"model":"mock/global","agents":{"review":{"description":"Explicit"}}}`)
 	a.ExtraConfigDir = filepath.Join(a.Home, "extra")
-	put(t, filepath.Join(a.ExtraConfigDir, "opencode.json"), `{"model":"mock/global","agent":{"review":{"description":"Extra"}}}`)
+	put(t, filepath.Join(a.ExtraConfigDir, "opencode.json"), global)
 	put(t, filepath.Join(a.Home, "prompt.txt"), "Private file-backed agent instructions")
-	t.Setenv("OPENCODE_CONFIG_CONTENT", `{"model":"mock/project","agent":{"review":{"description":"Inline","prompt":"{file:../prompt.txt}"}}}`)
-	put(t, filepath.Join(dir, ".opencode", "plugins", "old.ts"), "const AGENT = 'opencode'; const path = '/api/bridge/poll'; throw new Error('duplicate Slorp')")
+	t.Setenv("OPENCODE_CONFIG_CONTENT", `{"model":"mock/project","agents":{"review":{"description":"Inline","system":"{file:../prompt.txt}"}}}`)
 	t.Cleanup(a.Shutdown)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -105,10 +105,8 @@ func TestNativeConfigPrecedenceAndBundledRuntime(t *testing.T) {
 	}
 	job := a.Hub.Sessions()[0].Job
 	r := a.runtimes[job]
-	var resolved struct {
-		Agent map[string]struct{ Prompt string }
-	}
-	if err := r.request(ctx, http.MethodGet, "/config", nil, &resolved); err != nil || resolved.Agent["review"].Prompt != "Private file-backed agent instructions" {
+	var resolved struct{ ID, System string }
+	if err := r.request(ctx, http.MethodGet, "/api/agent/review", nil, &resolved); err != nil || resolved.System != "Private file-backed agent instructions" {
 		t.Fatalf("relative config file reference: %+v %v", resolved, err)
 	}
 	deadline := time.Now().Add(10 * time.Second)
@@ -129,12 +127,19 @@ func TestNativeConfigPrecedenceAndBundledRuntime(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	seed := map[string]any{"agent": "review", "model": map[string]string{"providerID": "mock", "modelID": "project"}, "variant": "high", "noReply": true, "parts": []map[string]string{{"type": "text", "text": "Isolated fork-history seed; no model response requested."}}}
-	if err := r.request(ctx, http.MethodPost, "/session/"+id+"/message", seed, nil); err != nil {
+	var fork nativeSession
+	if err := r.request(ctx, http.MethodPost, "/api/session/"+id+"/prompt", map[string]string{"text": "Isolated fork seed."}, nil); err != nil {
 		t.Fatal(err)
 	}
-	var fork nativeSession
-	if err := r.request(ctx, http.MethodPost, "/session/"+id+"/fork", map[string]any{}, &fork); err != nil {
+	select {
+	case <-calls:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if err := r.request(ctx, http.MethodPost, "/api/experimental/session/"+id+"/wait", map[string]any{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.request(ctx, http.MethodPost, "/api/session/"+id+"/fork", map[string]any{}, &fork); err != nil {
 		t.Fatal(err)
 	}
 	if fork.ID == "" || fork.ID == id || fork.ParentID != "" {

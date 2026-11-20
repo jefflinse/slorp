@@ -1,8 +1,8 @@
 # OpenCode history fixtures
 
-These are synthetic conversations in OpenCode 1.19.6's export format, modeled on an actual export and the native compaction/revert implementations. They contain no user session data.
+These are synthetic conversations in OpenCode 2.3.2's native transcript format, verified against isolated imports and exports. They contain no user session data. Messages have flat `id`, `type`, and `time` fields; users carry `text`, assistants carry `content`, and compactions are standalone messages.
 
-- `history.json`: parent-linked replies, injected/ignored text, tool output, a completed compaction, synthetic continuation, an unanswered repeated prompt, and a foreign-session message.
-- `overflow.json`: automatic overflow compaction replaying text, media, an agent mention and synthetic instructions, followed by a genuine repeated request.
+- `history.json`: sequential replies, private reasoning, synthetic continuation, an incomplete assistant, completed/failed/running compactions, and an unanswered repeated prompt.
+- `overflow.json`: an automatic compaction checkpoint and synthetic continuation, followed by an assistant reply to the original prompt and a distinct repeated user request.
 
-The Go tests use minimal metadata. `integrations/opencode/history-smoke.py` supplies the remaining native metadata, imports the fixtures into an isolated OpenCode database, and verifies the real export and Slorp HTTP backfill paths. `--overflow --replay-last` additionally tests a session reopened after replay without a subsequent genuine user turn.
+The Go tests exercise parsing, pairing, filtering, clipping, limits, and cancellation. `integrations/opencode/history-smoke.py` constructs its own native transcript, imports it into an isolated OpenCode database, and verifies export, message pagination, and idempotent Slorp HTTP backfill. `--auto-compaction` selects an automatic checkpoint with synthetic continuation; `--single-followup` uses one post-checkpoint user turn instead of repeated prompts. `--revert` stages a native revert before the final repeated turn and cannot be combined with `--single-followup`. `--native-only` skips Slorp build and backfill verification.

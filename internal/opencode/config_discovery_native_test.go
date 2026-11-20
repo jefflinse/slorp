@@ -20,7 +20,7 @@ import (
 
 func TestConfigNativePureEmptyConfigRejectsStart(t *testing.T) {
 	a := configNativeFixture(t)
-	for _, value := range []string{"true", "1", "yes", "on", "y"} {
+	for _, value := range []string{"true", "1", "TRUE"} {
 		t.Run(value, func(t *testing.T) {
 			t.Setenv("OPENCODE_PURE", value)
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -84,7 +84,8 @@ func TestConfigNativeDirectAncestorBareImportRejectsSafely(t *testing.T) {
 	put(t, filepath.Join(modules, "project-dep", "package.json"), `{"name":"project-dep","version":"1.0.0","type":"module","main":"index.js"}`)
 	put(t, filepath.Join(modules, "project-dep", "index.js"), `export const value = 'direct-ancestor-bare-import'`)
 	put(t, filepath.Join(modules, ".package-lock.json"), `{"lockfileVersion":3,"packages":{"node_modules/project-dep":{"version":"1.0.0"}}}`)
-	put(t, filepath.Join(project, ".opencode", "tools", "check.ts"), `import {value} from 'project-dep'; export default {args:{},description:'direct bare import',execute:async()=>value}`)
+	configToolPlugin(t, filepath.Join(project, ".opencode", "plugins", "check"), "fixture.check",
+		`const {value}=await import("project-dep"); await ctx.tool.transform(editor=>editor.add({name:"check",description:"direct bare import",options:{codemode:false},input:{type:"object",properties:{}},execute:async()=>({content:value})}))`)
 	if out, err := exec.Command("git", "init", "--quiet", project).CombinedOutput(); err != nil {
 		t.Fatalf("isolating project: %s %v", out, err)
 	}
@@ -110,16 +111,22 @@ func TestConfigNativeDirectAncestorBareImportRejectsSafely(t *testing.T) {
 	}
 }
 
-type configSkillInfo struct{ Name, Description, Location, Content string }
+type configSkillInfo struct{ ID, Name, Description, Path, Content string }
 
 func configNativeSkills(t *testing.T, ctx context.Context, r *runtime) map[string]configSkillInfo {
 	t.Helper()
 	var list []configSkillInfo
-	if err := r.request(ctx, http.MethodGet, "/skill", nil, &list); err != nil {
+	if err := r.request(ctx, http.MethodGet, "/api/model", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.request(ctx, http.MethodGet, "/api/skill", nil, &list); err != nil {
 		t.Fatal(err)
 	}
 	result := map[string]configSkillInfo{}
 	for _, skill := range list {
+		if strings.HasPrefix(skill.Path, "skill://") {
+			skill.Content = "" // Built-in diagnostics include the active plugin list.
+		}
 		result[skill.Name] = skill
 	}
 	return result
@@ -132,17 +139,21 @@ func TestConfigNativeHiddenExternalSkillsAndFlags(t *testing.T) {
 	if out, err := exec.Command("git", "init", "--quiet", project).CombinedOutput(); err != nil {
 		t.Fatalf("isolating project: %s %v", out, err)
 	}
-	homeAgents := filepath.Join(a.Home, ".agents", "skills", ".internal", "review")
-	homeClaude := filepath.Join(a.Home, ".claude", "skills", ".internal", "review")
+	homeAgents := filepath.Join(a.Home, ".agents", "skills", ".internal", "home-agents")
+	homeClaude := filepath.Join(a.Home, ".claude", "skills", ".internal", "home-claude")
 	for name, dir := range map[string]string{
 		"home-agents-hidden":     homeAgents,
 		"home-claude-hidden":     homeClaude,
-		"project-agents-hidden":  filepath.Join(project, ".agents", "skills", ".internal", "review"),
-		"project-claude-hidden":  filepath.Join(project, ".claude", "skills", ".internal", "review"),
+		"project-agents-hidden":  filepath.Join(project, ".agents", "skills", ".internal", "project-agents"),
+		"project-claude-hidden":  filepath.Join(project, ".claude", "skills", ".internal", "project-claude"),
 		"config-visible":         filepath.Join(a.ConfigDir, "skills", "visible"),
 		"config-hidden-excluded": filepath.Join(a.ConfigDir, "skills", ".hidden", "review"),
 	} {
 		put(t, filepath.Join(dir, "SKILL.md"), fmt.Sprintf("---\nname: %s\ndescription: Skill %s\n---\nLiteral {file:missing} %s", name, name, name))
+		if strings.HasPrefix(name, "home-") || strings.HasPrefix(name, "project-") {
+			visible := strings.TrimSuffix(name, "-hidden") + "-visible"
+			put(t, filepath.Join(filepath.Dir(filepath.Dir(dir)), visible, "SKILL.md"), fmt.Sprintf("---\nname: %s\ndescription: Skill %s\n---\nVisible body", visible, visible))
+		}
 	}
 	for _, tc := range []struct {
 		name           string
@@ -151,13 +162,11 @@ func TestConfigNativeHiddenExternalSkillsAndFlags(t *testing.T) {
 		agents, claude bool
 	}{
 		{name: "enabled", agents: true, claude: true},
-		{name: "external disabled", flags: map[string]string{"OPENCODE_DISABLE_EXTERNAL_SKILLS": "true"}},
-		{name: "external disable alias", flags: map[string]string{"OPENCODE_DISABLE_EXTERNAL_SKILLS": "on"}},
 		{name: "claude skills disabled", flags: map[string]string{"OPENCODE_DISABLE_CLAUDE_CODE_SKILLS": "true"}, agents: true},
-		{name: "claude skills disable alias", flags: map[string]string{"OPENCODE_DISABLE_CLAUDE_CODE_SKILLS": "yes"}, agents: true},
+		{name: "claude skills nonboolean ignored", flags: map[string]string{"OPENCODE_DISABLE_CLAUDE_CODE_SKILLS": "yes"}, agents: true, claude: true},
 		{name: "broad claude flag wins", flags: map[string]string{"OPENCODE_DISABLE_CLAUDE_CODE": "true", "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS": "false"}, agents: true},
-		{name: "project config flag does not disable external skills", flags: map[string]string{"OPENCODE_DISABLE_PROJECT_CONFIG": "true"}, agents: true, claude: true},
-		{name: "explicit path survives external disable", flags: map[string]string{"OPENCODE_DISABLE_EXTERNAL_SKILLS": "true"}, explicit: homeAgents},
+		{name: "project flag preserves global skills", flags: map[string]string{"OPENCODE_DISABLE_PROJECT_CONFIG": "true"}, agents: true, claude: true},
+		{name: "explicit hidden path", explicit: homeAgents, agents: true, claude: true},
 		{name: "explicit path survives claude disable", flags: map[string]string{"OPENCODE_DISABLE_CLAUDE_CODE": "true"}, explicit: homeClaude, agents: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -166,7 +175,7 @@ func TestConfigNativeHiddenExternalSkillsAndFlags(t *testing.T) {
 			}
 			config := map[string]any{"$schema": "https://opencode.ai/config.json"}
 			if tc.explicit != "" {
-				config["skills"] = map[string]any{"paths": []string{tc.explicit}}
+				config["skills"] = []string{tc.explicit}
 			}
 			data, err := json.Marshal(config)
 			if err != nil {
@@ -196,10 +205,14 @@ func TestConfigNativeHiddenExternalSkillsAndFlags(t *testing.T) {
 				}
 			}
 			for name, want := range map[string]bool{
-				"home-agents-hidden":     tc.agents || tc.explicit == homeAgents,
-				"home-claude-hidden":     tc.claude || tc.explicit == homeClaude,
-				"project-agents-hidden":  tc.agents,
-				"project-claude-hidden":  tc.claude,
+				"home-agents-hidden":     tc.explicit == homeAgents,
+				"home-claude-hidden":     tc.explicit == homeClaude,
+				"project-agents-hidden":  false,
+				"project-claude-hidden":  false,
+				"home-agents-visible":    tc.agents,
+				"home-claude-visible":    tc.claude,
+				"project-agents-visible": tc.agents && tc.flags["OPENCODE_DISABLE_PROJECT_CONFIG"] != "true",
+				"project-claude-visible": tc.claude && tc.flags["OPENCODE_DISABLE_PROJECT_CONFIG"] != "true",
 				"config-visible":         true,
 				"config-hidden-excluded": false,
 			} {

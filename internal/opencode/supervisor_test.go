@@ -37,7 +37,7 @@ func TestSupervisorParent(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		put(t, a.Bin, "#!/bin/sh\ntrap 'case \"$*\" in *--pure*) ;; *) if test -f \"$HOME/aborted\"; then printf abort-before-term > \"$HOME/order\"; else printf term-without-abort > \"$HOME/order\"; fi ;; esac; exit 0' TERM\n"+hub.ShellQuote(binary)+" -test.run='^TestNativeHelper$' -- \"$@\" &\nwait $!\n")
+		put(t, a.Bin, "#!/bin/sh\ntrap 'if test \"$OPENCODE_PURE\" != true; then if test -f \"$HOME/aborted\"; then printf abort-before-term > \"$HOME/order\"; else printf term-without-abort > \"$HOME/order\"; fi; fi; exit 0' TERM\n"+hub.ShellQuote(binary)+" -test.run='^TestNativeHelper$' -- \"$@\" &\nwait $!\n")
 		if err := os.Chmod(a.Bin, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -216,7 +216,7 @@ func TestSIGTERMParentAbortsNativeBeforeGroupTermination(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &request); err != nil {
 			t.Fatal(err)
 		}
-		found = found || request.Path == "/session/ses_native/abort"
+		found = found || request.Path == "/api/session/ses_native/interrupt"
 	}
 	if !found {
 		t.Fatal("shutdown skipped native abort")

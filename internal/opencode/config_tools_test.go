@@ -18,12 +18,16 @@ func TestConfigToolsRejectUnsupportedPackages(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := fixture(t)
-			put(t, filepath.Join(a.ConfigDir, "tools", "test.ts"), `export default {args:{}, description:'test', execute:async()=>''}`)
+			put(t, filepath.Join(a.ConfigDir, "index.ts"), `export default {id:"test", setup(){}}`)
 			put(t, filepath.Join(a.ConfigDir, "package.json"), tc.manifest)
 			outside := filepath.Join(filepath.Dir(a.ConfigDir), "shared", "package.json")
 			put(t, outside, `{"name":"shared","version":"1.0.0"}`)
-			r := &runtime{dir: a.Home, private: t.TempDir(), cmd: a.command(context.Background())}
-			if err := r.runtimeTools(map[string]any{}, []string{a.ConfigDir}); err == nil || !strings.Contains(err.Error(), tc.want) {
+			source, err := filepath.EvalSymlinks(a.ConfigDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(t.TempDir(), "root", strings.TrimPrefix(source, string(filepath.Separator)))
+			if err := privateToolScope(source, target); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("expected %q error, got %v", tc.want, err)
 			}
 			for path, want := range map[string]string{filepath.Join(a.ConfigDir, "package.json"): tc.manifest, outside: `{"name":"shared","version":"1.0.0"}`} {
@@ -85,7 +89,7 @@ func TestConfigToolsRejectSourceLinkedDependency(t *testing.T) {
 	put(t, filepath.Join(source, "package.json"), `{"dependencies":{"dep":"file:./resources/dep"}}`)
 	put(t, filepath.Join(source, "resources", "dep", "package.json"), `{"name":"dep","version":"1.0.0"}`)
 	target := filepath.Join(root, "private", "root", strings.TrimPrefix(source, string(filepath.Separator)))
-	if err := privateToolScope(source, target, 0); err == nil || !strings.Contains(err.Error(), "source link") {
+	if err := privateToolScope(source, target); err == nil || !strings.Contains(err.Error(), "source link") {
 		t.Fatalf("installer could reach source: %v", err)
 	}
 }
@@ -116,7 +120,7 @@ func TestConfigToolsRejectNestedWorkspaceManifestLink(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := filepath.Join(root, "private", "root", strings.TrimPrefix(source, string(filepath.Separator)))
-	if err := privateToolScope(source, target, 0); err == nil || !strings.Contains(err.Error(), "unsupported custom tool workspace") {
+	if err := privateToolScope(source, target); err == nil || !strings.Contains(err.Error(), "unsupported custom tool workspace") {
 		t.Fatalf("linked workspace manifest escaped validation: %v", err)
 	}
 }
@@ -128,7 +132,7 @@ func TestConfigToolsRejectSourceAsInstallTarget(t *testing.T) {
 	}
 	manifest := `{"name":"untouched"}`
 	put(t, filepath.Join(source, "package.json"), manifest)
-	if err := privateToolScope(source, source, 0); err == nil {
+	if err := privateToolScope(source, source); err == nil {
 		t.Fatal("source was accepted as the install target")
 	}
 	if data, err := os.ReadFile(filepath.Join(source, "package.json")); err != nil || string(data) != manifest {

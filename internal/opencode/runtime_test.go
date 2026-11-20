@@ -24,6 +24,10 @@ func TestNativeHelper(t *testing.T) {
 	if os.Getenv("SLORP_TEST_NATIVE") != "1" {
 		return
 	}
+	if slices.Contains(os.Args, "--version") {
+		fmt.Println("opencode v2.3.2")
+		os.Exit(0)
+	}
 	if !slices.Contains(os.Args, "serve") || !slices.Contains(os.Args, "127.0.0.1") || !slices.Contains(os.Args, "0") {
 		os.Exit(9)
 	}
@@ -42,11 +46,11 @@ func TestNativeHelper(t *testing.T) {
 	var mu sync.Mutex
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, pass, ok := r.BasicAuth()
-		if !ok || user != "opencode" || pass == "" || pass != os.Getenv("OPENCODE_SERVER_PASSWORD") {
+		if !ok || user != "opencode" || pass == "" || pass != os.Getenv("OPENCODE_PASSWORD") {
 			w.WriteHeader(401)
 			return
 		}
-		if r.URL.Query().Get("directory") == "" {
+		if r.URL.Query().Get("location[directory]") == "" {
 			w.WriteHeader(400)
 			return
 		}
@@ -66,45 +70,53 @@ func TestNativeHelper(t *testing.T) {
 		_ = json.NewEncoder(f).Encode(map[string]any{"path": r.URL.Path, "method": r.Method, "body": body})
 		_ = f.Close()
 		switch r.URL.Path {
-		case "/global/health":
+		case "/api/info":
 			fmt.Fprint(w, `{"healthy":true}`)
-		case "/config":
-			fmt.Fprint(w, `{"default_agent":"build","model":"provider/org/model","plugin":[],"provider":{"private":{"options":{"apiKey":"never-public"}}}}`)
-		case "/agent":
-			fmt.Fprint(w, `[{"name":"build","mode":"primary","description":"Build things","variant":"high","prompt":"private prompt"},{"name":"review","mode":"all"},{"name":"hidden","mode":"primary","hidden":true},{"name":"child","mode":"subagent"}]`)
-		case "/provider":
-			fmt.Fprint(w, `{"connected":["provider"],"default":{"provider":"org/model"},"all":[{"id":"provider","name":"Provider display","key":"secret","models":{"org/model":{"id":"org/model","name":"Model","status":"active","capabilities":{"input":{"text":true},"output":{"text":true}},"variants":{"high":{},"low":{},"disabled":{"disabled":true}}},"retired":{"status":"deprecated","capabilities":{"input":{"text":true},"output":{"text":true}}}}},{"id":"offline","models":{"other":{"capabilities":{"input":{"text":true},"output":{"text":true}}}}}]}`)
-		case "/session":
+		case "/api/config":
+			fmt.Fprint(w, `[{"type":"document","info":{"default_agent":"build","model":{"providerID":"provider","model":"org/model"},"plugins":[],"providers":{"private":{"settings":{"apiKey":"never-public"}}}}}]`)
+		case "/api/skill":
+			fmt.Fprint(w, `{"data":[]}`)
+		case "/api/agent":
+			fmt.Fprint(w, `{"location":{},"data":[{"id":"build","name":"Build","mode":"primary","description":"Build things","model":{"providerID":"provider","id":"org/model","variant":"high"},"system":"private prompt"},{"id":"review","name":"Review","mode":"all"},{"id":"hidden","mode":"primary","hidden":true},{"id":"child","mode":"subagent"}]}`)
+		case "/api/provider":
+			fmt.Fprint(w, `{"location":{},"data":[{"id":"provider","name":"Provider display","settings":{"apiKey":"secret"}}]}`)
+		case "/api/model":
+			fmt.Fprint(w, `{"location":{},"data":[{"id":"org/model","providerID":"provider","name":"Model","type":"chat","status":"active","enabled":true,"capabilities":{"input":["text"],"output":["text"]},"variants":[{"id":"high"},{"id":"low"}]},{"id":"retired","providerID":"provider","status":"deprecated","enabled":true,"capabilities":{"input":["text"],"output":["text"]}},{"id":"other","providerID":"offline","enabled":false,"capabilities":{"input":["text"],"output":["text"]}}]}`)
+		case "/api/model/default":
+			fmt.Fprint(w, `{"location":{},"data":{"id":"org/model","providerID":"provider"}}`)
+		case "/api/plugin":
+			fmt.Fprint(w, `{"location":{},"data":[{"id":"slorp","state":{"status":"active"}}]}`)
+		case "/api/session":
 			if r.Method != "POST" {
 				w.WriteHeader(405)
 				return
 			}
-			b, _ := json.Marshal(map[string]any{"id": "ses_native", "title": body["title"], "directory": r.URL.Query().Get("directory"), "agent": body["agent"], "model": body["model"], "time": map[string]int64{"created": 1700000000000, "updated": 1700000000000}})
+			b, _ := json.Marshal(map[string]any{"data": map[string]any{"id": "ses_native", "title": body["title"], "location": body["location"], "agent": body["agent"], "model": body["model"], "time": map[string]int64{"created": 1700000000000, "updated": 1700000000000}}})
 			if err := os.WriteFile(filepath.Join(home, "native.json"), b, 0o600); err != nil {
 				w.WriteHeader(500)
 				return
 			}
 			_, _ = w.Write(b)
-		case "/session/ses_native":
+		case "/api/session/ses_native":
 			b, err := os.ReadFile(filepath.Join(home, "native.json"))
 			if err != nil {
 				w.WriteHeader(404)
 				return
 			}
 			_, _ = w.Write(b)
-		case "/session/ses_native/prompt_async":
-			w.WriteHeader(204)
-		case "/session/ses_native/abort":
+		case "/api/session/ses_native/prompt":
+			fmt.Fprint(w, `{"data":{"id":"msg_admitted","type":"user","status":"pending","payload":{"text":"hello"}}}`)
+		case "/api/session/ses_native/interrupt":
 			if err := os.WriteFile(filepath.Join(home, "aborted"), []byte("yes"), 0o600); err != nil {
 				w.WriteHeader(500)
 				return
 			}
-			fmt.Fprint(w, `true`)
+			fmt.Fprint(w, `{"interrupted":true}`)
 		default:
 			w.WriteHeader(404)
 		}
 	})
-	fmt.Printf("opencode server listening on http://%s\n", listener.Addr())
+	fmt.Printf("server listening on http://%s\n", listener.Addr())
 	_ = http.Serve(listener, handler)
 	os.Exit(0)
 }
@@ -185,16 +197,17 @@ func TestManagedLifecycleSameIdentityAndMetadata(t *testing.T) {
 		t.Fatalf("runtime mode: %v %v", info, err)
 	}
 	b, err := os.ReadFile(control)
-	if err != nil || string(b) != `{"sessionId":"ses_native"}` {
+	var activation map[string]string
+	if err != nil || json.Unmarshal(b, &activation) != nil || activation["sessionId"] != "ses_native" || activation["opencodeURL"] != r.base {
 		t.Fatalf("control: %s %v", b, err)
 	}
-	create := requests(t, a, "/session")[0]["body"].(map[string]any)
+	create := requests(t, a, "/api/session")[0]["body"].(map[string]any)
 	model := create["model"].(map[string]any)
 	if model["id"] != "org/model" || model["providerID"] != "provider" || model["variant"] != "low" || create["agent"] != "review" {
 		t.Fatal(create)
 	}
-	prompt := requests(t, a, "/session/ses_native/prompt_async")[0]["body"].(map[string]any)
-	if prompt["model"].(map[string]any)["modelID"] != "org/model" || prompt["variant"] != "low" {
+	prompt := requests(t, a, "/api/session/ses_native/prompt")[0]["body"].(map[string]any)
+	if prompt["text"] != "hello" || len(prompt) != 1 {
 		t.Fatal(prompt)
 	}
 	a.Hub.Apply(Agent, id, func(s *hub.Session) {
@@ -231,7 +244,7 @@ func TestManagedLifecycleSameIdentityAndMetadata(t *testing.T) {
 	if len(opened.Replies) != 1 || opened.Replies[0].State != hub.Dropped {
 		t.Fatal(opened.Replies)
 	}
-	if len(requests(t, a, "/session")) != 1 || len(requests(t, a, "/session/ses_native/prompt_async")) != 1 {
+	if len(requests(t, a, "/api/session")) != 1 || len(requests(t, a, "/api/session/ses_native/prompt")) != 1 {
 		t.Fatal("promptless resume created a new session or turn")
 	}
 	if err := a.Resume(context.Background(), id, a.Home, "duplicate"); !errors.Is(err, hub.ErrLifecycleConflict) {
@@ -243,9 +256,9 @@ func TestManagedLifecycleSameIdentityAndMetadata(t *testing.T) {
 	if err := a.Resume(context.Background(), id, a.Home, "again"); err != nil {
 		t.Fatal(err)
 	}
-	prompts := requests(t, a, "/session/ses_native/prompt_async")
+	prompts := requests(t, a, "/api/session/ses_native/prompt")
 	last := prompts[len(prompts)-1]["body"].(map[string]any)
-	if last["agent"] != "review" || last["variant"] != "low" || last["model"].(map[string]any)["modelID"] != "org/model" {
+	if last["text"] != "again" || len(last) != 1 {
 		t.Fatal(last)
 	}
 }
@@ -274,7 +287,7 @@ func TestCatalogAndInvalidLaunchChoices(t *testing.T) {
 			t.Fatalf("accepted %+v: %q %v", l, id, err)
 		}
 	}
-	if len(requests(t, a, "/session")) != 0 || len(a.runtimes) != 0 {
+	if len(requests(t, a, "/api/session")) != 0 || len(a.runtimes) != 0 {
 		t.Fatal("invalid start created native data or leaked a child")
 	}
 }
@@ -284,7 +297,7 @@ func TestManagedCancellationMissingSessionAndShutdown(t *testing.T) {
 	if err := a.Resume(context.Background(), "ses_missing", a.Home, ""); err == nil {
 		t.Fatal("missing native session accepted")
 	}
-	if len(requests(t, a, "/session")) != 0 || len(a.runtimes) != 0 {
+	if len(requests(t, a, "/api/session")) != 0 || len(a.runtimes) != 0 {
 		t.Fatal("missing session fell back to create")
 	}
 	t.Setenv("SLORP_TEST_HANG", "1")

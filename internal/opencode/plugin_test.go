@@ -29,10 +29,8 @@ func fixture(t *testing.T) *Adapter {
 	st := testdb.Open(t)
 	a := &Adapter{Home: root, Data: filepath.Join(root, "slorp"), ConfigDir: filepath.Join(root, "config", "opencode"), URL: "http://127.0.0.1:5858", Bin: filepath.Join(root, "opencode"), Hub: hub.New(testdb.KB(t, st), st)}
 	put(t, a.Bin, `#!/bin/sh
-test "$1" = plugin && test "$3" = --global || exit 4
-mkdir -p "$XDG_CONFIG_HOME/opencode"
-printf '{"plugin":["%s"]}' "$2" > "$XDG_CONFIG_HOME/opencode/opencode.json"
-printf '{"plugin":["%s"]}' "$2" > "$XDG_CONFIG_HOME/opencode/tui.json"
+test "$1" = --version && test $# = 1 || exit 4
+echo 'opencode v2.3.2'
 `)
 	if err := os.Chmod(a.Bin, 0o700); err != nil {
 		t.Fatal(err)
@@ -123,7 +121,7 @@ func TestBundledPresenceAffectsRevisionAndUpdateDetection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if version != "0.6.0" || len(files["presence.ts"]) == 0 {
+	if version != "0.7.0" || len(files["presence.ts"]) == 0 {
 		t.Fatalf("missing presence runtime or version: %q", version)
 	}
 	written, err := os.ReadFile(filepath.Join(a.managedPath(), "presence.ts"))
@@ -154,7 +152,7 @@ func TestBundledQuotasRuntimePackaging(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if version != "0.6.0" || len(files["quotas.ts"]) == 0 || !strings.Contains(string(files["slorp.ts"]), "'./quotas.ts'") {
+	if version != "0.7.0" || len(files["quotas.ts"]) == 0 || !strings.Contains(string(files["slorp.ts"]), "'./quotas.ts'") {
 		t.Fatalf("missing quotas runtime/import or version: %q", version)
 	}
 	written, err := os.ReadFile(filepath.Join(a.managedPath(), "quotas.ts"))
@@ -188,17 +186,17 @@ func TestBundledQuotasRuntimePackaging(t *testing.T) {
 	}
 }
 
-func TestDetectLocalPackageAndFinishCompanionSetup(t *testing.T) {
+func TestDetectLocalPackageLoadsBothParts(t *testing.T) {
 	a := fixture(t)
 	path := filepath.Join(a.Home, "checkout", "integrations", "opencode")
 	put(t, filepath.Join(path, "package.json"), `{"name":"opencode-slorp","version":"dev","exports":{"./tui":"./tui.ts"}}`)
 	put(t, filepath.Join(path, "tui.ts"), "export default {}")
 	put(t, filepath.Join(a.ConfigDir, "opencode.jsonc"), `{
   // Keep this comment and the custom options.
-  "plugin": [["../../checkout/integrations/opencode", {"url":"http://127.0.0.1:5858"}]],
+  "plugins": [{"package":"../../checkout/integrations/opencode", "options":{"url":"http://127.0.0.1:5858"}}],
 }`)
 	p, err := a.inspect()
-	if err != nil || p.Source != "local" || !p.Installed || !p.NeedsSetup {
+	if err != nil || p.Source != "local" || !p.Installed || p.NeedsSetup {
 		t.Fatalf("local: %+v, %v", p, err)
 	}
 	if err := a.Install(context.Background()); err != nil {
@@ -216,23 +214,6 @@ func TestDetectLocalPackageAndFinishCompanionSetup(t *testing.T) {
 	}
 	if _, err := os.Stat(a.managedPath()); !os.IsNotExist(err) {
 		t.Fatal("created an unnecessary managed copy")
-	}
-}
-
-func TestDetectionHandlesAutoloadAndFileURLs(t *testing.T) {
-	a := fixture(t)
-	path := filepath.Join(a.ConfigDir, "plugins", "slorp.ts")
-	put(t, path, "const AGENT = 'opencode'; fetch('/api/bridge/poll')")
-	p, err := a.inspect()
-	if err != nil || p.Source != "file" || !p.Installed {
-		t.Fatalf("autoload: %+v, %v", p, err)
-	}
-	if err := a.Install(context.Background()); err == nil {
-		t.Fatal("silently duplicated an old single-file bridge")
-	}
-	put(t, filepath.Join(a.ConfigDir, "opencode.json"), `{"plugin":["file://`+path+`"]}`)
-	if _, err := a.inspect(); err != nil {
-		t.Fatal("same file listed twice should be deduplicated:", err)
 	}
 }
 
@@ -258,16 +239,12 @@ func TestInstallErrorsAreReported(t *testing.T) {
 	}
 }
 
-func TestInstallWithPluginAddSubcommand(t *testing.T) {
+func TestInstallRegistersLocalPackageWithoutPluginAdd(t *testing.T) {
 	a := fixture(t)
 	put(t, a.Bin, `#!/bin/sh
-if test "$1" != plugin || test "$2" != add || test $# != 3; then
-  echo "Unknown subcommand \"$2\" for \"opencode plugin\"" >&2
-  exit 1
-fi
-mkdir -p "$XDG_CONFIG_HOME/opencode"
-printf '{"plugin":["%s"]}' "$3" > "$XDG_CONFIG_HOME/opencode/opencode.json"
-printf '{"plugin":["%s"]}' "$3" > "$XDG_CONFIG_HOME/opencode/tui.json"
+if test "$1" = --version; then echo 'opencode v2.3.2'; exit 0; fi
+echo "Plugin target must be an npm registry package or Git package specifier" >&2
+exit 1
 `)
 	os.Chmod(a.Bin, 0o700)
 	if err := a.Install(context.Background()); err != nil {
@@ -276,22 +253,24 @@ printf '{"plugin":["%s"]}' "$3" > "$XDG_CONFIG_HOME/opencode/tui.json"
 	if p, err := a.inspect(); err != nil || !p.Installed || p.NeedsSetup {
 		t.Fatalf("installed: %+v, %v", p, err)
 	}
-	put(t, a.Bin, "#!/bin/sh\ntest \"$2\" = add && echo refused >&2 || echo 'Unknown subcommand' >&2\nexit 1\n")
-	os.Chmod(a.Bin, 0o700)
-	if err := a.install(context.Background(), a.managedPath()); err == nil || !strings.Contains(err.Error(), "refused") {
-		t.Fatalf("failed add: %v", err)
+	b, err := os.ReadFile(filepath.Join(a.ConfigDir, "opencode.json"))
+	if err != nil || !strings.Contains(string(b), `"plugins"`) {
+		t.Fatalf("native registration = %s, %v", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(a.ConfigDir, "cli.json")); !os.IsNotExist(err) {
+		t.Fatalf("created unnecessary terminal configuration: %v", err)
 	}
 }
 
 func TestRemoveReferencePreservesOtherConfiguration(t *testing.T) {
 	for _, input := range []string{
-		`{"plugin":["/managed"]}`,
-		`{"plugin":["/managed", "other"]}`,
-		`{"plugin":["other", "/managed"]}`,
-		`{"plugin":["first", ["/managed", {"url":"http://127.0.0.1:4747"}], "last"]}`,
-		"{\n // before\n \"plugin\": [\"other\", /* keep */ \"/managed\",],\n \"model\": \"provider/model\", // after\n}",
-		`{"plugin":["/managed","/managed","other"]}`,
-		`{"plugin":["/managed",]}`,
+		`{"plugins":["/managed"]}`,
+		`{"plugins":["/managed", "other"]}`,
+		`{"plugins":["other", "/managed"]}`,
+		`{"plugins":["first", {"package":"/managed", "options":{"url":"http://127.0.0.1:4747"}}, "last"]}`,
+		"{\n // before\n \"plugins\": [\"other\", /* keep */ \"/managed\",],\n \"model\": \"provider/model\", // after\n}",
+		`{"plugins":["/managed","/managed","other"]}`,
+		`{"plugins":["/managed",]}`,
 	} {
 		t.Run(input, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "opencode.jsonc")
@@ -340,6 +319,7 @@ func TestInterruptedUninstallCanBeRetried(t *testing.T) {
 	if err := a.Install(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	put(t, filepath.Join(a.ConfigDir, "cli.json"), `{"plugins":["`+a.managedPath()+`"]}`)
 	ctx := interruptedUninstall{context.Background(), filepath.Join(a.ConfigDir, "opencode.json"), a.managedPath()}
 	if err := a.Uninstall(ctx); err != context.Canceled {
 		t.Fatalf("uninstall = %v", err)
@@ -382,23 +362,45 @@ func TestPluginManagementDoesNotBlockRetirement(t *testing.T) {
 	}
 }
 
-func TestDisabledCompanionIsReported(t *testing.T) {
+func TestDisabledPluginIsReported(t *testing.T) {
 	a := fixture(t)
 	if err := a.Install(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	b, _ := json.Marshal(map[string]any{"plugin": []string{a.managedPath()}, "plugin_enabled": map[string]bool{"slorp": false}})
-	put(t, filepath.Join(a.ConfigDir, "tui.json"), string(b))
+	b, _ := json.Marshal(map[string]any{"plugins": []string{a.managedPath(), "-slorp"}})
+	put(t, filepath.Join(a.ConfigDir, "opencode.json"), string(b))
 	p, err := a.inspect()
-	if err == nil || !strings.Contains(err.Error(), "disabled") || !p.NeedsSetup {
+	if err != nil || p.Enabled || p.NeedsSetup {
 		t.Fatalf("disabled companion = %+v %v", p, err)
+	}
+	if err := a.Uninstall(context.Background()); err != nil {
+		t.Fatal("could not uninstall disabled plugin:", err)
+	}
+}
+
+func TestDisabledTerminalCompanionIsReported(t *testing.T) {
+	a := fixture(t)
+	if err := a.Install(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	put(t, filepath.Join(a.ConfigDir, "cli.json"), `{"plugins":["*","-slorp"]}`)
+	p, err := a.inspect()
+	if err != nil || !p.Installed || p.Enabled || p.NeedsSetup {
+		t.Fatalf("disabled terminal: %+v, %v", p, err)
+	}
+	if err := a.Uninstall(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(filepath.Join(a.ConfigDir, "cli.json"))
+	if !strings.Contains(string(b), `"-slorp"`) {
+		t.Fatal("removed the user's terminal control")
 	}
 }
 
 func TestUninstallPreservesConfigSymlinks(t *testing.T) {
 	dir := t.TempDir()
 	path, link := filepath.Join(dir, "real.json"), filepath.Join(dir, "opencode.json")
-	put(t, path, `{"plugin":["/managed","other"]}`)
+	put(t, path, `{"plugins":["/managed","other"]}`)
 	if err := os.Symlink(path, link); err != nil {
 		t.Fatal(err)
 	}
@@ -411,5 +413,220 @@ func TestUninstallPreservesConfigSymlinks(t *testing.T) {
 	b, _ := os.ReadFile(path)
 	if strings.Contains(string(b), "/managed") || !strings.Contains(string(b), "other") {
 		t.Fatalf("target = %s", b)
+	}
+}
+
+func TestAddReferencePreservesConfiguration(t *testing.T) {
+	for _, input := range []string{
+		`{}`,
+		`{"model":"provider/model"}`,
+		`{"model":"provider/model",}`,
+		"{\"model\":\"provider/model\", // keep\n}",
+		`{"plugins":[]}`,
+		`{"plugins":["other"]}`,
+		`{"plugins":["other",]}`,
+		"{\n // before\n \"plugins\": [\"other\", /* keep */],\n \"model\": \"provider/model\", // after\n}",
+		`{"plugins":[{"package":"other","options":{"nested":[1,2]}}]}`,
+		`{"plugins":["other",{"package":"local-package","options":{"url":"http://localhost","nested":[1,2]}}]}`,
+		`{"plugins":[{"package":"local-package", /* keep */ "options":{"url":"http://localhost","nested":[1,2]}}]}`,
+		`{"plu\u0067ins":["other"]}`,
+	} {
+		t.Run(input, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "opencode.jsonc")
+			target := filepath.Join(t.TempDir(), "space and \"quotes", "plugin")
+			put(t, path, input)
+			if err := addReference(path, target); err != nil {
+				t.Fatal(err)
+			}
+			b, _ := os.ReadFile(path)
+			var doc map[string]json.RawMessage
+			if err := json.Unmarshal(jsonConfig(b), &doc); err != nil {
+				t.Fatal(err)
+			}
+			var plugins []any
+			if err := json.Unmarshal(doc["plugins"], &plugins); err != nil {
+				t.Fatal(err)
+			}
+			if plugins[len(plugins)-1] != target {
+				t.Fatalf("missing registered path: %s", b)
+			}
+			for _, text := range []string{"// before", "/* keep */", "// after", `"model": "provider/model"`} {
+				if strings.Contains(input, text) && !strings.Contains(string(b), text) {
+					t.Errorf("lost %s", text)
+				}
+			}
+			for _, text := range []string{`"options":{"nested":[1,2]}`, `"options":{"url":"http://localhost","nested":[1,2]}`} {
+				if strings.Contains(input, text) && !strings.Contains(string(b), text) {
+					t.Errorf("lost native options %s: %s", text, b)
+				}
+			}
+			if err := addReference(path, target); err != nil {
+				t.Fatal(err)
+			}
+			again, _ := os.ReadFile(path)
+			if string(again) != string(b) {
+				t.Fatalf("non-idempotent registration:\n%s\n%s", b, again)
+			}
+			if err := removeReference(path, target); err != nil {
+				t.Fatal(err)
+			}
+			b, _ = os.ReadFile(path)
+			if !json.Valid(jsonConfig(b)) {
+				t.Fatalf("invalid after removal: %s", b)
+			}
+		})
+	}
+}
+
+func TestAddReferencePreservesSymlinkAndMode(t *testing.T) {
+	dir := t.TempDir()
+	target, link := filepath.Join(dir, "real.jsonc"), filepath.Join(dir, "opencode.jsonc")
+	put(t, target, `{"plugins":["other"]}`)
+	if err := os.Chmod(target, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := addReference(link, "/managed"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(link)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("replaced symlink: %v", err)
+	}
+	info, err = os.Stat(target)
+	if err != nil || info.Mode().Perm() != 0o640 {
+		t.Fatalf("changed permissions: %v", err)
+	}
+}
+
+func TestInstallRejectsUnsupportedVersionBeforeWriting(t *testing.T) {
+	a := fixture(t)
+	put(t, a.Bin, "#!/bin/sh\necho 1.19.6\n")
+	if err := a.Install(context.Background()); err == nil || !strings.Contains(err.Error(), "requires OpenCode 2.x") {
+		t.Fatalf("version error = %v", err)
+	}
+	if _, err := os.Stat(a.managedPath()); !os.IsNotExist(err) {
+		t.Fatal("wrote plugin before rejecting incompatible host")
+	}
+}
+
+func TestInstallRepairsInterruptedUpgrade(t *testing.T) {
+	a := fixture(t)
+	if err := a.Install(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	put(t, filepath.Join(a.managedPath(), "server.ts"), "incomplete")
+	p, err := a.inspect()
+	if err != nil || !p.UpdateAvailable {
+		t.Fatalf("incomplete = %+v, %v", p, err)
+	}
+	if err := a.Install(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	p, err = a.inspect()
+	if err != nil || p.UpdateAvailable {
+		t.Fatalf("retry = %+v, %v", p, err)
+	}
+}
+
+func TestInstallUsesReplacementServerConfig(t *testing.T) {
+	a := fixture(t)
+	a.ExtraConfigDir = filepath.Join(a.Home, "replacement")
+	inactive := filepath.Join(a.ConfigDir, "opencode.json")
+	put(t, inactive, "{inactive configuration}")
+	put(t, filepath.Join(a.ConfigDir, "plugins", "other-slorp", "package.json"), `{"name":"opencode-slorp"}`)
+	if err := a.Install(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	p, err := a.inspect()
+	if err != nil || !p.Installed || !p.Enabled || p.NeedsSetup {
+		t.Fatalf("replacement registration = %+v, %v", p, err)
+	}
+	b, err := os.ReadFile(filepath.Join(a.ExtraConfigDir, "opencode.json"))
+	if err != nil || !strings.Contains(string(b), a.managedPath()) {
+		t.Fatalf("active registration = %s, %v", b, err)
+	}
+	b, _ = os.ReadFile(inactive)
+	if string(b) != "{inactive configuration}" {
+		t.Fatalf("inactive configuration changed: %s", b)
+	}
+	put(t, filepath.Join(a.ConfigDir, "cli.json"), `{"plugins":["-slorp"]}`)
+	p, err = a.inspect()
+	if err != nil || p.Enabled {
+		t.Fatalf("default terminal controls ignored: %+v, %v", p, err)
+	}
+}
+
+func TestUpdatePreservesRegistrationAcrossConfigFiles(t *testing.T) {
+	a := fixture(t)
+	if err := a.writeBundle(); err != nil {
+		t.Fatal(err)
+	}
+	path, _ := json.Marshal(a.managedPath())
+	original := `{"plugins":[{"package":` + string(path) + `,"options":{"url":"http://localhost:5858","nested":{"keep":true}}}]}`
+	jsonPath := filepath.Join(a.ConfigDir, "opencode.json")
+	jsoncPath := jsonPath + "c"
+	put(t, jsonPath, original)
+	put(t, jsoncPath, "{ // unrelated\n \"model\":\"provider/model\"\n}")
+	companion := filepath.Join(a.ConfigDir, "cli.json")
+	put(t, companion, `{"plugins":[`+string(path)+`,"other"]}`)
+	if err := a.Update(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(jsonPath)
+	if string(b) != original {
+		t.Fatalf("changed custom options: %s", b)
+	}
+	b, _ = os.ReadFile(jsoncPath)
+	list, err := entries(b)
+	if err != nil || len(list) != 0 {
+		t.Fatalf("added overriding registration: %s, %v", b, err)
+	}
+	b, _ = os.ReadFile(companion)
+	if strings.Contains(string(b), a.managedPath()) || !strings.Contains(string(b), "other") {
+		t.Fatalf("duplicate companion cleanup = %s", b)
+	}
+}
+
+type interruptedInstall struct {
+	context.Context
+	config string
+}
+
+func (c interruptedInstall) Err() error {
+	if _, err := os.Stat(c.config); err == nil {
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestInterruptedInstallRetainsCleanupState(t *testing.T) {
+	a := fixture(t)
+	if err := a.writeBundle(); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(map[string]any{"plugins": []string{a.managedPath()}})
+	put(t, filepath.Join(a.ConfigDir, "cli.json"), string(b))
+	ctx := interruptedInstall{context.Background(), filepath.Join(a.ConfigDir, "opencode.json")}
+	if err := a.Install(ctx); err != context.Canceled {
+		t.Fatalf("interrupted install = %v", err)
+	}
+	p, err := a.inspect()
+	if err != nil || !p.Installed || !p.Enabled || !p.NeedsSetup {
+		t.Fatalf("partial setup hidden: %+v, %v", p, err)
+	}
+	if err := a.Install(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	p, err = a.inspect()
+	if err != nil || p.NeedsSetup {
+		t.Fatalf("retry incomplete: %+v, %v", p, err)
+	}
+	b, _ = os.ReadFile(filepath.Join(a.ConfigDir, "cli.json"))
+	list, err := entries(b)
+	if err != nil || len(list) != 0 {
+		t.Fatalf("duplicate companion left behind: %s, %v", b, err)
 	}
 }

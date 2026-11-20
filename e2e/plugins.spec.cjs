@@ -38,14 +38,14 @@ async function world(t, plugin, sessions = []) {
   return { page, card, calls, data, fail: message => { failure = message } }
 }
 
-test('Settings installs the bundled plugin and explains the restart requirement', async t => {
+test('Settings installs the bundled plugin and explains automatic loading', async t => {
   const { page, card, calls } = await world(t, { installed: false })
   await card.getByRole('button', { name: 'Install', exact: true }).click()
   await card.getByRole('button', { name: 'Uninstall', exact: true }).waitFor()
   assert.deepEqual(calls, [['POST', '/api/plugins/opencode']])
   assert.match(await card.innerText(), /installed/i)
   assert.match(await card.innerText(), /bundled with Slorp/)
-  assert.match(await page.locator('#toast').innerText(), /restart OpenCode/)
+  assert.match(await page.locator('#toast').innerText(), /loads the plugin automatically/)
 })
 
 test('a local package offers companion setup without managed update or removal', async t => {
@@ -56,12 +56,12 @@ test('a local package offers companion setup without managed update or removal',
   assert.deepEqual(calls, [['POST', '/api/plugins/opencode']])
 })
 
-test('managed updates distinguish an old running bridge from a restarted one', async t => {
+test('managed updates distinguish an old running bridge from a reloaded one', async t => {
   const at = new Date().toISOString()
   const session = { id: 's', agent: 'opencode', cwd: '/work', status: 'idle', label: 'session', startedAt: at, activeAt: at, canReply: true, pluginRevision: 'old', pluginVersion: '0.2.0', pluginTui: true, used: {} }
   const { page, card, calls, data } = await world(t, { installed: true, source: 'managed', revision: 'old', updateAvailable: true }, [session])
   await card.getByRole('button', { name: 'Update', exact: true }).click()
-  await page.waitForFunction(() => document.querySelector('[data-plugin="opencode"]').textContent.includes('restart needed'))
+  await page.waitForFunction(() => document.querySelector('[data-plugin="opencode"]').textContent.includes('reload needed'))
   assert.deepEqual(calls, [['POST', '/api/plugins/opencode/update']])
   data.sessions[0].pluginRevision = 'new'
   await page.evaluate(() => refresh(true))

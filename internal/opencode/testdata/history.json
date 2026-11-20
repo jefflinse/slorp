@@ -1,73 +1,24 @@
 {
   "info": {
     "id": "ses_history",
-    "slug": "history-fixture",
-    "projectID": "global",
-    "directory": "/work/history",
-    "title": "Cache repair",
-    "version": "1.19.6",
-    "time": { "created": 1700000000000, "updated": 1700000012000 }
+    "projectID": "history-fixture",
+    "cost": 0,
+    "tokens": {"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},
+    "time": {"created":1700000000000,"updated":1700000011000},
+    "location": {"directory":"/history-fixture"}
   },
   "messages": [
-    {
-      "info": { "id": "msg_orphan", "sessionID": "ses_history", "role": "assistant", "parentID": "msg_missing", "time": { "created": 1700000000000, "completed": 1700000000001 } },
-      "parts": [{ "type": "text", "text": "An answer with no known question." }]
-    },
-    {
-      "info": { "id": "msg_question1", "sessionID": "ses_history", "role": "user", "time": { "created": 1700000001000 } },
-      "parts": [
-        { "type": "text", "text": "Inspect the cache" },
-        { "type": "text", "text": "Injected instructions", "synthetic": true },
-        { "type": "text", "text": "Ignored instructions", "ignored": true }
-      ]
-    },
-    {
-      "info": { "id": "msg_step1", "sessionID": "ses_history", "role": "assistant", "parentID": "msg_question1", "time": { "created": 1700000002000, "completed": 1700000002001 }, "finish": "tool-calls" },
-      "parts": [
-        { "type": "reasoning", "text": "Private reasoning" },
-        { "type": "text", "text": "I will inspect it." },
-        { "type": "tool", "tool": "bash", "state": { "status": "completed", "input": { "command": "inspect" }, "output": "Tool output is not an answer" } }
-      ]
-    },
-    {
-      "info": { "id": "msg_question2", "sessionID": "ses_history", "role": "user", "time": { "created": 1700000003000 } },
-      "parts": [{ "type": "text", "text": "Apply the fix" }, { "type": "file", "filename": "cache.txt", "mime": "text/plain", "url": "file:///work/history/cache.txt" }]
-    },
-    {
-      "info": { "id": "msg_answer1", "sessionID": "ses_history", "role": "assistant", "parentID": "msg_question1", "time": { "created": 1700000004000, "completed": 1700000004001 }, "finish": "stop" },
-      "parts": [{ "type": "text", "text": "The cache is stale." }]
-    },
-    {
-      "info": { "id": "msg_answer2", "sessionID": "ses_history", "role": "assistant", "parentID": "msg_question2", "time": { "created": 1700000005000, "completed": 1700000005001 }, "finish": "stop" },
-      "parts": [{ "type": "text", "text": "The cache is fixed." }]
-    },
-    {
-      "info": { "id": "msg_compact", "sessionID": "ses_history", "role": "user", "time": { "created": 1700000006000 } },
-      "parts": [{ "id": "prt_compact", "type": "compaction", "auto": true }]
-    },
-    {
-      "info": { "id": "msg_summary", "sessionID": "ses_history", "role": "assistant", "parentID": "msg_compact", "summary": true, "time": { "created": 1700000007000, "completed": 1700000008000 } },
-      "parts": [{ "type": "text", "text": "Internal compaction summary, not a response to the user." }]
-    },
-    {
-      "info": { "id": "msg_continue", "sessionID": "ses_history", "role": "user", "time": { "created": 1700000009000 } },
-      "parts": [{ "type": "text", "text": "Continue", "synthetic": true }]
-    },
-    {
-      "info": { "id": "msg_done", "sessionID": "ses_history", "role": "assistant", "parentID": "msg_continue", "time": { "created": 1700000010000, "completed": 1700000010001 }, "finish": "stop" },
-      "parts": [{ "type": "text", "text": "Tests pass." }, { "type": "text", "text": "The fix is ready." }]
-    },
-    {
-      "info": { "id": "msg_question3", "sessionID": "ses_history", "role": "user", "time": { "created": 1700000011000 } },
-      "parts": [{ "type": "text", "text": "Apply the fix" }]
-    },
-    {
-      "info": { "id": "msg_streaming", "sessionID": "ses_history", "role": "assistant", "parentID": "msg_question3", "time": { "created": 1700000012000 } },
-      "parts": [{ "type": "text", "text": "An unfinished answer" }]
-    },
-    {
-      "info": { "id": "msg_child", "sessionID": "ses_child", "role": "user", "time": { "created": 1700000013000 } },
-      "parts": [{ "type": "text", "text": "A child task must not appear in the parent's timeline." }]
-    }
+    {"id":"msg_orphan","type":"assistant","time":{"created":1700000000000,"completed":1700000000001},"agent":"build","model":{"providerID":"test","id":"test"},"content":[{"type":"text","text":"No user yet."}]},
+    {"id":"msg_question1","type":"user","time":{"created":1700000001000},"text":"Inspect the cache"},
+    {"id":"msg_progress","type":"assistant","time":{"created":1700000002000,"completed":1700000002100},"agent":"build","model":{"providerID":"test","id":"test"},"content":[{"type":"text","text":"I will inspect it."}]},
+    {"id":"msg_answer1","type":"assistant","time":{"created":1700000002200,"completed":1700000002300},"agent":"build","model":{"providerID":"test","id":"test"},"content":[{"type":"text","text":"The cache is stale."}]},
+    {"id":"msg_question2","type":"user","time":{"created":1700000003000},"text":"Apply the fix"},
+    {"id":"msg_internal","type":"synthetic","time":{"created":1700000004000},"text":"Private continuation instructions"},
+    {"id":"msg_answer2","type":"assistant","time":{"created":1700000005000,"completed":1700000006000},"agent":"build","model":{"providerID":"test","id":"test"},"content":[{"type":"reasoning","text":"Private reasoning"},{"type":"text","text":"Tests pass."},{"type":"text","text":"The fix is ready."}]},
+    {"id":"msg_partial","type":"assistant","time":{"created":1700000007000},"agent":"build","model":{"providerID":"test","id":"test"},"content":[{"type":"text","text":"Incomplete answer"}]},
+    {"id":"msg_compact","type":"compaction","time":{"created":1700000008000},"status":"completed","reason":"auto","summary":"Private compaction summary"},
+    {"id":"msg_question3","type":"user","time":{"created":1700000009000},"text":"Apply the fix"},
+    {"id":"msg_failed","type":"compaction","time":{"created":1700000010000},"status":"failed","reason":"auto","error":{"type":"TestError","message":"Failed"}},
+    {"id":"msg_running","type":"compaction","time":{"created":1700000011000},"status":"running","reason":"manual","summary":""}
   ]
 }

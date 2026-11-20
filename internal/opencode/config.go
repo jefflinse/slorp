@@ -109,13 +109,13 @@ func entries(b []byte) ([]configEntry, error) {
 		if err := d.Decode(&raw); err != nil {
 			return nil, err
 		}
-		if key != "plugin" {
+		if key != "plugins" {
 			continue
 		}
 		base := int(d.InputOffset()) - len(raw)
 		a := json.NewDecoder(bytes.NewReader(raw))
 		if token, _ := a.Token(); token != json.Delim('[') {
-			return nil, fmt.Errorf("plugin must be an array")
+			return nil, fmt.Errorf("plugins must be an array")
 		}
 		for a.More() {
 			var value json.RawMessage
@@ -125,15 +125,101 @@ func entries(b []byte) ([]configEntry, error) {
 			end := base + int(a.InputOffset())
 			var spec string
 			if json.Unmarshal(value, &spec) != nil {
-				var pair []json.RawMessage
-				if json.Unmarshal(value, &pair) == nil && len(pair) > 0 {
-					_ = json.Unmarshal(pair[0], &spec)
+				var entry struct {
+					Package string `json:"package"`
+				}
+				if json.Unmarshal(value, &entry) == nil {
+					spec = entry.Package
 				}
 			}
 			out = append(out, configEntry{spec, end - len(value), end})
 		}
 	}
 	return out, nil
+}
+
+// addReference registers a local package while preserving unrelated configuration.
+func addReference(path, target string) error {
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		b = []byte("{\n  \"$schema\": \"https://opencode.ai/config.json\"\n}\n")
+	} else if err != nil {
+		return err
+	}
+	all, err := entries(b)
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	clean := jsonConfig(b)
+	d := json.NewDecoder(bytes.NewReader(clean))
+	_, _ = d.Token()
+	var start, end int
+	for d.More() {
+		key, _ := d.Token()
+		var raw json.RawMessage
+		if err := d.Decode(&raw); err != nil {
+			return err
+		}
+		if key == "plugins" {
+			start, end = int(d.InputOffset())-len(raw), int(d.InputOffset())
+		}
+	}
+	if end > 0 {
+		for _, e := range all {
+			if e.start >= start && e.end <= end && samePath(localPath(e.spec, path), target) {
+				return nil
+			}
+		}
+		clean = jsonComments(b)
+		end--
+		last := end - 1
+		for last > start && bytes.ContainsRune([]byte(" \r\n\t"), rune(clean[last])) {
+			last--
+		}
+		value, _ := json.Marshal(target)
+		if clean[last] != '[' && clean[last] != ',' {
+			b = append(append(bytes.Clone(b[:last+1]), ','), b[last+1:]...)
+			end++
+		}
+		value = append([]byte("\n    "), value...)
+		value = append(value, '\n', ' ', ' ')
+		b = append(append(bytes.Clone(b[:end]), value...), b[end:]...)
+	} else {
+		clean = jsonComments(b)
+		end := bytes.LastIndexByte(clean, '}')
+		last := end - 1
+		for last > 0 && bytes.ContainsRune([]byte(" \r\n\t"), rune(clean[last])) {
+			last--
+		}
+		if clean[last] != '{' && clean[last] != ',' {
+			b = append(append(bytes.Clone(b[:last+1]), ','), b[last+1:]...)
+			end++
+		}
+		value, _ := json.Marshal(target)
+		add := append([]byte("  \"plugins\": ["), value...)
+		add = append(add, ']', '\n')
+		b = append(append(bytes.Clone(b[:end]), add...), b[end:]...)
+	}
+	if !json.Valid(jsonConfig(b)) {
+		return fmt.Errorf("could not register plugin in %s", path)
+	}
+	return writeConfig(path, b)
+}
+
+func writeConfig(path string, b []byte) error {
+	mode := os.FileMode(0o600)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if target, err := filepath.EvalSymlinks(path); err == nil {
+		path = target
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return atomicFile(path, b, mode)
 }
 
 func localPath(spec, config string) string {

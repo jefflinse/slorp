@@ -1,105 +1,139 @@
-"""Verify native OpenCode import/export and Slorp backfill with a synthetic transcript."""
+"""Native V2 transcript transfer, checkpoint compaction, and Slorp backfill."""
 
-import json
 import argparse
 from datetime import datetime, timezone
-import os
+import json
 from pathlib import Path
-import re
 import shutil
 import subprocess
+import time
+import uuid
+import urllib.parse
 
-from smoke import port, request, stop, wait_for, workspace
+from smoke import environment, native, port, request, server, stop, version, wait_for, workspace
+
+
+def transcript(info, auto_compaction=False, single_followup=False):
+    now = int(time.time() * 1000) - 60000
+    messages = []
+    model = {'providerID': 'mock', 'id': 'fixture'}
+    tokens = {'input': 0, 'output': 0, 'reasoning': 0, 'cache': {'read': 0, 'write': 0}}
+
+    def turn(prompt, answer):
+        at = now + len(messages) * 1000
+        messages.append({'id': 'msg_' + uuid.uuid4().hex, 'type': 'user',
+                         'time': {'created': at}, 'text': prompt})
+        messages.append({'id': 'msg_' + uuid.uuid4().hex, 'type': 'assistant',
+                         'time': {'created': at + 100, 'completed': at + 500},
+                         'agent': 'build', 'model': model, 'finish': 'stop', 'tokens': tokens, 'cost': 0,
+                         'content': [{'type': 'text', 'text': answer}]})
+
+    turn('Inspect the cache', 'The cache needs a fix.')
+    messages[-1]['content'].append({'type': 'tool', 'id': 'call_fixture', 'name': 'shell',
+        'time': {'created': now + 101, 'completed': now + 400},
+        'state': {'status': 'completed', 'input': {'command': 'echo fixture'},
+                  'content': [{'type': 'text', 'text': 'Ignored tool output. ' * 10000}]}})
+    compact = {'id': 'msg_' + uuid.uuid4().hex, 'type': 'compaction', 'status': 'completed',
+               'reason': 'auto' if auto_compaction else 'manual', 'time': {'created': now + 2000},
+               'summary': 'The cache was inspected; apply the fix.', 'model': model}
+    messages.append(compact)
+    if auto_compaction:
+        messages.append({'id': 'msg_' + uuid.uuid4().hex, 'type': 'synthetic',
+                         'time': {'created': now + 2500}, 'text': 'Continue after compaction.'})
+    turn('Apply the fix', 'The fix is applied.')
+    if not single_followup:
+        turn('Apply the fix', 'Confirmed the repeated request.')
+    info = dict(info, id='ses_' + uuid.uuid4().hex, title='V2 history fixture',
+                time={'created': now, 'updated': now + 10000})
+    return {'info': info, 'messages': messages}, compact
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--overflow', action='store_true', help='verify native automatic overflow-replay history')
-    parser.add_argument('--replay-last', action='store_true', help='end at the replay answer and reconcile an older bridge snapshot')
+    parser.add_argument('--auto-compaction', action='store_true', help='automatic V2 checkpoint plus synthetic continuation')
+    parser.add_argument('--single-followup', action='store_true', help='one post-checkpoint turn instead of repeated user prompts')
+    parser.add_argument('--revert', action='store_true', help='stage a native revert before the last repeated user turn')
+    parser.add_argument('--native-only', action='store_true', help='verify native transfer without building Slorp')
     args = parser.parse_args()
+    assert not (args.revert and args.single_followup), '--revert requires the repeated final turn'
     executable = shutil.which('opencode')
-    assert executable, 'OpenCode must be installed'
+    assert executable
     repo = Path(__file__).resolve().parents[2]
     with workspace() as temporary:
-        root = Path(temporary)
-        (root/'home').mkdir()
-        env = {k: v for k, v in os.environ.items() if not k.startswith(('OPENCODE_', 'CMUX_', 'SLORP_'))}
-        env.update(HOME=str(root/'home'), OPENCODE_TEST_HOME=str(root/'home'), npm_config_cache=str(root/'npm-cache'),
-                   XDG_CONFIG_HOME=str(root/'config'), XDG_DATA_HOME=str(root/'data'), XDG_STATE_HOME=str(root/'state'),
-                   XDG_CACHE_HOME=str(root/'cache'), OPENCODE_DISABLE_PROJECT_CONFIG='1',
-                   OPENCODE_DISABLE_EXTERNAL_SKILLS='1', OPENCODE_DISABLE_MODELS_FETCH='1')
-        doc = json.loads((repo/'internal/opencode/testdata'/('overflow.json' if args.overflow else 'history.json')).read_text())
-        sid = doc['info']['id']
-        doc['info']['directory'] = str(root)
-        doc['messages'] = [m for m in doc['messages'] if m['info']['sessionID'] == sid]
-        if args.overflow:
-            doc['messages'][1]['parts'].append({'type': 'tool', 'tool': 'bash', 'state': {'status': 'completed', 'input': {}}})
-        if args.replay_last:
-            assert args.overflow, '--replay-last requires --overflow'
-            doc['messages'] = [m for m in doc['messages'] if m['info']['id'] not in ('msg_repeat', 'msg_repeatanswer')]
-        for n, m in enumerate(doc['messages']):
-            info = m['info']
-            info['agent'] = 'build'
-            if info['role'] == 'user':
-                info['model'] = {'providerID': 'test', 'modelID': 'fixture'}
-            else:
-                info.update(mode='build', providerID='test', modelID='fixture', path={'cwd': str(root), 'root': str(root)},
-                            cost=0, tokens={'input': 0, 'output': 0, 'reasoning': 0, 'cache': {'read': 0, 'write': 0}})
-            for j, p in enumerate(m['parts']):
-                p.setdefault('id', f'prt_fixture{n:03d}{j:03d}')
-                p.update(sessionID=sid, messageID=info['id'])
-                if p['type'] == 'reasoning':
-                    p['time'] = {'start': info['time']['created'], 'end': info['time']['completed']}
-                if p['type'] == 'tool':
-                    p['callID'] = 'call_fixture'
-                    p['state'].update(title='inspect', metadata={}, time={'start': info['time']['created'], 'end': info['time']['completed']})
-                    p['state']['output'] = 'Ignored tool output. ' * 10000
-        source = root/'source.json'
-        source.write_text(json.dumps(doc))
-        imported = subprocess.run([executable, 'import', '--pure', str(source)], cwd=root, env=env, capture_output=True, text=True, timeout=60)
-        assert imported.returncode == 0, imported.stdout + imported.stderr
-        found = re.search(r'Imported session:\s*(ses_[\w-]+)', imported.stdout)
-        assert found, imported.stdout
-        sid = found.group(1)
-        with open(root/'export.json', 'wb') as output:
-            subprocess.run([executable, 'export', '--pure', sid], cwd=root, env=env, stdout=output, stderr=subprocess.PIPE, check=True, timeout=60)
-        native = json.loads((root/'export.json').read_text())
-        assert len((root/'export.json').read_bytes()) > 65536
-        compact = next(p for m in native['messages'] for p in m['parts'] if p['type'] == 'compaction')
-        compacted_at = next(m['info']['time']['completed'] for m in native['messages'] if m['info'].get('summary') is True)
-        latest_user = max((m for m in native['messages'] if m['info']['role'] == 'user' and any(p['type'] == 'text' and not p.get('synthetic') for p in m['parts'])), key=lambda m: m['info']['time']['created'])
-        latest_prompt_at = latest_user['info']['time']['created']
-        latest_prompt = '\n\n'.join(p['text'] for p in latest_user['parts'] if p['type'] == 'text' and not p.get('synthetic') and not p.get('ignored'))
-        print('PASS: native import/export preserves the transcript, including a large tool result', flush=True)
-
-        binary = root/'slorp'
-        subprocess.run(['go', 'build', '-o', str(binary), '.'], cwd=repo, check=True)
-        address = f'127.0.0.1:{port()}'
-        base = 'http://' + address
-        with open(root/'slorp.log', 'w') as log:
-            service = subprocess.Popen([str(binary), '-addr', address, '-data', str(root/'slorp-data'), '-claude', str(root/'missing'),
-                                        '-opencode', executable, '-llm', ''], cwd=root, env=env, stdout=log, stderr=log, start_new_session=True)
-            try:
-                wait_for(lambda: request(base, '/api/sessions'))
-                snapshot = {'agent': 'opencode', 'sessionId': sid, 'snapshot': {
-                    'status': 'idle', 'lastPrompt': latest_prompt, 'promptAt': latest_prompt_at,
-                    'compacted': {'id': compact['id'], 'at': datetime.fromtimestamp((compacted_at+1)/1000, timezone.utc).isoformat(timespec='milliseconds'), 'auto': True},
-                }}
-                request(base, '/api/bridge/poll', snapshot)
-                assert request(base, '/api/sessions')['capabilities']['opencode']['history']
-                for _ in range(2):
-                    response = request(base, f'/api/sessions/{sid}/backfill', {})
-                    assert response == {'exchanges': 3 if args.replay_last else 4, 'queued': 3 if args.overflow and not args.replay_last else 2}, response
+        root = Path(temporary).resolve()
+        env = environment(root)
+        version(executable, root, env)
+        with server(executable, root, env) as agent:
+            seed = native(agent, '/api/session', {'location': {'directory': str(root)}})
+            doc, compact = transcript(seed, args.auto_compaction, args.single_followup)
+            imported = native(agent, '/api/experimental/session/import', doc)
+            sid = imported['id']
+            assert sid == doc['info']['id'], imported
+            exported = native(agent, f'/api/experimental/session/{sid}/export')
+            (root/'export.json').write_text(json.dumps(exported, indent=2))
+            assert len((root/'export.json').read_bytes()) > 65536
+            assert exported['messages'] == doc['messages'], exported
+            messages = native(agent, f'/api/session/{sid}/message?order=asc&limit=100')
+            assert messages == doc['messages'], messages
+            paginated, cursors = [], set()
+            query = {'order': 'asc', 'limit': 2}
+            while True:
+                page = native(agent, f'/api/session/{sid}/message?' + urllib.parse.urlencode(query), unwrap=False)
+                paginated.extend(page['data'])
+                cursor = page['cursor']['next']
+                if not page['data'] or not cursor:
+                    break
+                assert cursor not in cursors, page['cursor']
+                cursors.add(cursor)
+                query = {'limit': 2, 'cursor': cursor}
+            assert paginated == messages, paginated
+            print('PASS: V2 native import/export and message API preserve large tool output, compaction, synthetic and repeated turns', flush=True)
+            if args.revert:
+                boundary = [m for m in messages if m['type'] == 'user'][-1]
+                staged = native(agent, f'/api/session/{sid}/revert/stage',
+                                {'messageID': boundary['id'], 'files': False})
+                assert staged['messageID'] == boundary['id'], staged
+                exported = native(agent, f'/api/experimental/session/{sid}/export')
+                (root/'reverted-export.json').write_text(json.dumps(exported, indent=2))
+                assert exported['info']['revert']['messageID'] == boundary['id'], exported['info']
+                assert exported['messages'] == doc['messages'], 'Staged revert must retain the native transcript'
+                messages = messages[:messages.index(boundary)]
+                print('PASS: real native staged revert retains history with the expected export boundary', flush=True)
+            if args.native_only:
+                return
+            binary = root/'slorp'
+            subprocess.run(['go', 'build', '-o', str(binary), '.'], cwd=repo, check=True)
+            base = f'http://127.0.0.1:{port()}'
+            with open(root/'slorp.log', 'w') as log:
+                proc = subprocess.Popen([str(binary), '-addr', base.removeprefix('http://'),
+                    '-data', str(root/'slorp-data'), '-claude', str(root/'missing'),
+                    '-opencode', executable, '-llm', ''], cwd=root, env=env,
+                    stdout=log, stderr=log, start_new_session=True)
+                try:
+                    wait_for(lambda: request(base, '/api/sessions'))
+                    latest = [m for m in messages if m['type'] == 'user'][-1]
+                    snapshot = {'agent': 'opencode', 'sessionId': sid, 'snapshot': {
+                        'status': 'idle', 'lastPrompt': latest['text'], 'promptAt': latest['time']['created'],
+                        'compacted': {'id': compact['id'], 'at': datetime.fromtimestamp(
+                            compact['time']['created']/1000, timezone.utc).isoformat(timespec='milliseconds'),
+                             'auto': args.auto_compaction}}}
                     request(base, '/api/bridge/poll', snapshot)
-                    session = request(base, '/api/sessions')['sessions'][0]
-                    timeline = session['timeline']
-                    assert len(timeline) == (3 if args.replay_last else 4), timeline
-                    prompts = ['Inspect the cache', 'Apply the fix'] if args.replay_last else ['Inspect the cache', 'Apply the fix', 'Apply the fix']
-                    assert [m.get('prompt') for m in timeline if not m.get('compacted')] == prompts, timeline
-                    assert sum(bool(m.get('compacted')) for m in timeline) == 1, timeline
-                print('PASS: live API backfills and queues answered exchanges without duplicate prompts, replay turns or compactions', flush=True)
-            finally:
-                stop(service)
+                    assert request(base, '/api/sessions')['capabilities']['opencode']['history']
+                    expected = ['Inspect the cache', 'Apply the fix']
+                    if not args.single_followup and not args.revert:
+                        expected.append('Apply the fix')
+                    for _ in range(2):
+                        response = request(base, f'/api/sessions/{sid}/backfill', {})
+                        assert response['exchanges'] == len(expected) + 1, response
+                        request(base, '/api/bridge/poll', snapshot)
+                        session = next(s for s in request(base, '/api/sessions')['sessions'] if s['id'] == sid)
+                        timeline = session['timeline']
+                        assert len(timeline) == len(expected) + 1, timeline
+                        assert [m.get('prompt') for m in timeline if not m.get('compacted')] == expected, timeline
+                        assert sum(bool(m.get('compacted')) for m in timeline) == 1, timeline
+                    print('PASS: native V2 history backfill is idempotent and preserves repeated prompts and one checkpoint', flush=True)
+                finally:
+                    stop(proc)
 
 
 if __name__ == '__main__':

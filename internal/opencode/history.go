@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -23,56 +22,22 @@ const (
 	historyReply   = 2000
 )
 
-var sessionIDPattern = regexp.MustCompile(`^ses_[A-Za-z0-9_-]{1,128}$`)
+var sessionIDPattern = regexp.MustCompile(`^ses[A-Za-z0-9_-]{1,128}$`)
 
 type historyMessage struct {
-	Info struct {
-		ID        string                             `json:"id"`
-		SessionID string                             `json:"sessionID"`
-		ParentID  string                             `json:"parentID"`
-		Role      string                             `json:"role"`
-		Summary   json.RawMessage                    `json:"summary"`
-		Error     json.RawMessage                    `json:"error"`
-		Time      struct{ Created, Completed int64 } `json:"time"`
-	} `json:"info"`
-	Parts []historyPart `json:"parts"`
+	ID      string                             `json:"id"`
+	Type    string                             `json:"type"`
+	Time    struct{ Created, Completed int64 } `json:"time"`
+	Text    string                             `json:"text"`
+	Status  string                             `json:"status"`
+	Reason  string                             `json:"reason"`
+	Content []historyContent                   `json:"content"`
+	Files   []struct{ Name string }            `json:"files"`
 }
 
-type historyPart struct {
-	ID        string `json:"id"`
-	Type      string `json:"type"`
-	Text      string `json:"text"`
-	Filename  string `json:"filename"`
-	Mime      string `json:"mime"`
-	URL       string `json:"url"`
-	Synthetic bool   `json:"synthetic"`
-	Ignored   bool   `json:"ignored"`
-	Auto      bool   `json:"auto"`
-	Overflow  bool   `json:"overflow"`
-	canonical map[string]any
-}
-
-func (m *historyMessage) UnmarshalJSON(b []byte) error {
-	type message historyMessage
-	if err := json.Unmarshal(b, (*message)(m)); err != nil {
-		return err
-	}
-	if m.Info.Role != "user" {
-		return nil
-	}
-	var user struct {
-		Parts []map[string]any `json:"parts"`
-	}
-	if err := json.Unmarshal(b, &user); err != nil {
-		return err
-	}
-	for i, p := range user.Parts {
-		delete(p, "id")
-		delete(p, "messageID")
-		delete(p, "sessionID")
-		m.Parts[i].canonical = p
-	}
-	return nil
+type historyContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
 }
 
 type historyExport struct {
@@ -80,7 +45,6 @@ type historyExport struct {
 		ID     string `json:"id"`
 		Revert *struct {
 			MessageID string `json:"messageID"`
-			PartID    string `json:"partID"`
 		} `json:"revert"`
 	} `json:"info"`
 	Messages *[]historyMessage `json:"messages"`
@@ -104,7 +68,8 @@ func (a *Adapter) Exchanges(ctx context.Context, sessionID string, limit int) ([
 	}
 	defer os.Remove(f.Name())
 	defer f.Close()
-	cmd := a.command(ctx, "export", "--pure", sessionID)
+	cmd := a.command(ctx, "session", "export", sessionID, "--standalone")
+	replaceEnv(cmd, "OPENCODE_PURE", "true")
 	cmd.Stdout = f
 	stderr := &diagnosticBuffer{}
 	cmd.Stderr = stderr
@@ -167,154 +132,67 @@ func readExchanges(r io.Reader, sessionID string, limit int) ([]hub.Exchange, er
 		return nil, errors.New("OpenCode export does not contain the requested session")
 	}
 	messages := *export.Messages
-	slices.SortStableFunc(messages, func(a, b historyMessage) int {
-		return time.UnixMilli(a.Info.Time.Created).Compare(time.UnixMilli(b.Info.Time.Created))
-	})
 	if export.Info.Revert != nil {
-		at := slices.IndexFunc(messages, func(m historyMessage) bool { return m.Info.ID == export.Info.Revert.MessageID })
+		at := slices.IndexFunc(messages, func(m historyMessage) bool { return m.ID == export.Info.Revert.MessageID })
 		if at < 0 {
 			return nil, errors.New("OpenCode export is missing its revert boundary")
 		}
-		if export.Info.Revert.PartID == "" {
-			messages = messages[:at]
-		} else {
-			part := slices.IndexFunc(messages[at].Parts, func(p historyPart) bool { return p.ID == export.Info.Revert.PartID })
-			if part < 0 {
-				return nil, errors.New("OpenCode export is missing its revert part")
-			}
-			messages[at].Parts = messages[at].Parts[:part]
-			messages = messages[:at+1]
-		}
+		messages = messages[:at]
 	}
 	var out []hub.Exchange
-	parents := map[string]int{}
-	type replay struct {
-		parts []historyPart
-		index int
-	}
-	type compaction struct {
-		marker hub.Compaction
-		replay *replay
-	}
-	compactions := map[string]compaction{}
-	var previous []historyPart
-	var pendingReplay *replay
 	seen := map[string]bool{}
 	last := -1
+	// The projected transcript order is authoritative. V2 assistant messages have
+	// no parent ID; checkpoints and synthetic continuations retain the active turn.
 	for _, m := range messages {
-		i := m.Info
-		if i.SessionID != sessionID || i.ID == "" || i.Time.Created <= 0 || seen[i.ID] {
+		if m.ID == "" || m.Time.Created <= 0 || seen[m.ID] {
 			continue
 		}
-		seen[i.ID] = true
-		if i.Role != "user" {
-			pendingReplay = nil
-		}
-		var text, files []string
-		synthetic := false
-		for _, part := range m.Parts {
-			if part.Type == "text" && part.Synthetic {
-				synthetic = true
-			}
-			if part.Ignored || part.Synthetic {
-				continue
-			}
-			switch part.Type {
-			case "text":
-				if t := strings.TrimSpace(part.Text); t != "" {
-					text = append(text, t)
-				}
-			case "file":
-				name := strings.TrimSpace(part.Filename)
+		seen[m.ID] = true
+		switch m.Type {
+		case "user":
+			said := strings.TrimSpace(m.Text)
+			var files []string
+			for _, file := range m.Files {
+				name := strings.TrimSpace(file.Name)
 				if name == "" {
 					name = "attachment"
 				}
 				files = append(files, "[Attached: "+name+"]")
-			case "compaction":
-				if i.Role == "user" {
-					c := compaction{marker: hub.Compaction{ID: part.ID, Auto: part.Auto}}
-					if part.Auto && part.Overflow && last >= 0 {
-						c.replay = &replay{parts: previous, index: last}
-					}
-					compactions[i.ID] = c
-				}
 			}
-		}
-		said := strings.Join(text, "\n\n")
-		switch i.Role {
-		case "user":
-			candidate := pendingReplay
-			pendingReplay = nil
-			if _, compacting := compactions[i.ID]; compacting {
-				continue
-			}
-			previous = m.Parts
-			if candidate != nil && isReplay(candidate.parts, m.Parts) {
-				last = candidate.index
-				parents[i.ID] = last
-				if said == "" {
-					said = strings.Join(files, "\n")
-				}
-				out[last].Aliases = append(out[last].Aliases, hub.PromptAlias{At: time.UnixMilli(i.Time.Created), Prompt: said})
-				continue
-			}
-			if said == "" && len(files) > 0 {
+			if said == "" {
 				said = strings.Join(files, "\n")
 			}
 			if said == "" {
-				if synthetic && last >= 0 {
-					parents[i.ID] = last
-				} else {
-					last = -1
-				}
+				last = -1
 				continue
 			}
 			last = len(out)
-			parents[i.ID] = last
-			out = append(out, hub.Exchange{At: time.UnixMilli(i.Time.Created), Prompt: clipped(said, historyPrompt, false)})
+			out = append(out, hub.Exchange{At: time.UnixMilli(m.Time.Created), Prompt: clipped(said, historyPrompt, false)})
 		case "assistant":
-			if i.Time.Completed <= 0 {
+			if last < 0 || m.Time.Completed <= 0 {
 				continue
 			}
-			if string(i.Summary) == "true" {
-				if c, ok := compactions[i.ParentID]; ok && (len(i.Error) == 0 || string(i.Error) == "null") {
-					c.marker.At = time.UnixMilli(i.Time.Completed)
-					out = append(out, hub.Exchange{At: c.marker.At, Compacted: &c.marker})
-					pendingReplay = c.replay
-					delete(compactions, i.ParentID)
+			var text []string
+			for _, content := range m.Content {
+				if content.Type == "text" {
+					if t := strings.TrimSpace(content.Text); t != "" {
+						text = append(text, t)
+					}
 				}
-				continue
 			}
-			if at, ok := parents[i.ParentID]; ok && said != "" {
-				out[at].Reply = clipped(said, historyReply, true)
+			if said := strings.Join(text, "\n\n"); said != "" {
+				out[last].Reply = clipped(said, historyReply, true)
+			}
+		case "compaction":
+			if m.Status == "completed" {
+				c := &hub.Compaction{ID: m.ID, At: time.UnixMilli(m.Time.Created), Auto: m.Reason == "auto"}
+				out = append(out, hub.Exchange{At: c.At, Compacted: c})
 			}
 		}
 	}
 	slices.SortStableFunc(out, func(a, b hub.Exchange) int { return a.At.Compare(b.At) })
-	return out[max(0, len(out)-max(0, limit)):], nil
-}
-
-// isReplay recognizes the copied user parts immediately following an automatic
-// overflow compaction, including media replaced with attachment descriptions.
-func isReplay(original, copied []historyPart) bool {
-	if len(original) == 0 || len(original) != len(copied) {
-		return false
-	}
-	for i, a := range original {
-		b := copied[i]
-		expected := a.canonical
-		if a.Type == "file" && b.Type == "text" {
-			name := a.Filename
-			if name == "" {
-				name = "file"
-			}
-			expected = map[string]any{"type": "text", "text": "[Attached " + a.Mime + ": " + name + "]"}
-		}
-		if !reflect.DeepEqual(expected, b.canonical) {
-			return false
-		}
-	}
-	return true
+	return out[max(0, len(out)-max(0, min(limit, hub.BackfillLimit))):], nil
 }
 
 func clipped(text string, n int, tail bool) string {

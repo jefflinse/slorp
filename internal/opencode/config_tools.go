@@ -3,126 +3,11 @@ package opencode
 import (
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 )
-
-// v1.19.6 appends every filesystem export, then plugin tools. SessionTools.resolve
-// assigns those entries by ID, so the last matching export (not file) wins.
-const nativeToolPlugin = `
-import path from "node:path";
-import { pathToFileURL } from "node:url";
-export default async () => {
-  try {
-    const { globSync } = await import("glob");
-    const tool = Object.create(null);
-    for (const [source, target] of SCOPES) {
-      for (const file of globSync("{tool,tools}/*.{js,ts}", {
-        cwd: source, absolute: true, dot: true, follow: true, nodir: true,
-      })) {
-        const namespace = path.basename(file, path.extname(file));
-        const mod = await import(pathToFileURL(path.join(target, path.relative(source, file))).href);
-        for (const [name, def] of Object.entries(mod)) {
-          if (typeof def !== "object" || def === null ||
-              !("args" in def) || !("description" in def) || !("execute" in def)) continue;
-          tool[name === "default" ? namespace : namespace + "_" + name] = def;
-        }
-      }
-    }
-    return { tool };
-  } catch (error) {
-    // Native logs and ignores plugin-init failures. Fail tool discovery instead.
-    return { get tool() { throw error; } };
-  }
-};
-`
-
-func (r *runtime) runtimeTools(config map[string]any, dirs []string) error {
-	var scopes [][2]string
-	var workspaces []string
-	dependencies := map[string]string{"glob": "13.0.5"} // Same scanner as native v1.19.6.
-	for _, dir := range dirs {
-		if !filepath.IsAbs(dir) {
-			dir = filepath.Join(r.dir, dir)
-		}
-		dir, err := filepath.Abs(dir)
-		if err != nil {
-			return err
-		}
-		found, err := hasCustomTools(dir)
-		if err != nil {
-			return err
-		}
-		if !found {
-			continue
-		}
-		source, err := filepath.EvalSymlinks(dir)
-		if err != nil {
-			return err
-		}
-		index := len(scopes)
-		tree := filepath.Join(r.private, "tool-sources", fmt.Sprint(index), "root")
-		target := filepath.Join(tree, strings.TrimPrefix(source, string(filepath.Separator)))
-		if err := privateToolScope(source, target, index); err != nil {
-			return fmt.Errorf("preparing custom tools from %s: %w", dir, err)
-		}
-		scopes = append(scopes, [2]string{source, target})
-		workspace, err := filepath.Rel(r.private, target)
-		if err != nil {
-			return err
-		}
-		workspaces = append(workspaces, workspace)
-		dependencies[fmt.Sprintf("slorp-private-tools-%d", index)] = "*"
-	}
-	if len(scopes) == 0 {
-		return nil
-	}
-	manifest, err := json.Marshal(map[string]any{"private": true, "workspaces": workspaces, "dependencies": dependencies})
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(r.private, "package.json"), manifest, 0o600); err != nil {
-		return err
-	}
-	data, err := json.Marshal(scopes)
-	if err != nil {
-		return err
-	}
-	file := filepath.Join(r.private, "native-tools.mjs")
-	if err := os.WriteFile(file, []byte(strings.Replace(nativeToolPlugin, "SCOPES", string(data), 1)), 0o600); err != nil {
-		return err
-	}
-	plugins, _ := config["plugin"].([]any)
-	config["plugin"] = append([]any{(&url.URL{Scheme: "file", Path: file}).String()}, plugins...)
-	return nil
-}
-
-func hasCustomTools(dir string) (bool, error) {
-	for _, name := range []string{"tool", "tools"} {
-		entries, err := os.ReadDir(filepath.Join(dir, name))
-		if os.IsNotExist(err) {
-			continue
-		}
-		if err != nil {
-			return false, err
-		}
-		for _, entry := range entries {
-			if !entry.IsDir() && slices.Contains([]string{".js", ".ts"}, filepath.Ext(entry.Name())) {
-				info, err := os.Stat(filepath.Join(dir, name, entry.Name()))
-				if err != nil {
-					return false, err
-				}
-				if info.Mode().IsRegular() {
-					return true, nil
-				}
-			}
-		}
-	}
-	return false, nil
-}
 
 type toolScope struct {
 	source, target string
@@ -131,7 +16,7 @@ type toolScope struct {
 	entries        int
 }
 
-func privateToolScope(source, target string, index int) error {
+func privateToolScope(source, target string) error {
 	if !filepath.IsAbs(source) || !filepath.IsAbs(target) || !strings.HasSuffix(target, source) || withinToolScope(source, target) {
 		return fmt.Errorf("invalid private custom tool mirror: %s", target)
 	}
@@ -143,8 +28,7 @@ func privateToolScope(source, target string, index int) error {
 	if err != nil {
 		return err
 	}
-	manifest["name"] = fmt.Sprintf("slorp-private-tools-%d", index)
-	manifest["version"], manifest["private"] = "0.0.0", true
+	manifest["private"] = true
 	data, err := marshalConfigOrder(manifest, original)
 	if err != nil {
 		return err

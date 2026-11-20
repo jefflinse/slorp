@@ -91,3 +91,22 @@ export class PresenceTracker {
     this.terminals.clear()
   }
 }
+import type { Rpc } from '@opencode/plugin/rpc'
+
+export const PresenceRPC = {
+  id: 'slorp',
+  methods: {
+    presence: {
+      input: { type: 'object', properties: { command: { type: 'string', maxLength: 4096 } }, required: ['command'], additionalProperties: false },
+      output: { type: 'null' },
+    },
+    result: {
+      input: { type: 'object', properties: { id: { type: 'string' }, terminalId: { type: 'string' }, value: {}, error: { type: 'string' } }, required: ['id', 'terminalId'], additionalProperties: false },
+      output: { type: 'null' },
+    },
+  },
+  events: {
+    request: { schema: { type: 'object', additionalProperties: true } },
+    cancel: { schema: { type: 'object', additionalProperties: true } },
+  },
+} as const satisfies Rpc.PortableDefinition

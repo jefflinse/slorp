@@ -1,7 +1,4 @@
-// Package opencode keeps the roster of OpenCode sessions. OpenCode has no
-// command that lists its open sessions, so a session is known only through
-// the Slorp plugin running inside it, and is open for as long as that plugin
-// keeps reporting.
+// Package opencode manages OpenCode V2 sessions and their bridge-reported presence.
 package opencode
 
 import (

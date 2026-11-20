@@ -3,6 +3,7 @@ package opencode
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -10,13 +11,13 @@ func configAncestors(dir string) []string {
 	var dirs []string
 	for current := dir; ; current = filepath.Dir(current) {
 		dirs = append(dirs, current)
-		if _, err := os.Stat(filepath.Join(current, ".git")); err == nil || filepath.Dir(current) == current {
+		if filepath.Dir(current) == current {
 			return dirs
 		}
 	}
 }
 
-// runtimeDiscovery preserves the inputs that Config.get does not serialize.
+// runtimeDiscovery preserves filesystem inputs from V2's ordered config sources.
 func (a *Adapter) runtimeDiscovery(r *runtime, config map[string]any) error {
 	dir, err := filepath.Abs(r.dir)
 	if err != nil {
@@ -29,24 +30,44 @@ func (a *Adapter) runtimeDiscovery(r *runtime, config map[string]any) error {
 	if home == "" {
 		home = a.Home
 	}
-	ancestors := configAncestors(dir)
-	global := a.configDirs()[0]
-	if a.ExtraConfigDir != "" {
-		global = a.ExtraConfigDir
+	if real, err := filepath.EvalSymlinks(home); err == nil {
+		home = real
 	}
-	if err := r.runtimeInstructions(config, home, global, ancestors); err != nil {
+	ancestors := configAncestors(dir)
+	instructionRoots := ancestors
+	for i, root := range ancestors {
+		if samePath(root, home) {
+			instructionRoots = ancestors[:i+1]
+			break
+		}
+	}
+	if !withinToolScope(home, dir) {
+		for i, root := range ancestors {
+			if _, err := os.Stat(filepath.Join(root, ".git")); err == nil {
+				instructionRoots = ancestors[:i+1]
+				break
+			}
+		}
+	}
+	global := a.serverConfigDir()
+	if err := r.runtimeInstructions(config, home, global, instructionRoots); err != nil {
 		return err
 	}
-	dirs := []string{a.configDirs()[0]}
+	dirs := []string{a.serverConfigDir()}
 	if !runtimeFlag(r, "OPENCODE_DISABLE_PROJECT_CONFIG") {
 		for _, parent := range ancestors {
 			dirs = append(dirs, filepath.Join(parent, ".opencode"))
 		}
 	}
-	dirs = append(dirs, filepath.Join(home, ".opencode"))
-	if a.ExtraConfigDir != "" {
-		dirs = append(dirs, a.ExtraConfigDir)
+	if sources, ok := config[configDirectoriesKey].([]any); ok {
+		dirs = nil
+		for _, source := range sources {
+			if path, ok := source.(string); ok {
+				dirs = append(dirs, path)
+			}
+		}
 	}
+	delete(config, configDirectoriesKey)
 	seen := map[string]bool{}
 	unique := make([]string, 0, len(dirs))
 	for _, source := range dirs {
@@ -58,12 +79,15 @@ func (a *Adapter) runtimeDiscovery(r *runtime, config map[string]any) error {
 	if err := r.runtimeSkills(config, home, dir, ancestors, unique); err != nil {
 		return err
 	}
-	return r.runtimeTools(config, unique)
+	if err := r.preserveDefinitions(config, unique); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (r *runtime) runtimeInstructions(config map[string]any, home, global string, ancestors []string) error {
 	project := !runtimeFlag(r, "OPENCODE_DISABLE_PROJECT_CONFIG")
-	claude := !runtimeEffectFlag(r, "OPENCODE_DISABLE_CLAUDE_CODE") && !runtimeEffectFlag(r, "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT")
+	claude := !runtimeFlag(r, "OPENCODE_DISABLE_CLAUDE_CODE") && !runtimeFlag(r, "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT")
 	instructions := []any{}
 	globalFiles := []string{filepath.Join(global, "AGENTS.md")}
 	if claude {
@@ -80,18 +104,13 @@ func (r *runtime) runtimeInstructions(config map[string]any, home, global string
 		if claude {
 			names = append(names, "CLAUDE.md")
 		}
-		names = append(names, "CONTEXT.md")
-		for _, name := range names {
-			found := false
-			for _, parent := range ancestors {
+		for _, parent := range ancestors {
+			for _, name := range names {
 				file := filepath.Join(parent, name)
 				if _, err := os.Stat(file); err == nil {
 					instructions = append(instructions, file)
-					found = true
+					break
 				}
-			}
-			if found {
-				break
 			}
 		}
 	}
@@ -107,16 +126,21 @@ func (r *runtime) runtimeInstructions(config map[string]any, home, global string
 				instructions = append(instructions, filepath.Join(home, pattern[2:]))
 			} else {
 				roots := ancestors
+				for i, root := range ancestors {
+					if _, err := os.Stat(filepath.Join(root, ".git")); err == nil {
+						roots = ancestors[:i+1]
+						break
+					}
+					if _, err := os.Stat(filepath.Join(root, ".hg")); err == nil {
+						roots = ancestors[:i+1]
+						break
+					}
+				}
 				if !project {
 					roots = []string{global}
 				}
 				for _, root := range roots {
-					// Native's absolute-pattern branch only globs the basename.
-					relative, err := filepath.Rel(r.private, filepath.Join(root, pattern))
-					if err != nil {
-						return err
-					}
-					instructions = append(instructions, relative)
+					instructions = append(instructions, filepath.Join(root, pattern))
 				}
 			}
 		}
@@ -127,18 +151,23 @@ func (r *runtime) runtimeInstructions(config map[string]any, home, global string
 
 func (r *runtime) runtimeSkills(config map[string]any, home, dir string, ancestors, dirs []string) error {
 	var roots []string
-	if !runtimeEffectFlag(r, "OPENCODE_DISABLE_EXTERNAL_SKILLS") {
+	{
 		external := []string{".agents"}
-		if !runtimeEffectFlag(r, "OPENCODE_DISABLE_CLAUDE_CODE") && !runtimeEffectFlag(r, "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS") {
+		if !runtimeFlag(r, "OPENCODE_DISABLE_CLAUDE_CODE") && !runtimeFlag(r, "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS") {
 			external = append([]string{".claude"}, external...)
 		}
-		for _, base := range append([]string{home}, ancestors...) {
-			for _, name := range external {
-				found, err := externalSkillDirs(filepath.Join(base, name, "skills"))
-				if err != nil {
-					return err
+		bases := []string{home}
+		if !runtimeFlag(r, "OPENCODE_DISABLE_PROJECT_CONFIG") {
+			projectRoots := slices.Clone(ancestors)
+			slices.Reverse(projectRoots)
+			bases = append(bases, projectRoots...)
+		}
+		for _, name := range external {
+			for _, base := range bases {
+				root := filepath.Join(base, name, "skills")
+				if !slices.Contains(roots, root) {
+					roots = append(roots, root)
 				}
-				roots = append(roots, found...)
 			}
 		}
 	}
@@ -147,13 +176,14 @@ func (r *runtime) runtimeSkills(config map[string]any, home, dir string, ancesto
 			roots = append(roots, filepath.Join(source, name))
 		}
 	}
-	skills, _ := config["skills"].(map[string]any)
-	if skills == nil {
-		skills = map[string]any{}
-	}
-	if list, ok := skills["paths"].([]any); ok {
+	var urls []any
+	if list, ok := config["skills"].([]any); ok {
 		for _, item := range list {
 			if p, ok := item.(string); ok {
+				if strings.HasPrefix(p, "https://") || strings.HasPrefix(p, "http://") {
+					urls = append(urls, p)
+					continue
+				}
 				if strings.HasPrefix(p, "~/") {
 					p = filepath.Join(home, p[2:])
 				} else if !filepath.IsAbs(p) {
@@ -169,7 +199,6 @@ func (r *runtime) runtimeSkills(config map[string]any, home, dir string, ancesto
 			paths = append(paths, root)
 		}
 	}
-	skills["paths"] = paths
-	config["skills"] = skills
+	config["skills"] = append(paths, urls...)
 	return nil
 }

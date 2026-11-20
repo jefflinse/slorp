@@ -1,9 +1,9 @@
-"""Native, authenticated, cross-process OpenCode 1.19.6 attach smoke; no prompts.
+"""Native, authenticated, cross-process OpenCode 2.3.2 --server smoke; no prompts.
 
 Run with python3 -B integrations/opencode/attach-smoke.py after the bundled
 cross-process presence change is ready. TMPDIR selects the temporary parent;
 SLORP_SMOKE_KEEP=1 retains isolated config, native data, route traces and logs.
-The read-only TUI observer records routes, never navigation or presence. Only
+The TUI observer records routes without fabricating presence. Only
 the single-terminal phase sends native navigation commands. Managed-runtime
 presence is covered by the existing Go/native and plugin suites, not a fake
 prompt or fabricated bridge request here.
@@ -21,27 +21,34 @@ import urllib.parse
 import urllib.request
 import uuid
 
-from smoke import port, request, stop, terminal, wait_for, workspace
+from smoke import environment, port, request, stop, terminal, wait_for, workspace, version as require_version
 
 
-OBSERVER = """import { appendFileSync } from 'node:fs'
-export default {
+OBSERVER = """import { appendFileSync, existsSync, readFileSync, unlinkSync } from 'node:fs'
+import { Plugin } from '@opencode/plugin/tui'
+export default Plugin.define({
   id: 'attach-smoke-observer',
-  tui: async api => {
+  setup: api => {
     const file = process.env.ATTACH_SMOKE_ROUTE_FILE
     if (!file) throw new Error('Missing isolated route trace path')
-    const record = () => appendFileSync(file, JSON.stringify({
-      at: Date.now(), pid: process.pid, route: api.route.current,
-      directory: api.state.path.directory,
-      passwordInEnv: !!process.env.OPENCODE_SERVER_PASSWORD,
-      usernameInEnv: !!process.env.OPENCODE_SERVER_USERNAME,
-    }) + '\\n')
+    const record = () => {
+      const command = file + '.navigate'
+      if (existsSync(command)) {
+        const route = JSON.parse(readFileSync(command, 'utf8'))
+        unlinkSync(command)
+        api.ui.router.navigate(route)
+      }
+      appendFileSync(file, JSON.stringify({
+        at: Date.now(), pid: process.pid, route: api.ui.router.current(),
+        directory: (api.location ?? api.data.location.default())?.directory,
+      }) + '\\n')
+    }
     record()
     const timer = setInterval(record, 250)
     timer.unref?.()
-    api.lifecycle.onDispose(() => clearInterval(timer))
+    return () => clearInterval(timer)
   },
-}
+})
 """
 
 
@@ -80,21 +87,12 @@ def main():
         home, config, project = root/'home', root/'config'/'opencode', root/'project'
         for directory in (home, config, project, root/'tmp'):
             directory.mkdir(parents=True)
-        env = {key: os.environ[key] for key in ('PATH', 'LANG', 'LC_ALL') if key in os.environ}
-        env.update(HOME=str(home), OPENCODE_TEST_HOME=str(home), TMPDIR=str(root/'tmp'),
-                   XDG_CONFIG_HOME=str(root/'config'), XDG_DATA_HOME=str(root/'data'),
-                   XDG_STATE_HOME=str(root/'state'), XDG_CACHE_HOME=str(root/'cache'),
-                   npm_config_cache=str(root/'npm-cache'), TERM='xterm-256color',
-                   OPENCODE_DISABLE_PROJECT_CONFIG='true', OPENCODE_DISABLE_EXTERNAL_SKILLS='true',
-                   OPENCODE_DISABLE_DEFAULT_PLUGINS='true', OPENCODE_DISABLE_MODELS_FETCH='true',
-                   OPENCODE_DISABLE_UPDATE_CHECK='true', GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull)
-        version = subprocess.check_output([executable, '--version'], env=env, cwd=root,
-                                          text=True, timeout=30).strip()
-        assert version == '1.19.6', f'This smoke targets OpenCode 1.19.6, installed: {version}'
-        help_text = subprocess.check_output([executable, 'attach', '--help'], env=env, cwd=root,
+        env = environment(root)
+        version = require_version(executable, root, env)
+        help_text = subprocess.check_output([executable, '--help'], env=env, cwd=root,
                                             text=True, stderr=subprocess.STDOUT, timeout=30)
         (root/'attach-help.txt').write_text(help_text)
-        for flag in ('--session', '--password', '--username', '--dir'):
+        for flag in ('--session', '--server'):
             assert flag in help_text, f'Installed attach CLI does not document {flag}'
         # --session is the CLI flag; sessionID is the native API field.
         subprocess.run(['git', 'init', '--quiet', str(project)], env=env, cwd=root, check=True)
@@ -109,18 +107,18 @@ def main():
             'exports': {'./tui': './tui.js'},
         }))
         (observer/'tui.js').write_text(OBSERVER)
-        (config/'opencode.json').write_text(json.dumps({'autoupdate': False, 'share': 'disabled'}))
-        (config/'tui.json').write_text(json.dumps({'plugin': [str(observer)]}))
+        (config/'opencode.json').write_text(json.dumps({'update': 'disable'}))
+        (config/'cli.json').write_text(json.dumps({'plugins': [str(observer)]}))
         slorp_port, agent_port = port(), port()
         while agent_port == slorp_port:
             agent_port = port()
         slorp_url, agent_url = f'http://127.0.0.1:{slorp_port}', f'http://127.0.0.1:{agent_port}'
-        username, password = 'attach-smoke', uuid.uuid4().hex
-        server_env = dict(env, OPENCODE_SERVER_USERNAME=username, OPENCODE_SERVER_PASSWORD=password)
+        username, password = 'opencode', uuid.uuid4().hex
+        server_env = dict(env, OPENCODE_PASSWORD=password)
         slorp_command = [str(binary), '-addr', f'127.0.0.1:{slorp_port}', '-data', str(root/'slorp-data'),
                          '-claude', str(root/'no-claude'), '-opencode', executable, '-llm', '']
         server_command = [executable, 'serve', '--hostname', '127.0.0.1', '--port', str(agent_port),
-                          '--print-logs', '--log-level', 'DEBUG']
+                          '--print-logs', '--log-level', 'debug']
         children, terminals = [], {}
         log_path = root/'processes.log'
         log = log_path.open('w')
@@ -151,7 +149,8 @@ def main():
             with response:
                 raw = response.read()
                 assert response.status == expected, (path, response.status, raw)
-                return json.loads(raw) if raw and expected == 200 else None
+                result = json.loads(raw) if raw and expected == 200 else None
+                return result.get('data', result) if isinstance(result, dict) else result
 
         def state():
             return request(slorp_url, '/api/sessions')
@@ -173,9 +172,9 @@ def main():
             assert ready(ids, tui), ('unexpected Slorp roots/capabilities', listed(), ids, tui)
 
         def snapshot():
-            sessions = native('/session')
-            return {s['id']: {'time': s['time'], 'parentID': s.get('parentID'),
-                              'messages': len(native(f'/session/{s["id"]}/message'))}
+            sessions = native('/api/session')
+            return {s['id']: {'time': {k: v for k, v in s['time'].items() if k != 'viewed'}, 'parentID': s.get('parentID'),
+                              'messages': len(native(f'/api/session/{s["id"]}/message'))}
                     for s in sessions}
 
         def unchanged():
@@ -183,11 +182,10 @@ def main():
             assert current == baseline, ('native timestamps/message counts changed', baseline, current)
 
         def attach(name, session_id):
-            assert 'OPENCODE_SERVER_PASSWORD' not in env and 'OPENCODE_SERVER_USERNAME' not in env
             path = root/f'{name}-{len(children)}.routes.jsonl'
-            child_env = dict(env, ATTACH_SMOKE_ROUTE_FILE=str(path))
-            proc = terminal([executable, 'attach', agent_url, '--dir', str(project), '--session', session_id,
-                             '--username', username, '--password', password, '--log-level', 'DEBUG'], project, child_env)
+            child_env = dict(env, ATTACH_SMOKE_ROUTE_FILE=str(path), OPENCODE_PASSWORD=password)
+            proc = terminal([executable, '--server', agent_url, '--session', session_id,
+                             str(project)], project, child_env)
             children.append(proc)
             terminals[name] = (proc, path)
             return proc
@@ -199,10 +197,9 @@ def main():
             if not trace:
                 return False
             last = trace[-1]
-            assert not last['passwordInEnv'] and not last['usernameInEnv'], last
             assert last['pid'] != agent.pid, 'TUI and server must be separate processes'
-            expected = {'name': 'home'} if session_id is None else {
-                'name': 'session', 'params': {'sessionID': session_id}}
+            expected = {'type': 'home'} if session_id is None else {
+                'type': 'session', 'sessionID': session_id}
             return last['route'] == expected and last['directory'] == str(project) \
                 and time.time() * 1000 - last['at'] < 3000
 
@@ -211,16 +208,18 @@ def main():
                 assert route(name, session_id), (name, 'route changed or observer stopped')
                 trace = records(terminals[name][1])
                 for record in trace[cursors[name]:]:
-                    assert record['route'] == {'name': 'session', 'params': {'sessionID': session_id}}, (
+                    assert record['route'] == {'type': 'session', 'sessionID': session_id}, (
                         name, 'presence navigated another terminal', record)
 
         def warmup():
-            until('authenticated native health', lambda: native('/global/health'))
-            # The first native dependency install can hold a lock for 60 seconds.
-            paths = native('/path', timeout=120)
-            assert paths['directory'] == str(project), paths
+            until('authenticated native health', lambda: native('/api/info'))
             for credential in (None, 'wrong-password'):
-                native('/path', credential=credential, expected=401)
+                native('/api/info', credential=credential, expected=401)
+
+        def navigate(session_id):
+            path = Path(str(terminals['first'][1]) + '.navigate')
+            path.write_text(json.dumps({'type': 'home'} if session_id is None else
+                                       {'type': 'session', 'sessionID': session_id}))
 
         try:
             slorp = service(slorp_command, env)
@@ -234,7 +233,7 @@ def main():
             stage = 'server warmup and saved-only baseline'
             agent = service(server_command, server_env)
             warmup()
-            sessions = [native('/session', {'title': title}) for title in
+            sessions = [native('/api/session', {'title': title, 'location': {'directory': str(project)}}) for title in
                         ('First attached root', 'Second attached root', 'Single-terminal switch', 'Saved unopened')]
             first_id, second_id, switched_id, saved_id = [s['id'] for s in sessions]
             baseline = snapshot()
@@ -243,7 +242,7 @@ def main():
             consistently(6, lambda: assert_ready([]))
             print('PASS: BasicAuth rejects missing/wrong credentials; four native empty saved roots stay absent', flush=True)
 
-            stage = 'first authenticated attach without password environment'
+            stage = 'first authenticated remote terminal'
             attach('first', first_id)
             until('first CLI route', lambda: route('first', first_id), seconds=120)
             until('first selected root presence', lambda: ready([first_id]))
@@ -251,16 +250,15 @@ def main():
             print('PASS: CLI-authenticated cross-process attach discovers only its selected idle root, canReply/pluginTui true', flush=True)
 
             stage = 'single-terminal switch and home navigation'
-            assert native('/tui/select-session', {'sessionID': switched_id}) is True
+            navigate(switched_id)
             until('native selectSession route', lambda: route('first', switched_id))
             until('switched idle root presence', lambda: ready([first_id, switched_id], {switched_id}))
-            # v1.19.6's HTTP handler maps session_new to session.new (home).
-            assert native('/tui/execute-command', {'command': 'session_new'}) is True
+            navigate(None)
             until('native home route', lambda: route('first', None))
             until('home companion presence', lambda: ready([first_id, switched_id]))
             consistently(12, lambda: assert_ready([first_id, switched_id]))
             assert route('first', None), 'Periodic presence navigated away from home'
-            assert native('/tui/select-session', {'sessionID': first_id}) is True
+            navigate(first_id)
             until('return to first route', lambda: route('first', first_id))
             unchanged()
             print('PASS: native switch/home/return works with one TUI; observed roots remain live and native history is unchanged', flush=True)
@@ -325,11 +323,11 @@ def main():
             until('all roots retire after source silence', lambda: not listed(), seconds=45)
             consistently(3, lambda: assert_ready([]))
             print(f'PASS: source stop retires all observed roots; OpenCode {version}, plugin {expected_version}; no prompts/model calls', flush=True)
-            print('SKIP: managed launch via Slorp requires a prompt; existing Go/native and plugin suites cover scoped managed presence', flush=True)
         except BaseException:
             print(f'\nFAIL during: {stage}', flush=True)
             log.flush()
-            print('=== Service logs ===\n' + log_path.read_text(errors='replace'), flush=True)
+            print('=== Service logs (last 40 lines) ===\n' +
+                  '\n'.join(log_path.read_text(errors='replace').splitlines()[-40:]), flush=True)
             for proc in children:
                 print(f'Owned process {proc.pid}: exit={proc.poll()}', flush=True)
             for path in root.glob('*.routes.jsonl'):
@@ -344,7 +342,8 @@ def main():
                 except (OSError, ValueError, AssertionError) as error:
                     print('Native state unavailable:', error, flush=True)
             for path in (root/'data').glob('opencode/log/*.log'):
-                print(f'=== {path.name} ===\n' + path.read_text(errors='replace'), flush=True)
+                print(f'=== {path.name} (last 20 lines) ===\n' +
+                      '\n'.join(path.read_text(errors='replace').splitlines()[-20:]), flush=True)
             raise
         finally:
             try:

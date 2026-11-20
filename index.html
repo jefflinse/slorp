@@ -2362,7 +2362,7 @@ function modNotice() {
   let notice = '';
   if (live && p && !p.error && p.source !== 'file' && (!p.installed || p.needsSetup || p.updateAvailable)) {
     const label = p.updateAvailable ? 'Update' : p.installed ? 'Finish setup' : 'Install';
-    const why = p.updateAvailable ? 'This Slorp includes an updated OpenCode plugin.' : p.installed ? 'The OpenCode plugin needs its terminal companion to discover reopened sessions.' : 'Install the Slorp plugin to see your OpenCode sessions here.';
+    const why = p.updateAvailable ? 'This Slorp includes an updated OpenCode plugin.' : p.installed ? 'Complete the OpenCode V2 plugin setup to discover and control sessions.' : 'Install the Slorp plugin to see your OpenCode sessions here.';
     notice = `<div><span>${why}</span><button class="btn go" data-act="opencodePlugin" data-op="${p.updateAvailable ? 'update' : 'install'}" ${opencodeBusy ? 'disabled' : ''}>${opencodeBusy ? 'Working…' : label}</button></div>`;
   }
   return claudeNotice() + notice;
@@ -2377,7 +2377,7 @@ function changeOpenCodePlugin(op) {
     ...(op === 'uninstall' ? {} : { headers: { 'Content-Type': 'application/json' }, body: '{}' }),
   }).then(async res => {
     if (!res.ok) throw new Error((await res.text()).trim() || res.status);
-    toast(op === 'uninstall' ? 'Uninstalled. Restart OpenCode to unload the plugin.' : 'Ready. Quit and restart OpenCode to load both parts of the plugin.');
+    toast(op === 'uninstall' ? 'Uninstalled. OpenCode reloads its configuration automatically.' : 'Ready. OpenCode loads the plugin automatically; use /reload if needed.');
   }).catch(err => toast(err instanceof TypeError ? 'Could not reach the Slorp service' : `That did not work: ${err.message}`))
     .finally(() => { opencodeBusy = ''; refresh(true); });
 }
@@ -3572,14 +3572,14 @@ function agentsBody() {
         ${p && p.installed ? `<button class="btn" data-act="uninstallMod" ${busy ? 'disabled' : ''}>${removing ? 'Uninstalling…' : 'Uninstall'}</button>` : ''}</span></div>`;
   const oc = plugins.opencode, connected = open('opencode').filter(s => s.canReply);
   const current = connected.filter(s => s.pluginTui && (oc?.revision ? s.pluginRevision === oc.revision : s.pluginVersion === oc?.version));
-  const ocWord = !oc ? 'checking' : oc.error ? 'setup issue' : !oc.installed ? 'not installed' : oc.needsSetup ? 'setup incomplete' : oc.updateAvailable ? 'update available' : current.length ? 'reporting' : connected.length ? 'restart needed' : 'installed';
+  const ocWord = !oc ? 'checking' : oc.error ? 'setup issue' : !oc.installed ? 'not installed' : oc.needsSetup ? 'setup incomplete' : !oc.enabled ? 'disabled' : oc.updateAvailable ? 'update available' : current.length ? 'reporting' : connected.length ? 'reload needed' : 'installed';
   const ocButton = (op, label) => `<button class="btn ${op === 'uninstall' ? '' : 'go'}" data-act="opencodePlugin" data-op="${op}" ${opencodeBusy ? 'disabled' : ''}>${opencodeBusy === op ? 'Working…' : label}</button>`;
   const opencode = `<div class="card" data-plugin="opencode"><span class="glyph" style="${kindColor('opencode')};color:var(--k)">O</span>
       <div class="body"><div class="nm">OpenCode <span class="tag ${oc?.error || oc?.needsSetup || oc?.updateAvailable ? 'awaiting' : 'whenever'}">${ocWord}</span></div>
       <div class="why">The Slorp plugin reports sessions, usage, replies and permission prompts. Its terminal companion discovers an opened conversation even before you send a message.</div>
       <div class="meta">${oc?.version ? `<span>version ${esc(oc.version)}</span>` : ''}<span>${running('opencode')}</span>${oc?.source ? `<span>${oc.source === 'managed' ? 'bundled with Slorp' : oc.source === 'file' ? 'single-file installation' : 'local package'}</span>` : ''}</div>
       ${oc?.path ? `<div class="seen mono">${esc(oc.path)}</div>` : ''}
-      <div class="seen">${oc?.error ? esc(oc.error) : oc?.source === 'file' ? 'Remove the old single-file plugin from OpenCode before installing this package.' : 'Quit and restart OpenCode after installation or an update. Installation works without a Slorp checkout.'}</div></div>
+      <div class="seen">${oc?.error ? esc(oc.error) : oc?.source === 'file' ? 'Remove the old single-file plugin from OpenCode before installing this package.' : 'Requires OpenCode 2.x. Configuration reloads automatically; use /reload if needed. No Slorp checkout required.'}</div></div>
       <span class="does">${oc && !oc.error ? `${!oc.installed || oc.needsSetup && oc.source !== 'file' ? ocButton('install', oc.installed ? 'Finish setup' : 'Install') : ''}${oc.source === 'managed' && oc.updateAvailable ? ocButton('update', 'Update') : ''}${oc.source === 'managed' && oc.installed ? ocButton('uninstall', 'Uninstall') : ''}` : ''}</span></div>`;
   return claude + opencode;
 }
