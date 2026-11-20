@@ -107,7 +107,7 @@ h1, h2, h3, p { margin: 0; }
 
 /* Top bar */
 .top { height: var(--top); display: flex; align-items: center; gap: 20px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
-.brand { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 18px; letter-spacing: -0.03em; }
+.brand { display: flex; color: inherit; text-decoration: none; align-items: center; gap: 8px; font-weight: 800; font-size: 18px; letter-spacing: -0.03em; }
 .blob { width: 22px; height: 20px; background: var(--fill); border-radius: 60% 40% 55% 45% / 55% 50% 50% 45%; position: relative; display: inline-block; }
 .blob::before, .blob::after { content: ""; position: absolute; top: 7px; width: 3px; height: 4px; border-radius: 50%; background: var(--fill-ink); }
 .blob::before { left: 6px; } .blob::after { right: 6px; }
@@ -264,6 +264,9 @@ a.pr:hover, button.pr:hover { border-color: var(--k-github); color: var(--ink); 
 .jr .pm .link:hover, .jr .jmeta .link:hover { color: var(--accent); }
 .jr .jmeta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 10px; color: var(--ink3); font-size: 12.5px; }
 /* Briefing */
+.brief { padding: 18px 18px 16px; border-bottom: 1px solid var(--line); }
+.brief .when { display: flex; justify-content: space-between; margin-bottom: 8px; }
+.brief p { font-size: 15px; line-height: 1.5; }
 .listbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 8px; padding: 10px 18px; }
 .listbar .segs { display: flex; gap: 6px; }
 .listbar .btn { padding: 3px 10px; font-size: 12px; }
@@ -367,6 +370,7 @@ h1 .pen:hover { color: var(--accent); background: var(--sel); }
 .tag.blocking { background: var(--fill); color: var(--fill-ink); }
 .tag.awaiting { color: var(--warn); border: 1px solid currentColor; }
 .tag.whenever { color: var(--ink3); border: 1px solid var(--line); }
+.foot { padding: 16px 18px 24px; color: var(--ink3); font-size: 12px; border-top: 1px solid var(--line); margin-top: 14px; }
 .link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 .handled { margin: 8px 0 12px; }
 .handled div { display: flex; gap: 8px; justify-content: space-between; padding: 4px 0; }
@@ -716,7 +720,7 @@ button.ecard.new:hover { border-color: var(--ink3); color: var(--ink); }
 <body>
 <canvas id="rain" aria-hidden="true"></canvas>
 <header class="top">
-  <div class="brand"><span class="blob"></span>slorp</div>
+  <a class="brand" href="#home" data-act="view" data-view="home" title="Home"><span class="blob"></span>slorp</a>
   <nav class="nav" id="nav"></nav>
   <div class="tools" id="tools"></div>
 </header>
@@ -735,6 +739,8 @@ button.ecard.new:hover { border-color: var(--ink3); color: var(--ink); }
    what the source actually said. */
 
 const KINDS = { claude: 'Claude Code', opencode: 'OpenCode', slack: 'Slack', worker: 'Worker', local: 'Local LLM', kb: 'Knowledge base', github: 'GitHub' };
+/* Blocking: you are holding up another person. Awaiting: something of your own is stopped until you act. */
+const URGENCY = { blocking: 'Blocking other people', awaiting: 'Awaiting you', whenever: 'Whenever' };
 const STATUS = { waiting: 'awaiting you', error: 'failed', running: 'running', done: 'finished', idle: 'idle' };
 
 const EFFORTS = [
@@ -975,17 +981,19 @@ const KB_SECTIONS = {
 /* ───────────────────────── State ───────────────────────── */
 
 const KEY = 'slorp.proto.v1';
-const VIEWS = ['home', 'efforts', 'sessions', 'pulls', 'journal', 'knowledge', 'settings'];
+const VIEWS = ['home', 'attention', 'efforts', 'sessions', 'pulls', 'journal', 'knowledge', 'settings'];
+/* Whether a view is there to go to: Attention, the view Home took the place of, is only while the user keeps it. */
+const viewOn = v => VIEWS.includes(v) && (v !== 'attention' || state.legacyAttention);
 /* The views the top bar names, in its order; Settings is reached by its own button. Pull requests are named only while GitHub is turned on to list them. */
-const nav = () => VIEWS.filter(v => v !== 'settings' && !(v === 'pulls' && pullsOff()));
+const nav = () => VIEWS.filter(v => viewOn(v) && v !== 'settings' && !(v === 'pulls' && pullsOff()));
 const VIEW_NAMES = { pulls: 'PRs' };
-const fresh = () => ({ view: 'home', sel: null, effortSel: null, effortOrder: null, hideEmpty: true, kbSel: 'watch', setSel: 'general', pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', effortTab: 'sessions', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto', look: 'slorp',
+const fresh = () => ({ view: 'home', sel: null, effortSel: null, effortOrder: null, hideEmpty: true, kbSel: 'watch', setSel: 'general', groupBy: 'effort', srcFilter: 'all', legacyAttention: false, pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', effortTab: 'sessions', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto', look: 'slorp',
   handled: {}, moved: {}, sessMoved: {}, extra: [], arrived: {}, collapsed: {}, left: {}, showHandled: false, variant: {}, rawOpen: {},
   actSel: null, pullSel: null, journalSel: null, pullTab: 'talk', expanded: {}, kb: structuredClone(KB_SEED), seq: 100 });
 let state = fresh();
 try { Object.assign(state, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch (e) { /* storage unavailable: run in memory */ }
 /* The view a name leads to, whether it is one or what one used to be called. */
-const viewNamed = v => VIEWS.includes(v) ? v : { activity: 'sessions', attention: 'home' }[v];
+const viewNamed = v => viewOn(v) ? v : { activity: 'sessions', attention: 'home' }[v];
 state.view = viewNamed(state.view) || 'home';
 /* Whether a section of a list is folded. The closed sessions are until the user unfolds them. */
 const isShut = key => state.collapsed[key] ?? key === 'act:closed';
@@ -1036,6 +1044,18 @@ const kindColor = kind => `--k:var(--k-${kind}, var(--ink3))`;
 const kindBadge = (kind, label) => `<span class="kind" style="${kindColor(kind)}"><i></i>${esc(label || KINDS[kind] || kind)}</span>`;
 const spark = '<span class="spark" title="Written by the local model">✦</span>';
 
+function groupItems(items) {
+  const sorted = items.slice().sort(byUrgency);
+  let defs;
+  if (state.groupBy === 'urgency') defs = Object.keys(URGENCY).map(k => ({ key: 'u:' + k, name: URGENCY[k], test: i => i.urgency === k }));
+  else if (state.groupBy === 'source') defs = Object.keys(KINDS).map(k => ({ key: 'k:' + k, name: KINDS[k], test: i => i.kind === k }));
+  else defs = (live ? liveEfforts.concat(LIVE_UNSORTED) : EFFORTS.concat(UNSORTED)).map(e => ({ key: 'e:' + e.id, effort: e, name: e.name, test: i => effortOf(i) === e.id }));
+  return defs.map(d => ({ ...d, items: sorted.filter(d.test) })).filter(g => g.items.length);
+}
+/* The one source the list is narrowed to, which it can be only while grouped by source. */
+const sourceShown = items => state.groupBy === 'source' && items.some(i => i.kind === state.srcFilter) ? state.srcFilter : 'all';
+const shownItems = (items = activeItems()) => { const src = sourceShown(items); return src === 'all' ? items : items.filter(i => i.kind === src); };
+const visibleOrder = () => groupItems(shownItems()).filter(g => !isShut(g.key)).flatMap(g => g.items.map(i => i.id));
 /* What needs the user, the most pressing first: the order Home lists it in. */
 const queue = () => activeItems().sort(byUrgency);
 /* Markdown as one line of plain text, for where only its gist fits. */
@@ -1076,7 +1096,7 @@ function announce(items) {
   const msg = one ? `${KINDS[first.kind] || first.kind}: ${first.title || first.ask}` : `${cap(num(arrived.length))} new things need you`;
   const show = () => { state.sel = first.id; go('home'); save(); render(); };
   freshId = first.id;
-  if (state.view !== 'home') {
+  if (state.view !== 'home' && state.view !== 'attention') {
     const n = $('#news');
     n.innerHTML = `<span>${esc(msg)}</span><button>Show</button>`;
     n.querySelector('button').onclick = () => { n.classList.remove('show'); show(); };
@@ -1093,7 +1113,7 @@ function announce(items) {
 }
 
 function resolve(id, how, note, opts = {}) {
-  const order = homeOrder(), i = order.indexOf(id), it = itemById(id);
+  const order = state.view === 'attention' ? visibleOrder() : homeOrder(), i = order.indexOf(id), it = itemById(id);
   state.handled[id] = { how, note: note || '', at: Date.now(), until: opts.until || 0 };
   if (state.sel === id) state.sel = order[i + 1] || order[i - 1] || null;
   const msg = opts.msg || { answered: `Sent to ${it.src}`, dismissed: 'Dismissed', snoozed: `Snoozed ${note}` }[how];
@@ -1127,14 +1147,104 @@ function openEffort(id) {
 /* Goes to a view the way the top bar does: Efforts opens on its board. */
 const visit = view => view === 'efforts' ? openEffort(null) : go(view);
 
+/* ───────────────────────── Attention ───────────────────────── */
+
+function briefing(items) {
+  let text;
+  if (!items.length) text = 'Nothing needs you. Everything that is running can keep running without you.';
+  else {
+    const efforts = new Set(items.map(effortOf));
+    const blocking = items.filter(i => i.urgency === 'blocking'), awaiting = items.filter(i => i.urgency === 'awaiting');
+    const where = list => listOf([...new Set(list.map(i => effortById(effortOf(i)).name))]);
+    const count = (list, what) => `${cap(num(list.length))} ${list.length === 1 ? 'is' : 'are'} ${what}, in ${where(list)}.`;
+    const one = items.length === 1;
+    text = [`${cap(num(items.length))} thing${one ? '' : 's'} need${one ? 's' : ''} you across ${num(efforts.size)} effort${efforts.size === 1 ? '' : 's'}.`,
+      blocking.length ? count(blocking, 'blocking someone else') : '',
+      awaiting.length ? count(awaiting, 'awaiting you') : '',
+      !blocking.length && !awaiting.length ? 'Nobody is held up and nothing is stopped on you, so all of it will keep.' : items.length > blocking.length + awaiting.length ? 'The rest will keep.' : '',
+    ].filter(Boolean).join(' ');
+  }
+  const day = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+  return `<div class="brief"><div class="when"><span class="label">${day}</span><span class="label">${live ? '' : spark}briefing</span></div><p>${esc(text)}</p>
+    ${live ? `<button class="link ${modelless() ? 'off' : ''}" data-act="wrapOpen" style="margin-top:8px;font-size:12.5px" title="${modelless() ? `${NO_MODEL} to write a wrap-up.` : "What moved today, by effort, on today's page of the journal (w)"}">Wrap up the day ›</button>` : ''}</div>`;
+}
+
+function handledFooter() {
+  const done = allItems().filter(i => !isActive(i));
+  const legend = modelless()
+    ? `<p>${NO_MODEL}, so only permission prompts, questions a session puts to you, failures and full contexts are raised here. A session that has simply stopped is under Sessions.</p>` : '';
+  if (!done.length) return legend ? `<div class="foot">${legend}</div>` : '';
+  const list = state.showHandled ? `<div class="handled">${done.map(i => `<div><span class="gen">${esc(i.title)}</span><span style="white-space:nowrap">${esc(state.handled[i.id].how)} · <button class="link" data-act="restore" data-id="${i.id}">restore</button></span></div>`).join('')}</div>` : '';
+  return `<div class="foot"><p style="margin-bottom:8px">${done.length} handled or snoozed · <button class="link" data-act="toggleHandled">${state.showHandled ? 'hide' : 'show'}</button></p>${list}${legend}</div>`;
+}
+
+function itemDetail(it) {
+  if (it.live) return liveItemDetail(it);
+  const eff = effortById(effortOf(it));
+  const v = (state.variant[it.id] || 0) % it.summary.length;
+  const siblings = SESSIONS.filter(s => sessEffort(s) === eff.id && s.id !== it.session);
+  const rawOpen = state.rawOpen[it.id] ?? !state.fluent;
+  const answer = mockAnswer(it);
+  return `<div class="inner">
+    <div class="crumb"><button class="eff" data-act="effort" data-id="${eff.id}">${effortMark(eff, 's')}${esc(eff.name)} ›</button>${kindBadge(it.kind, it.src)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span></div>
+    <div class="titled"><h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>${itemMenu(it, `<button data-act="park" data-id="${it.id}">Park as open question</button>
+      ${menuPart('move', 'Move to', menuTo('moveTo', it.id, EFFORTS.concat(UNSORTED).filter(e => e.id !== eff.id).map(e => [e.id, e.name])))}`)}</div>
+    <div class="need"><div class="label">${spark}What's needed from you</div><p class="ask">${esc(it.ask)}</p>${answer}</div>
+    <div class="sec"><div class="label"><span>${spark}Recap</span><button data-act="rephrase" data-id="${it.id}">↻ ${v === 0 ? 'Shorter' : 'Fuller'}</button></div>
+      <p class="prose" id="summary">${esc(it.summary[v])}</p></div>
+    <div class="sec"><div class="label"><span>From the source, verbatim</span><button data-act="toggleRaw" data-id="${it.id}">${rawOpen ? 'Hide' : 'Show'}</button></div>
+      ${rawOpen ? rawBlock(it.lines) : `<div class="none mono">${esc(it.raw)}</div>`}</div>
+    <div class="sec"><div class="label"><span>Also going on in ${esc(eff.name)}</span></div>
+      ${siblings.length ? siblings.map(s => sessionRow(s)).join('') : '<div class="none">Nothing else is running here.</div>'}</div>
+  </div>`;
+}
+
+function viewAttention() {
+  const all = activeItems(), items = shownItems(all), src = sourceShown(all);
+  if (!items.some(i => i.id === state.sel)) state.sel = visibleOrder()[0] || null;
+  const present = Object.keys(KINDS).filter(k => all.some(i => i.kind === k));
+  const chips = state.groupBy === 'source' && present.length > 1
+    ? `<div class="chips">${[['all', 'All', all.length]].concat(present.map(k => [k, KINDS[k], all.filter(i => i.kind === k).length]))
+        .map(([k, name, n]) => `<button class="chip ${src === k ? 'on' : ''}" data-act="srcFilter" data-src="${k}">${k === 'all' ? '' : `<i style="${kindColor(k)}"></i>`}${esc(name)} <span class="n">${n}</span></button>`).join('')}</div>`
+    : '';
+  const groups = groupItems(items).map(g => {
+    const shut = state.collapsed[g.key];
+    const name = g.effort ? effortMark(g.effort, 's') + title(g.effort) : esc(g.name);
+    return `<div class="ghead">
+        <button class="name" data-act="collapse" data-key="${g.key}"><span class="chev ${shut ? 'shut' : ''}">▼</span> ${name}</button>
+        <span class="n">${g.items.length}</span>
+        ${g.effort && !(live && g.effort.id === 'unsorted') ? `<button class="open" data-act="effort" data-id="${g.effort.id}" title="Open this effort">open ›</button>` : ''}
+      </div>
+      ${g.effort && g.effort.line && state.fluent && !shut ? `<div class="gline">${esc(g.effort.line)}</div>` : ''}
+      ${shut ? '' : g.items.map(i => rowHtml(i)).join('')}`;
+  }).join('');
+  const seg = ['effort', 'urgency', 'source'].map(b => `<button class="${state.groupBy === b ? 'on' : ''}" data-act="group" data-by="${b}">${cap(b)}</button>`).join('');
+  const rows = ['long', 'short'].map(as => `<button class="${(state.rows || 'long') === as ? 'on' : ''}" data-act="rows" data-as="${as}">${cap(as)}</button>`).join('');
+  const sel = state.sel && itemById(state.sel);
+  const sided = sel && sel.live && !sel.feed;
+  const side = sided ? sessionSide(sel.session, sel.summary, false, 'att-side') : '';
+  return `<div class="split ${sided ? 'sided' : ''} ${sided && state.sideShut ? 'shut' : ''}">
+    <section class="pane list" data-scroll="att-list">
+      ${briefing(all)}
+      <div class="listbar"><span class="label">Needs you</span><span class="segs"><span class="seg" role="group" aria-label="Group by">${seg}</span>
+        <span class="seg" role="group" aria-label="How much each row shows" title="Short rows show only the title, how long ago, and the description.">${rows}</span></span></div>
+      ${chips}
+      ${groups}
+      ${handledFooter()}
+    </section>
+    <section class="pane detail" data-scroll="att-${state.sel}">${sel ? itemDetail(sel) : `<div class="empty">${spark}All clear. Go make something.</div>`}</section>
+    ${side}
+  </div>`;
+}
+
 /* ───────────────────────── Home ───────────────────────── */
 
-/* A thing that needs the user as a row under its effort, which leads to where it is answered. */
-function rowHtml(it, act = 'openItem') {
-  const chips = `${kindBadge(it.kind)}${it.live && it.session ? roleChip(it.session) + pullChip(it.session) + subChip(it.session) : ''}`;
+function rowHtml(it, act = 'select') {
+  const grouped = act === 'select' ? state.groupBy : 'effort';
+  const chips = `${grouped === 'source' ? '' : kindBadge(it.kind)}${it.live && it.session ? roleChip(it.session) + pullChip(it.session) + subChip(it.session) : ''}${grouped === 'effort' ? '' : `${effortChip(effortOf(it))}`}`;
   /* The short form keeps the title, its age and urgency, and the description. */
   const long = state.rows !== 'short';
-  return `<button class="row ${it.urgency} ${it.id === freshId ? 'fresh' : ''}" data-act="${act}" data-id="${it.id}" style="${kindColor(it.kind)}">
+  return `<button class="row ${it.urgency} ${state.view === 'attention' && it.id === state.sel ? 'sel' : ''} ${it.id === freshId ? 'fresh' : ''}" data-act="${act}" data-id="${it.id}" style="${kindColor(it.kind)}">
     <span class="h">${title(it, 't')}<span class="w"><span>${ago(ageOf(it))}</span>${it.urgency === 'whenever' ? '' : `<span class="tag ${it.urgency}">${it.urgency}</span>`}</span></span>
     ${it.subtitle && state.fluent ? `<span class="st">${esc(it.subtitle)}</span>` : ''}
     ${long && chips ? `<span class="m">${chips}</span>` : ''}
@@ -1328,6 +1438,7 @@ function effortDetail(e) {
 }
 
 const VIA = { you: 'filed by you', rule: 'filed by directory', guess: 'filed by the model' };
+const VIA_REPO = { you: 'repository filed by you', rule: 'a checkout is in this effort' };
 
 function moveSelect(s) {
   const cur = s.effort || 'unsorted';
@@ -2329,8 +2440,12 @@ const alsoRows = (effort, except) => {
         <span class="side">${kindBadge(x.agent)} · ${(LIVE_STATUS[x.status] || LIVE_STATUS.idle)[1]}</span></div>`).join('') : '<div class="none">No other sessions here.</div>' };
 };
 
+const alsoIn = (effort, except) => `<div class="sec"><div class="label"><span>Also going on in ${esc(effortById(effort).name)}</span></div>
+      ${alsoRows(effort, except).html}</div>`;
+
 /* The pull request an integration's item is about, if it is listed. */
 const pullOfItem = it => pulls.find(x => it.pull ? pullKey(x) === it.pull : x.url && x.url === it.url);
+const onBranch = it => branchSessions(pullOfItem(it));
 /* The sessions working on a pull request's branch, each with a box to tell it so. */
 function branchSessions(p) {
   const on = p ? sessionsOn(p) : [];
@@ -2343,6 +2458,28 @@ function branchSessions(p) {
         ? `<div class="livebox">${pullAsks(p, `live-${s.id}`) ? `<div class="replies">${pullAsks(p, `live-${s.id}`)}</div>` : ''}<textarea data-keep="live-${s.id}" placeholder="Tell this session…"></textarea>
             <div class="send"><span>Suggestions fill the box; nothing is sent until you press Send.</span><button class="btn go" data-act="liveSend" data-id="${s.id}">Send</button></div></div>`
         : `<div class="none" style="margin:4px 0 12px">It isn't running the Slorp mod, so tell it in its terminal: <span class="mono">${esc(shortPath(s.cwd))}</span></div>`}`).join('')}</div>`;
+}
+
+/* A feed item: nothing to reply to, only somewhere to go. Moving it files its
+   whole repository, since that is what the next items from there go by. */
+function feedItemDetail(it) {
+  const real = it.effort !== 'unsorted', p = pullOfItem(it), point = p && it.point && (p.points || []).find(x => x.id === it.point);
+  const menu = itemMenu(it, `<button data-act="livePark" data-id="${it.id}">Park as open question</button>
+    ${menuPart('move', `File ${esc(it.repo)} under`, menuTo('repoMoveTo', it.id, effortsBut(it.effort)))}`);
+  return `<div class="inner">
+    <div class="crumb">${real ? `<button class="eff" data-act="effort" data-id="${it.effort}">${effortMark(effortById(it.effort), 's')}${esc(effortById(it.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${real && VIA_REPO[it.effortVia] ? `<span>${VIA_REPO[it.effortVia]}</span>` : ''}${kindBadge(it.kind, it.src)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span><span class="mono">${esc(it.repo)}</span></div>
+    <div class="titled"><h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>${menu}</div>
+    <div class="need"><div class="label">${it.point ? spark : ''}What's needed from you</div>${point ? pointHtml(p, point) : `<p class="ask">${esc(it.ask)}</p>`}
+      ${/^https:\/\//.test(it.url || '') ? `<div class="replies" ${point ? 'style="margin-top:14px"' : ''}>${point ? '' : `<a class="btn go" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">Open on ${esc(it.src)} ↗</a>`}
+        ${p ? `<button class="btn" data-act="pullOpen" data-id="${esc(pullKey(p))}">Its discussion, under PRs ›</button>` : ''}
+        <span class="none" style="align-self:center">Slorp only ever reads ${esc(it.src)}.</span></div>` : ''}</div>
+    ${onBranch(it)}
+    ${it.point && p ? `<div class="sec"><div class="label"><span>${p.brief ? spark : ''}Where it stands</span></div>${pullStands(p)}
+        <div class="none" style="margin-top:8px">${spark}The local model picked this out of the discussion of <span class="mono">${esc(it.pull)}</span>, as ${esc(it.src)} had it ${ago(minsSince(p.readAt || it.at))}.</div></div>`
+      : `<div class="sec"><div class="label"><span>Recap</span></div><p class="prose">${esc(it.summary)}</p>
+      <div class="none" style="margin-top:8px">As ${esc(it.src)} reported it ${ago(minsSince((feeds[it.source] || {}).at || it.at))}. No model wrote any of this.</div></div>`}
+    ${alsoIn(it.effort, '')}
+  </div>`;
 }
 
 /* Renders the Markdown an agent wrote. All of it is escaped before any
@@ -2619,6 +2756,10 @@ function sessionSide(s, summary, stale, key) {
   return state.sideShut
     ? `<aside class="pane side"><button class="rail" data-act="side" title="Show the recap" aria-expanded="false"><span>‹</span>${label}</button></aside>`
     : `<aside class="pane side" data-scroll="${key}">${vitals(s)}<div class="head">${label}<button data-act="side" title="Hide this panel" aria-expanded="true">›</button></div>${goingOn(s, summary, stale)}${aboutSession(s)}${timeline(s, true)}</aside>`;
+}
+
+function liveItemDetail(it) {
+  return it.feed ? feedItemDetail(it) : sessionPage(it.session, it, `<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span>`);
 }
 
 function connect() {
@@ -3390,6 +3531,7 @@ function generalBody() {
       choice('notifyTo', canNotify() ? 'on' : 'off', [['on', 'On'], ['off', 'Off']], 'Desktop notifications')) : ''}
     ${live ? setting('Permission prompts', 'Where a session\'s permission prompt can be answered. Its terminal always asks; with Slorp or terminal, this page can answer too, and whichever you answer first decides.',
       choice('holdTo', settings.answerPermissions ? 'both' : 'terminal', [['both', 'Slorp or terminal'], ['terminal', 'Terminal only']], 'Where permission prompts can be answered')) : ''}
+    ${setting('Show legacy Attention view', 'Adds the Attention tab beside Home: what needs you, grouped by effort, urgency or source.', choice('attentionTo', state.legacyAttention ? 'on' : 'off', [['on', 'On'], ['off', 'Off']], 'Show legacy Attention view'))}
     ${setting('This page', 'Forgets what this browser keeps for the page: what you dismissed or snoozed, what was selected, and choices such as how lists are grouped.',
       `<button class="btn" data-act="reset">Reset</button>`)}`;
 }
@@ -3545,7 +3687,7 @@ const rain = (() => {
   return want => { on = want; sync(); };
 })();
 
-const RENDER = { home: viewHome, efforts: viewEfforts, sessions: viewSessions, pulls: viewPulls, journal: viewJournal, knowledge: viewKnowledge, settings: viewSettings };
+const RENDER = { home: viewHome, attention: viewAttention, efforts: viewEfforts, sessions: viewSessions, pulls: viewPulls, journal: viewJournal, knowledge: viewKnowledge, settings: viewSettings };
 
 function render() {
   if (dragged || filing) return;  // a card or a session's row is held: the page is drawn again when it is let go
@@ -3615,6 +3757,8 @@ const actions = {
   subRetry: d => { delete subDocs[d.id]; },
   view: d => visit(d.view),
   select: d => { state.sel = d.id; },
+  group: d => { state.groupBy = d.by; },
+  srcFilter: d => { state.srcFilter = d.src; },
   rows: d => { state.rows = d.as; },
   liveMoveTo: d => changes.liveMove(d, { value: d.to }),
   liveRoleTo: d => changes.liveRole(d, { value: d.to }),
@@ -3648,6 +3792,7 @@ const actions = {
   aboutOpen: () => { state.aboutOpen = !state.aboutOpen; },
   fluent: d => { state.fluent = d.on === '1'; },
   themeTo: d => { state.theme = d.to; },
+  attentionTo: d => { state.legacyAttention = d.to === 'on'; },
   lookTo: d => { state.look = d.to; },
   setSel: d => { state.setSel = d.s; },
   modelCheck: () => { checkModel(); return false; },
@@ -3957,6 +4102,7 @@ document.addEventListener('click', e => {
   if (!e.target.closest('#acts') || e.target.closest('#acts [data-act]')) $('#acts')?.removeAttribute('open');
   const el = e.target.closest('[data-act]');
   if (!el) return;
+  if (el.matches('a[href^="#"]')) e.preventDefault();
   if (actions[el.dataset.act](el.dataset, el) !== false) { save(); render(); }
 });
 document.addEventListener('input', e => {
@@ -4092,7 +4238,7 @@ document.addEventListener('keydown', e => {
     return;
   }
   if (modal || e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
-  const att = state.view === 'home', card = e.target.matches?.('.ecard[data-id]') ? e.target : null;
+  const att = state.view === 'home' || state.view === 'attention', card = e.target.matches?.('.ecard[data-id]') ? e.target : null;
   if (card && (e.key === 'Enter' || e.key === ' ')) openEffort(card.dataset.id);
   else if (card && card.draggable && e.shiftKey && /^Arrow/.test(e.key)) {
     const shown = [...card.parentNode.querySelectorAll('.ecard[draggable]')], i = shown.indexOf(card), back = e.key === 'ArrowLeft' || e.key === 'ArrowUp';
@@ -4105,7 +4251,7 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'w') openToday();
   else if (e.key === '/' && live) openSearch();
   else if (att && (e.key === 'j' || e.key === 'k')) {
-    const order = homeOrder(), i = order.indexOf(state.sel) + (e.key === 'j' ? 1 : -1);
+    const order = state.view === 'attention' ? visibleOrder() : homeOrder(), i = order.indexOf(state.sel) + (e.key === 'j' ? 1 : -1);
     if (order[i]) state.sel = order[i];
   }
   else if (state.view === 'sessions' && (e.key === 'j' || e.key === 'k')) {
@@ -4130,8 +4276,8 @@ document.addEventListener('keydown', e => {
   $('.row.sel, .qi.open')?.scrollIntoView({ block: 'nearest' });
 });
 window.addEventListener('popstate', () => {
-  const v = location.hash.slice(1);
-  if (!VIEWS.includes(v)) return;
+  const v = viewNamed(location.hash.slice(1));
+  if (!v) return;
   morph = v === 'efforts' && state.view === v;
   Object.assign(state, history.state, { view: v });
   save(); render();
