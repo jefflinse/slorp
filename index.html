@@ -917,6 +917,8 @@ try { Object.assign(state, JSON.parse(localStorage.getItem(KEY) || '{}')); } cat
 /* The view a name leads to, whether it is one or what one used to be called. */
 const viewNamed = v => VIEWS.includes(v) ? v : { activity: 'sessions' }[v];
 state.view = viewNamed(state.view) || 'attention';
+/* Whether a section of a list is folded. The closed sessions are until the user unfolds them. */
+const isShut = key => state.collapsed[key] ?? key === 'act:closed';
 /* The themes there are. Slorp's own is light or dark as state.theme says; the others come one way only. */
 const LOOKS = { slorp: 'Slorp', matrix: 'The Matrix', hotdog: 'Hot Dog Stand' };
 if (!LOOKS[state.look]) state.look = 'slorp';
@@ -975,7 +977,7 @@ function groupItems(items) {
 /* The one source the list is narrowed to, which it can be only while grouped by source. */
 const sourceShown = items => state.groupBy === 'source' && items.some(i => i.kind === state.srcFilter) ? state.srcFilter : 'all';
 const shownItems = (items = activeItems()) => { const src = sourceShown(items); return src === 'all' ? items : items.filter(i => i.kind === src); };
-const visibleOrder = () => groupItems(shownItems()).filter(g => !state.collapsed[g.key]).flatMap(g => g.items.map(i => i.id));
+const visibleOrder = () => groupItems(shownItems()).filter(g => !isShut(g.key)).flatMap(g => g.items.map(i => i.id));
 
 let toastTimer;
 function toast(msg, undo, label = 'Undo') {
@@ -1270,7 +1272,7 @@ function openHit(x) {
   if (item) { state.sel = item.id; go('attention'); }
   else {
     state.actSel = x.sessionId;
-    delete state.collapsed[x.closed ? 'act:closed' : 'act:active'];
+    state.collapsed[x.closed ? 'act:closed' : 'act:active'] = false;
     go('sessions');
   }
   save(); render();
@@ -1933,7 +1935,7 @@ document.addEventListener('dragend', () => {
 function sessionsView(parts, detail, side = '') {
   const rows = ['long', 'short'].map(as => `<button class="${(state.rows || 'long') === as ? 'on' : ''}" data-act="rows" data-as="${as}">${cap(as)}</button>`).join('');
   const list = parts.map(([key, name, n, line, html]) => {
-    const shut = state.collapsed['act:' + key];
+    const shut = isShut('act:' + key);
     return `<div class="ghead"><button class="name" data-act="collapse" data-key="act:${key}"><span class="chev ${shut ? 'shut' : ''}">▼</span> ${name}</button><span class="n">${n}</span></div>
       ${shut ? '' : `${line ? `<div class="gline">${line}</div>` : ''}${html}`}`;
   }).join('');
@@ -1947,7 +1949,7 @@ function sessionsView(parts, detail, side = '') {
   </div>`;
 }
 /* The ids of the sessions the Sessions list shows, top to bottom, given those of its two parts. */
-const actShown = (active, closed) => (state.collapsed['act:active'] ? [] : active).concat(state.collapsed['act:closed'] ? [] : closed);
+const actShown = (active, closed) => (isShut('act:active') ? [] : active).concat(isShut('act:closed') ? [] : closed);
 const stat = (dot, word) => `<span class="stat"><span class="dot ${dot}"></span>${word}</span>`;
 
 function viewSessions() {
@@ -3475,7 +3477,7 @@ const actions = {
   repoMoveTo: d => changes.repoMove(d, { value: d.to }),
   moveTo: d => changes.move(d, { value: d.to }),
   srcFilter: d => { state.srcFilter = d.src; },
-  collapse: d => { state.collapsed[d.key] = !state.collapsed[d.key]; },
+  collapse: d => { state.collapsed[d.key] = !isShut(d.key); },
   noop: () => false,
   searchOpen: () => { openSearch(); },
   hitOpen: d => { openHit(hits[+d.i]); return false; },
@@ -3485,7 +3487,7 @@ const actions = {
   journalSel: d => { state.journalSel = d.id; },
   journalTag: d => { journalTag = d.only || journalTag !== d.tag ? d.tag : ''; },
   journalClear: () => { clearJournalSearch(); },
-  journalSession: d => { state.actSel = d.id; delete state.collapsed[live.some(s => s.id === d.id) ? 'act:active' : 'act:closed']; go('sessions'); },
+  journalSession: d => { state.actSel = d.id; state.collapsed[live.some(s => s.id === d.id) ? 'act:active' : 'act:closed'] = false; go('sessions'); },
   tagOff: d => { tagDay(d.day, d.tag, false); return !live; },
   wrapCopy: d => {
     Promise.resolve().then(() => navigator.clipboard.writeText(wrapupMarkdown(entryOf(d.day))))

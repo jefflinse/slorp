@@ -344,6 +344,17 @@ async function waitResumed(o) {
   assert.ok(!o.data.archive.some(s => s.id === 'archived'))
 }
 
+test('closed sessions are folded until asked for, and stay unfolded once they are', async t => {
+  const o = await world(t)
+  const archived = o.page.locator('[data-act="actSel"][data-id="archived"]')
+  await o.page.locator('[data-act="actSel"][data-id="owned"]').waitFor()
+  assert.equal(await archived.count(), 0)
+  await o.page.locator('[data-act="collapse"][data-key="act:closed"]').click()
+  await archived.waitFor()
+  await o.page.reload()
+  await archived.waitFor()
+})
+
 for (const prompt of ['', 'Continue with the tests']) test(`reopen archived OpenCode ${prompt ? 'with' : 'without'} a prompt`, async t => {
   const o = await world(t)
   await openArchive(o)

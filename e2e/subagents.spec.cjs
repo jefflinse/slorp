@@ -62,7 +62,8 @@ async function world(t, { archived = false, children } = {}) {
   t.after(() => assert.deepEqual(errors, []))
   page.setDefaultTimeout(10000)
   await page.goto(`http://127.0.0.1:${server.address().port}/#sessions`)
-  if (!archived) await page.getByRole('button', { name: /^Subagents\d/ }).click()
+  if (archived) await page.locator('[data-act="collapse"][data-key="act:closed"]').click()
+  else await page.getByRole('button', { name: /^Subagents\d/ }).click()
   await page.locator('.lane').first().waitFor()
   o.page = page
   o.lane = id => page.locator('.lane').filter({ has: page.locator('.t', { hasText: subagents.find(a => a.id === id).description }) })
