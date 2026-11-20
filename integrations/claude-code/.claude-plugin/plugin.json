@@ -1,6 +1,6 @@
 {
   "name": "slorp",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Connects this session to the local Slorp service: reports what the session is doing, delivers replies written in Slorp, and lets Slorp answer its permission prompts.",
   "author": {
     "name": "Jeff Linse"
@@ -11,6 +11,12 @@
       "title": "Slorp address",
       "description": "Where the Slorp service listens. The SLORP_URL environment variable, when set, wins. Default: http://127.0.0.1:4747.",
       "default": "http://127.0.0.1:4747"
+    },
+    "terminalOnly": {
+      "type": "string",
+      "title": "Terminal-only prompts",
+      "description": "A regular expression matched against the tool name and command or JSON input. Matching prompts appear in Slorp and can only be answered in the terminal. Leave empty to use Slorp's usual permission handling.",
+      "default": ""
     }
   }
 }

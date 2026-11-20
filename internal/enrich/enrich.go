@@ -34,7 +34,10 @@ const (
 
 	tick       = 2 * time.Second
 	retryAfter = time.Minute
-	idleCheck  = 30 * time.Second
+	// maxRetryAfter caps how long work that keeps failing waits between
+	// tries; each failure in a row doubles the wait from retryAfter.
+	maxRetryAfter = 6 * time.Hour
+	idleCheck     = 30 * time.Second
 	// missedCheck is how often, with nothing else to do, the journal is
 	// looked over for a day nobody asked to have written.
 	missedCheck = 10 * time.Minute
@@ -66,13 +69,18 @@ type Enricher struct {
 	// dir, with a note on what each reaches. Nil means none.
 	Offer func(ctx context.Context, dir string) ([]integrations.Tool, []string)
 
-	client *http.Client
-	failed map[string]time.Time
+	client  *http.Client
+	retries map[string]retry
 	// checked is when the model was last asked after, and missed when the
 	// journal was last looked over.
 	checked, missed time.Time
 	// cfg is what Resolve last gave.
 	cfg Config
+}
+
+type retry struct {
+	readyAt time.Time
+	wait    time.Duration
 }
 
 // Config is where the local model is and which one to use.
@@ -122,7 +130,7 @@ func (e *Enricher) http() *http.Client {
 // Run describes undescribed sessions, one at a time, until ctx ends. Session
 // content goes only to BaseURL.
 func (e *Enricher) Run(ctx context.Context) {
-	e.failed = map[string]time.Time{}
+	clear(e.retries)
 	t := time.NewTicker(tick)
 	defer t.Stop()
 	for {
@@ -145,7 +153,7 @@ func (e *Enricher) step(ctx context.Context) {
 		if cfg := e.Resolve(e.Hub.Settings().Model); cfg != e.cfg || e.checked.IsZero() {
 			e.cfg, e.BaseURL, e.Model = cfg, cfg.URL, cfg.Model
 			e.checked = time.Time{}
-			clear(e.failed)
+			clear(e.retries)
 		}
 	}
 	said := hub.Summarizer{URL: e.BaseURL, Named: e.Model, FixedURL: e.cfg.FixedURL, FixedModel: e.cfg.FixedModel}
@@ -180,9 +188,20 @@ func (e *Enricher) step(ctx context.Context) {
 	err = job(ctx, model)
 	said.Doing = ""
 	e.Hub.SetSummarizer(said)
-	if err != nil && ctx.Err() == nil {
+	switch {
+	case err == nil:
+		delete(e.retries, key)
+	case ctx.Err() != nil:
+		return
+	case key == "":
 		log.Printf("enrich: %s: %v", what, err)
-		e.failed[key] = time.Now()
+	default:
+		if e.retries == nil {
+			e.retries = map[string]retry{}
+		}
+		wait := min(maxRetryAfter, max(retryAfter, 2*e.retries[key].wait))
+		e.retries[key] = retry{readyAt: time.Now().Add(wait), wait: wait}
+		log.Printf("enrich: %s: %v (retry delay %s)", what, err, wait)
 	}
 }
 
@@ -190,9 +209,10 @@ func (e *Enricher) step(ctx context.Context) {
 // to wrap up, then a session's earlier exchanges to fill in, then the pull
 // request they are looking at; then describing a session, filing it under
 // an effort, guessing its role, rewriting an effort's note, and briefing
-// the other pull requests.
+// the other pull requests. Jobs with an empty key are tried once per request.
 func (e *Enricher) next() (key, what string, job func(context.Context, string) error) {
-	ready := func(key string) bool { return time.Since(e.failed[key]) > retryAfter }
+	now := time.Now()
+	ready := func(key string) bool { return !now.Before(e.retries[key].readyAt) }
 	briefs := e.Hub.Unbriefed()
 	briefing := func(wanted bool) (key, what string, job func(context.Context, string) error) {
 		for _, w := range briefs {
@@ -210,7 +230,7 @@ func (e *Enricher) next() (key, what string, job func(context.Context, string) e
 		return "", "", nil
 	}
 	for _, w := range e.Hub.Unwrapped() {
-		return "wrapup:" + w.Key, "wrap up " + w.Day.Format("2 January"), func(ctx context.Context, model string) error {
+		return "", "wrap up " + w.Day.Format("2 January"), func(ctx context.Context, model string) error {
 			headline, efforts, tags, err := e.wrapup(ctx, model, w)
 			failure := ""
 			if err != nil {
@@ -221,7 +241,7 @@ func (e *Enricher) next() (key, what string, job func(context.Context, string) e
 		}
 	}
 	for _, u := range e.Hub.Unfilled() {
-		return "backfill:" + u.SessionID, "fill in " + u.Label, func(ctx context.Context, model string) error {
+		return "", "fill in " + u.Label, func(ctx context.Context, model string) error {
 			lines, err := e.backfill(ctx, model, u)
 			// Exchanges the model could not be asked about are left as they
 			// are, for the user to ask again.
@@ -641,13 +661,18 @@ func (e *Enricher) ask(ctx context.Context, model, system, user, name string, sc
 		return err
 	}
 	if err := json.Unmarshal([]byte(msg.Content), out); err != nil {
+		if msg.finish == "length" {
+			return fmt.Errorf("model ran out of tokens before finishing the requested JSON (%d-token limit, %d bytes returned)", maxTokens, len(msg.Content))
+		}
 		return fmt.Errorf("model did not return the requested JSON")
 	}
 	return nil
 }
 
 type message struct {
-	Content   string `json:"content"`
+	Content string `json:"content"`
+	// finish is why the model stopped: "length" when it hit max_tokens.
+	finish    string
 	ToolCalls []struct {
 		Function struct {
 			Name      string `json:"name"`
@@ -673,13 +698,16 @@ func (e *Enricher) chat(ctx context.Context, base string, request map[string]any
 	}
 	var reply struct {
 		Choices []struct {
-			Message message `json:"message"`
+			Message      message `json:"message"`
+			FinishReason string  `json:"finish_reason"`
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(raw, &reply); err != nil || len(reply.Choices) == 0 {
 		return message{}, fmt.Errorf("unreadable model response")
 	}
-	return reply.Choices[0].Message, nil
+	msg := reply.Choices[0].Message
+	msg.finish = reply.Choices[0].FinishReason
+	return msg, nil
 }
 
 func (e *Enricher) get(ctx context.Context, base, path string, v any) error {

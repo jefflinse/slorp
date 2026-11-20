@@ -39,6 +39,8 @@ type fakeLLM struct {
 			}
 		}
 	}
+	// finish is the finish_reason the server gives, empty for none.
+	finish   string
 	requests int
 	request  struct {
 		Model           string `json:"model"`
@@ -90,13 +92,13 @@ func (f *fakeLLM) enricher(t *testing.T) *Enricher {
 			if f.status != 0 {
 				w.WriteHeader(f.status)
 			}
-			json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": f.content}}}})
+			json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": f.content}, "finish_reason": f.finish}}})
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return &Enricher{BaseURL: srv.URL, client: srv.Client(), failed: map[string]time.Time{}}
+	return &Enricher{BaseURL: srv.URL, client: srv.Client()}
 }
 
 type call struct{ name, args string }
@@ -197,7 +199,7 @@ func TestStepFollowsTheUsersSettings(t *testing.T) {
 	second := (&fakeLLM{listed: `{"data":[{"id":"one"},{"id":"two"}]}`}).enricher(t)
 	st := testdb.Open(t)
 	h := hub.New(testdb.KB(t, st), st)
-	e := &Enricher{Hub: h, Resolve: Startup{URL: first.BaseURL}.Config, failed: map[string]time.Time{}}
+	e := &Enricher{Hub: h, Resolve: Startup{URL: first.BaseURL}.Config}
 	said := func() hub.Summarizer { e.step(ctx); return h.State().Summarizer }
 	choose := func(m hub.ModelSettings) {
 		s := h.Settings()
@@ -208,12 +210,12 @@ func TestStepFollowsTheUsersSettings(t *testing.T) {
 	if got := said(); got != (hub.Summarizer{Model: "warm", URL: first.BaseURL}) {
 		t.Fatalf("summarizer = %+v, want the model loaded where Slorp was started with", got)
 	}
-	e.failed["s"] = time.Now()
+	e.retries = map[string]retry{"s": {readyAt: time.Now().Add(retryAfter), wait: retryAfter}}
 	choose(hub.ModelSettings{URL: second.BaseURL})
 	if got := said(); got.URL != second.BaseURL || got.Model != "" || !strings.Contains(got.Error, "name one") {
 		t.Errorf("summarizer = %+v, want the server just chosen asked at once, and what it said", got)
 	}
-	if len(e.failed) != 0 {
+	if len(e.retries) != 0 {
 		t.Error("what failed with the server before is still held back from the one chosen")
 	}
 	choose(hub.ModelSettings{URL: second.BaseURL, Name: "two"})
@@ -229,7 +231,7 @@ func TestStepFollowsTheUsersSettings(t *testing.T) {
 		t.Errorf("summarizer = %+v, want it back on with the server Slorp was started with", got)
 	}
 
-	fixed := &Enricher{Hub: h, Resolve: Startup{URL: first.BaseURL, URLGiven: true, Model: "given", ModelGiven: true}.Config, failed: map[string]time.Time{}}
+	fixed := &Enricher{Hub: h, Resolve: Startup{URL: first.BaseURL, URLGiven: true, Model: "given", ModelGiven: true}.Config}
 	choose(hub.ModelSettings{URL: second.BaseURL, Name: "two"})
 	fixed.step(ctx)
 	if got := h.State().Summarizer; got != (hub.Summarizer{Model: "given", Named: "given", URL: first.BaseURL, FixedURL: true, FixedModel: true}) {
@@ -736,7 +738,7 @@ func TestSaysWhatTheModelIsOnWhileItWorks(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	e := &Enricher{BaseURL: srv.URL, client: srv.Client(), failed: map[string]time.Time{}, Hub: h}
+	e := &Enricher{BaseURL: srv.URL, client: srv.Client(), Hub: h}
 	effort, err := k.Create("Widgets", "")
 	if err != nil || k.AddDir(effort.ID, "/work/widgets") != nil {
 		t.Fatal(err)

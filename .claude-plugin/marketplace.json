@@ -8,7 +8,7 @@
     {
       "name": "slorp",
       "source": "./integrations/claude-code",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "description": "Connects this session to the local Slorp service: reports what the session is doing, delivers replies written in Slorp, and lets Slorp answer its permission prompts."
     }
   ]
