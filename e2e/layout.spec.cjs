@@ -19,9 +19,13 @@ async function world(t, hash) {
     items: [{ id: 'item', sessionId: 'asks', kind: 'question', title: 'Which retry policy?', ask: 'Pick one.', urgency: 'awaiting', at: ago(2), replies: [] }],
     summarizer: { model: 'fixture' }, capabilities: {},
   }
+  const posts = []
   const server = createServer((req, res) => {
     if (req.url === '/api/events') {
       res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write(': connected\n\n')
+    } else if (req.method === 'POST') {
+      let body = ''
+      req.on('data', chunk => { body += chunk }).on('end', () => { posts.push([req.url, JSON.parse(body || '{}')]); res.setHeader('content-type', 'application/json'); res.end('{}') })
     } else if (req.url === '/api/sessions') {
       res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(data))
     } else {
@@ -37,6 +41,7 @@ async function world(t, hash) {
   page.on('pageerror', error => errors.push(error.message))
   t.after(() => assert.deepEqual(errors, []))
   await page.goto(`http://127.0.0.1:${server.address().port}/#${hash}`)
+  page.posts = posts
   return page
 }
 
@@ -111,4 +116,47 @@ test('a theme is chosen in Settings and kept', async t => {
   await page.getByRole('button', { name: 'Slorp', exact: true }).click()
   assert.equal(await look(), 'slorp')
   assert.equal(await page.getByRole('group', { name: 'Appearance' }).count(), 1)
+})
+
+test('Home opens the most pressing thing that needs you with its answer, and leads to its session', async t => {
+  const page = await world(t, 'attention')
+  const open = page.locator('.qi.open')
+  await open.waitFor()
+  assert.equal(new URL(page.url()).hash, '#home')
+  assert.equal(await page.locator('#nav button.on').innerText(), 'Home1')
+  assert.equal(await open.locator('.qh .t').innerText(), 'Which retry policy?')
+  assert.equal(await open.locator('.ask').innerText(), 'Pick one.')
+  assert.equal(await open.getByPlaceholder('Reply to this session…').count(), 1)
+  await open.getByRole('button', { name: 'Open session ›' }).click()
+  assert.equal(new URL(page.url()).hash, '#sessions')
+  assert.match(await page.locator('.pane.detail h1').innerText(), /^Wire the outbox/)
+  assert.deepEqual(await page.locator('.pane.list .ghead .name').allInnerTexts(), ['Needs you', 'Active', 'Closed'].map(name => `▼\n${name}`))
+  assert.equal(await page.locator('.pane.list .ghead + .row .t').first().innerText(), 'Wire the outbox')
+})
+
+test('Home says what moved today, by effort and the latest first', async t => {
+  const page = await world(t, 'home')
+  const groups = page.locator('.home aside .tg')
+  await groups.first().waitFor()
+  assert.deepEqual(await groups.locator('.eff').allInnerTexts(), ['S\nsolo', 'P\npair', 'F\nfleet'])
+  assert.deepEqual(await groups.nth(1).locator('.th button').allInnerTexts(), ['Wire the outbox', 'Benchmark the loader'])
+  assert.deepEqual(await groups.nth(1).locator('.tr').first().locator('li').allInnerTexts(), ['Carry on'])
+  await groups.nth(1).locator('.th button').nth(1).click()
+  assert.match(await page.locator('.pane.detail h1').innerText(), /^Benchmark the loader/)
+})
+
+test('Home starts a session from its prompt box, in the directory of the effort chosen', async t => {
+  const page = await world(t, 'home')
+  const box = page.locator('form.compose'), start = box.getByRole('button', { name: 'Start' })
+  await box.waitFor()
+  assert.equal(await box.getByRole('button', { name: 'Claude Code' }).getAttribute('aria-pressed'), 'true')
+  assert.equal(await start.isDisabled(), true)
+  await box.getByLabel('Prompt for a new session').fill('Add a dead-letter queue')
+  await box.getByLabel('Effort to file it under').selectOption('pair')
+  assert.equal(await box.getByLabel('Directory').inputValue(), '/work/pair')
+  await start.click()
+  await page.waitForFunction(() => document.querySelector('form.compose textarea')?.value === '')
+  const [url, body] = page.posts.find(([url]) => url === '/api/sessions')
+  assert.equal(url, '/api/sessions')
+  assert.deepEqual([body.prompt, body.dir, body.effort], ['Add a dead-letter queue', '/work/pair', 'pair'])
 })

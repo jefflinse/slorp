@@ -264,9 +264,6 @@ a.pr:hover, button.pr:hover { border-color: var(--k-github); color: var(--ink); 
 .jr .pm .link:hover, .jr .jmeta .link:hover { color: var(--accent); }
 .jr .jmeta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 10px; color: var(--ink3); font-size: 12.5px; }
 /* Briefing */
-.brief { padding: 18px 18px 16px; border-bottom: 1px solid var(--line); }
-.brief .when { display: flex; justify-content: space-between; margin-bottom: 8px; }
-.brief p { font-size: 15px; line-height: 1.5; }
 .listbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 8px; padding: 10px 18px; }
 .listbar .segs { display: flex; gap: 6px; }
 .listbar .btn { padding: 3px 10px; font-size: 12px; }
@@ -370,11 +367,64 @@ h1 .pen:hover { color: var(--accent); background: var(--sel); }
 .tag.blocking { background: var(--fill); color: var(--fill-ink); }
 .tag.awaiting { color: var(--warn); border: 1px solid currentColor; }
 .tag.whenever { color: var(--ink3); border: 1px solid var(--line); }
-.foot { padding: 16px 18px 24px; color: var(--ink3); font-size: 12px; border-top: 1px solid var(--line); margin-top: 14px; }
-.foot .link, .link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 .handled { margin: 8px 0 12px; }
 .handled div { display: flex; gap: 8px; justify-content: space-between; padding: 4px 0; }
 .handled .gen { color: var(--ink2); font-size: 13px; }
+/* Home: the day, the box a session is started from and what needs the user, beside what moved today */
+.home { display: grid; grid-template-columns: minmax(0, 740px) minmax(260px, 420px); gap: 0 56px; align-items: start; }
+.home .subt .age { margin-left: 6px; color: var(--ink3); font-size: 12px; white-space: nowrap; }
+.home aside .sec { margin-top: 8px; }
+.compose { margin-top: 24px; border: 1px solid var(--line); border-radius: 12px; background: var(--raised); transition: border-color 0.12s, box-shadow 0.12s; }
+.compose:focus-within { border-color: var(--ink3); box-shadow: 0 4px 16px rgb(0 0 0 / 0.07); }
+.compose textarea { display: block; width: 100%; min-height: 92px; padding: 14px 16px 8px; border: 0; border-radius: 12px; background: none; resize: vertical; font-size: 15px; line-height: 1.5; outline: none; }
+.cbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 10px 10px; }
+.cbar .seg button { padding: 4px 11px; font-size: 12.5px; }
+.cbar .seg button:disabled, .cmore .seg button:disabled { color: var(--ink3); opacity: 0.6; cursor: not-allowed; }
+.cbar select.btn, .cbar input { padding: 4px 9px; border: 1px solid var(--line); border-radius: 7px; background-color: var(--bg); font-size: 12.5px; }
+.cbar select.btn { padding-right: 24px; max-width: 150px; text-overflow: ellipsis; }
+.cbar input { flex: 1; min-width: 110px; }
+.cbar .btn.quiet { padding: 4px 8px; font-size: 12.5px; }
+.cbar .btn.go { padding: 5px 16px; }
+.cmore { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px 14px 14px; border-top: 1px solid var(--line); }
+.cmore .wide { grid-column: 1 / -1; }
+.cmore label, .cmore .field { display: grid; gap: 5px; min-width: 0; align-content: start; }
+.cmore label > span, .cmore .field > span { font-size: 12px; font-weight: 600; color: var(--ink2); }
+.cmore label > span i { font-style: normal; font-weight: 400; color: var(--ink3); }
+.cmore input, .cmore select.btn { width: 100%; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background-color: var(--bg); font-size: 13.5px; }
+.cmore select.btn { padding-right: 26px; }
+.cmore .seg { justify-self: start; }
+.cwhy { padding: 0 14px 10px; color: var(--ink3); font-size: 12px; }
+.cwhy:empty { display: none; }
+.queue { display: flex; flex-direction: column; gap: 8px; }
+.qi { border: 1px solid var(--line); border-left: 3px solid var(--k, var(--line)); border-radius: 0 10px 10px 0; background: var(--raised); }
+.qi.open { border-top-color: var(--ink3); border-right-color: var(--ink3); border-bottom-color: var(--ink3); }
+.qi.fresh { animation: arrive 1.6s ease-out; }
+.qh { display: block; width: 100%; padding: 10px 14px 10px 13px; border-radius: 0 10px 10px 0; }
+.qi:not(.open) .qh:hover { background: color-mix(in srgb, var(--sel) 55%, transparent); }
+.qh .h { display: flex; align-items: baseline; gap: 10px; }
+.qh .t { flex: 1; min-width: 0; font-size: 14.5px; font-weight: 550; line-height: 1.35; }
+.qh .t.mono { font-size: 12px; font-weight: 400; line-height: 1.45; word-break: break-word; }
+.qh .w { flex: none; display: inline-flex; align-items: center; gap: 8px; color: var(--ink3); font-size: 12px; white-space: nowrap; }
+.qh .st { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin-top: 1px; color: var(--ink2); font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+.qh .m { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin-top: 5px; color: var(--ink3); font-size: 12px; }
+.need.qb { margin: 0; padding: 2px 14px 10px 13px; border: 0; background: none; }
+.need.qb .ask { margin-top: 2px; }
+.need.qb .replies:empty { display: none; }
+.qf { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; }
+.qf .btn.quiet { margin-left: -8px; padding: 4px 8px; font-size: 12.5px; }
+.tg + .tg { margin-top: 20px; }
+.tg .eff { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 650; }
+.tg .eff:hover, .th button:hover { color: var(--accent); }
+.tr { margin-top: 9px; }
+.th { display: flex; align-items: baseline; font-size: 13.5px; font-weight: 500; line-height: 1.35; }
+.th button, .th > span:not(.dot):not(.w) { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.th .w { flex: none; margin-left: 10px; color: var(--ink3); font-size: 12px; font-weight: 400; white-space: nowrap; }
+.tr ul { margin: 3px 0 0; padding-left: 31px; color: var(--ink2); font-size: 13px; line-height: 1.45; }
+.tr li { margin: 2px 0; overflow-wrap: anywhere; }
+.tr li.you { color: var(--ink3); }
+.tr li.you::before { content: 'You: '; }
+.tr li.more { list-style: none; color: var(--ink3); font-size: 12px; }
 
 /* Detail */
 .crumb { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; color: var(--ink3); font-size: 12.5px; margin-bottom: 10px; }
@@ -632,6 +682,8 @@ button.ecard.new:hover { border-color: var(--ink3); color: var(--ink); }
 @media (max-width: 1020px) { .used, .tbl .hide { display: none; } }
 @media (max-width: 1180px) {
   .split.sided, .split.sided.shut { grid-template-columns: minmax(320px, 410px) 1fr; }
+  .home { grid-template-columns: minmax(0, 740px); }
+  .home aside .sec { margin-top: 30px; }
   .split.sided .going { display: block; }
   .pane.side { display: none; }
 }
@@ -673,8 +725,6 @@ button.ecard.new:hover { border-color: var(--ink3); color: var(--ink); }
    what the source actually said. */
 
 const KINDS = { claude: 'Claude Code', opencode: 'OpenCode', slack: 'Slack', worker: 'Worker', local: 'Local LLM', kb: 'Knowledge base', github: 'GitHub' };
-/* Blocking: you are holding up another person. Awaiting: something of your own is stopped until you act. */
-const URGENCY = { blocking: 'Blocking other people', awaiting: 'Awaiting you', whenever: 'Whenever' };
 const STATUS = { waiting: 'awaiting you', error: 'failed', running: 'running', done: 'finished', idle: 'idle' };
 
 const EFFORTS = [
@@ -907,7 +957,7 @@ const KB_SEED = {
 };
 const KB_SECTIONS = {
   watch: { name: 'Slack watchlist', lede: 'People, channels and DMs worth checking now and then. The reason you give is what the model uses to decide whether a message is worth surfacing.' },
-  questions: { name: 'Open questions', lede: 'Things you have not decided yet. They resurface under Attention when something starts depending on the answer.' },
+  questions: { name: 'Open questions', lede: 'Things you have not decided yet. They resurface on Home when something starts depending on the answer.' },
   context: { name: 'Standing context', lede: 'Facts the summarizer should always know. Plain sentences; it reads them before every pass.' },
   routing: { name: 'Routing hints', lede: 'How things get filed under efforts. Written in plain language, and added to whenever you correct a guess.' },
 };
@@ -915,18 +965,18 @@ const KB_SECTIONS = {
 /* ───────────────────────── State ───────────────────────── */
 
 const KEY = 'slorp.proto.v1';
-const VIEWS = ['attention', 'efforts', 'sessions', 'pulls', 'journal', 'knowledge', 'settings'];
+const VIEWS = ['home', 'efforts', 'sessions', 'pulls', 'journal', 'knowledge', 'settings'];
 /* The views the top bar names, in its order; Settings is reached by its own button. Pull requests are named only while GitHub is turned on to list them. */
 const nav = () => VIEWS.filter(v => v !== 'settings' && !(v === 'pulls' && pullsOff()));
 const VIEW_NAMES = { pulls: 'PRs' };
-const fresh = () => ({ view: 'attention', sel: null, effortSel: null, effortOrder: null, hideEmpty: true, kbSel: 'watch', setSel: 'general', groupBy: 'effort', srcFilter: 'all', pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', effortTab: 'sessions', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto', look: 'slorp',
+const fresh = () => ({ view: 'home', sel: null, effortSel: null, effortOrder: null, hideEmpty: true, kbSel: 'watch', setSel: 'general', pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', effortTab: 'sessions', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto', look: 'slorp',
   handled: {}, moved: {}, sessMoved: {}, extra: [], arrived: {}, collapsed: {}, showHandled: false, variant: {}, rawOpen: {},
   actSel: null, pullSel: null, journalSel: null, pullTab: 'talk', expanded: {}, kb: structuredClone(KB_SEED), seq: 100 });
 let state = fresh();
 try { Object.assign(state, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch (e) { /* storage unavailable: run in memory */ }
 /* The view a name leads to, whether it is one or what one used to be called. */
-const viewNamed = v => VIEWS.includes(v) ? v : { activity: 'sessions' }[v];
-state.view = viewNamed(state.view) || 'attention';
+const viewNamed = v => VIEWS.includes(v) ? v : { activity: 'sessions', attention: 'home' }[v];
+state.view = viewNamed(state.view) || 'home';
 /* Whether a section of a list is folded. The closed sessions are until the user unfolds them. */
 const isShut = key => state.collapsed[key] ?? key === 'act:closed';
 /* The themes there are. Slorp's own is light or dark as state.theme says; the others come one way only. */
@@ -976,18 +1026,8 @@ const kindColor = kind => `--k:var(--k-${kind}, var(--ink3))`;
 const kindBadge = (kind, label) => `<span class="kind" style="${kindColor(kind)}"><i></i>${esc(label || KINDS[kind] || kind)}</span>`;
 const spark = '<span class="spark" title="Written by the local model">✦</span>';
 
-function groupItems(items) {
-  const sorted = items.slice().sort(byUrgency);
-  let defs;
-  if (state.groupBy === 'urgency') defs = Object.keys(URGENCY).map(k => ({ key: 'u:' + k, name: URGENCY[k], test: i => i.urgency === k }));
-  else if (state.groupBy === 'source') defs = Object.keys(KINDS).map(k => ({ key: 'k:' + k, name: KINDS[k], test: i => i.kind === k }));
-  else defs = (live ? liveEfforts.concat(LIVE_UNSORTED) : EFFORTS.concat(UNSORTED)).map(e => ({ key: 'e:' + e.id, effort: e, name: e.name, test: i => effortOf(i) === e.id }));
-  return defs.map(d => ({ ...d, items: sorted.filter(d.test) })).filter(g => g.items.length);
-}
-/* The one source the list is narrowed to, which it can be only while grouped by source. */
-const sourceShown = items => state.groupBy === 'source' && items.some(i => i.kind === state.srcFilter) ? state.srcFilter : 'all';
-const shownItems = (items = activeItems()) => { const src = sourceShown(items); return src === 'all' ? items : items.filter(i => i.kind === src); };
-const visibleOrder = () => groupItems(shownItems()).filter(g => !isShut(g.key)).flatMap(g => g.items.map(i => i.id));
+/* What needs the user, the most pressing first: the order Home lists it in. */
+const queue = () => activeItems().sort(byUrgency);
 
 let toastTimer;
 function toast(msg, undo, label = 'Undo') {
@@ -1012,9 +1052,9 @@ function announce(items) {
   if (!arrived.length) return;
   const first = arrived[0], one = arrived.length === 1;
   const msg = one ? `${KINDS[first.kind] || first.kind}: ${first.title || first.ask}` : `${cap(num(arrived.length))} new things need you`;
-  const show = () => { state.sel = first.id; go('attention'); save(); render(); };
+  const show = () => { state.sel = first.id; go('home'); save(); render(); };
   freshId = first.id;
-  if (state.view !== 'attention') {
+  if (state.view !== 'home') {
     const n = $('#news');
     n.innerHTML = `<span>${esc(msg)}</span><button>Show</button>`;
     n.querySelector('button').onclick = () => { n.classList.remove('show'); show(); };
@@ -1031,7 +1071,7 @@ function announce(items) {
 }
 
 function resolve(id, how, note, opts = {}) {
-  const order = visibleOrder(), i = order.indexOf(id), it = itemById(id);
+  const order = queue().map(x => x.id), i = order.indexOf(id), it = itemById(id);
   state.handled[id] = { how, note: note || '', at: Date.now(), until: opts.until || 0 };
   if (state.sel === id) state.sel = order[i + 1] || order[i - 1] || null;
   const msg = opts.msg || { answered: `Sent to ${it.src}`, dismissed: 'Dismissed', snoozed: `Snoozed ${note}` }[how];
@@ -1065,48 +1105,19 @@ function openEffort(id) {
 /* Goes to a view the way the top bar does: Efforts opens on its board. */
 const visit = view => view === 'efforts' ? openEffort(null) : go(view);
 
-/* ───────────────────────── Attention ───────────────────────── */
+/* ───────────────────────── Home ───────────────────────── */
 
-function briefing(items) {
-  let text;
-  if (!items.length) text = 'Nothing needs you. Everything that is running can keep running without you.';
-  else {
-    const efforts = new Set(items.map(effortOf));
-    const blocking = items.filter(i => i.urgency === 'blocking'), awaiting = items.filter(i => i.urgency === 'awaiting');
-    const where = list => listOf([...new Set(list.map(i => effortById(effortOf(i)).name))]);
-    const count = (list, what) => `${cap(num(list.length))} ${list.length === 1 ? 'is' : 'are'} ${what}, in ${where(list)}.`;
-    const one = items.length === 1;
-    text = [`${cap(num(items.length))} thing${one ? '' : 's'} need${one ? 's' : ''} you across ${num(efforts.size)} effort${efforts.size === 1 ? '' : 's'}.`,
-      blocking.length ? count(blocking, 'blocking someone else') : '',
-      awaiting.length ? count(awaiting, 'awaiting you') : '',
-      !blocking.length && !awaiting.length ? 'Nobody is held up and nothing is stopped on you, so all of it will keep.' : items.length > blocking.length + awaiting.length ? 'The rest will keep.' : '',
-    ].filter(Boolean).join(' ');
-  }
-  const day = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
-  return `<div class="brief"><div class="when"><span class="label">${day}</span><span class="label">${live ? '' : spark}briefing</span></div><p>${esc(text)}</p>
-    ${live ? `<button class="link ${modelless() ? 'off' : ''}" data-act="wrapOpen" style="margin-top:8px;font-size:12.5px" title="${modelless() ? `${NO_MODEL} to write a wrap-up.` : "What moved today, by effort, on today's page of the journal (w)"}">Wrap up the day ›</button>` : ''}</div>`;
-}
-
-function rowHtml(it, act = 'select') {
-  const grouped = act === 'select' ? state.groupBy : 'effort';
-  const chips = `${grouped === 'source' ? '' : kindBadge(it.kind)}${it.live && it.session ? roleChip(it.session) + pullChip(it.session) + subChip(it.session) : ''}${grouped === 'effort' ? '' : `${effortChip(effortOf(it))}`}`;
+/* A thing that needs the user as a row under its effort, which leads to where it is answered. */
+function rowHtml(it, act = 'openItem') {
+  const chips = `${kindBadge(it.kind)}${it.live && it.session ? roleChip(it.session) + pullChip(it.session) + subChip(it.session) : ''}`;
   /* The short form keeps the title, its age and urgency, and the description. */
   const long = state.rows !== 'short';
-  return `<button class="row ${it.urgency} ${state.view === 'attention' && it.id === state.sel ? 'sel' : ''} ${it.id === freshId ? 'fresh' : ''}" data-act="${act}" data-id="${it.id}" style="${kindColor(it.kind)}">
+  return `<button class="row ${it.urgency} ${it.id === freshId ? 'fresh' : ''}" data-act="${act}" data-id="${it.id}" style="${kindColor(it.kind)}">
     <span class="h">${title(it, 't')}<span class="w"><span>${ago(ageOf(it))}</span>${it.urgency === 'whenever' ? '' : `<span class="tag ${it.urgency}">${it.urgency}</span>`}</span></span>
     ${it.subtitle && state.fluent ? `<span class="st">${esc(it.subtitle)}</span>` : ''}
     ${long && chips ? `<span class="m">${chips}</span>` : ''}
     ${long && it.live && it.session?.model ? `<span class="m"><span>${runsOn(it.session)}</span>${contextUse(it.session, true)}</span>` : ''}
   </button>`;
-}
-
-function handledFooter() {
-  const done = allItems().filter(i => !isActive(i));
-  const legend = modelless()
-    ? `<p>${NO_MODEL}, so only permission prompts, questions a session puts to you, failures and full contexts are raised here. A session that has simply stopped is under Sessions.</p>` : '';
-  if (!done.length) return legend ? `<div class="foot">${legend}</div>` : '';
-  const list = state.showHandled ? `<div class="handled">${done.map(i => `<div><span class="gen">${esc(i.title)}</span><span style="white-space:nowrap">${esc(state.handled[i.id].how)} · <button class="link" data-act="restore" data-id="${i.id}">restore</button></span></div>`).join('')}</div>` : '';
-  return `<div class="foot"><p style="margin-bottom:8px">${done.length} handled or snoozed · <button class="link" data-act="toggleHandled">${state.showHandled ? 'hide' : 'show'}</button></p>${list}${legend}</div>`;
 }
 
 function rawBlock(lines) {
@@ -1119,73 +1130,129 @@ function sessionRow(s, from) {
     <span class="side">${kindBadge(s.kind)} · ${STATUS[s.status]}</span></div>`;
 }
 
-function itemDetail(it) {
-  if (it.live) return liveItemDetail(it);
-  const eff = effortById(effortOf(it));
-  const v = (state.variant[it.id] || 0) % it.summary.length;
-  const siblings = SESSIONS.filter(s => sessEffort(s) === eff.id && s.id !== it.session);
-  const rawOpen = state.rawOpen[it.id] ?? !state.fluent;
-  let answer;
-  if (it.route) {
-    answer = `<div class="replies">${EFFORTS.map(e => `<button class="btn" data-act="route" data-id="${it.id}" data-effort="${e.id}">${esc(e.name)}</button>`).join('')}
+/* How one of the demo's items is answered: the efforts it could be filed under, or its suggested replies and a box. */
+function mockAnswer(it) {
+  if (it.route) return `<div class="replies">${EFFORTS.map(e => `<button class="btn" data-act="route" data-id="${it.id}" data-effort="${e.id}">${esc(e.name)}</button>`).join('')}
       <button class="btn quiet" data-act="dismiss" data-id="${it.id}">Leave unsorted</button></div>`;
-  } else {
-    const quick = (it.replies || []).map((r, i) => `<button class="btn ${i === 0 ? 'go' : ''}" data-act="reply" data-id="${it.id}" data-text="${esc(r)}">${esc(r)}</button>`).join('');
-    answer = `${quick ? `<div class="replies">${quick}</div>` : ''}
+  const quick = (it.replies || []).map((r, i) => `<button class="btn ${i === 0 ? 'go' : ''}" data-act="reply" data-id="${it.id}" data-text="${esc(r)}">${esc(r)}</button>`).join('');
+  return `${quick ? `<div class="replies">${quick}</div>` : ''}
       <textarea id="reply" data-id="${it.id}" data-keep="item-${it.id}" class="${it.draft ? 'drafted' : ''}" placeholder="Or say something else…">${esc(it.draft || '')}</textarea>
-      <div class="send"><span>${it.draft ? `${spark}Drafted for you. Edit before sending.` : `Goes back to the ${esc(it.src.toLowerCase())}.`}</span>
+      <div class="send"><span>${it.draft ? `${spark}Drafted for you. Edit before sending.` : ''}</span>
       <button class="btn ${quick ? '' : 'go'}" data-act="send" data-id="${it.id}">Send</button></div>`;
-  }
-  return `<div class="inner">
-    <div class="crumb"><button class="eff" data-act="effort" data-id="${eff.id}">${effortMark(eff, 's')}${esc(eff.name)} ›</button>${kindBadge(it.kind, it.src)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span></div>
-    <div class="titled"><h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>${itemMenu(it, `<button data-act="park" data-id="${it.id}">Park as open question</button>
-      ${menuPart('move', 'Move to', menuTo('moveTo', it.id, EFFORTS.concat(UNSORTED).filter(e => e.id !== eff.id).map(e => [e.id, e.name])))}`)}</div>
-    <div class="need"><div class="label">${spark}What's needed from you</div><p class="ask">${esc(it.ask)}</p>${answer}</div>
-    <div class="sec"><div class="label"><span>${spark}Recap</span><button data-act="rephrase" data-id="${it.id}">↻ ${v === 0 ? 'Shorter' : 'Fuller'}</button></div>
-      <p class="prose" id="summary">${esc(it.summary[v])}</p></div>
-    <div class="sec"><div class="label"><span>From the source, verbatim</span><button data-act="toggleRaw" data-id="${it.id}">${rawOpen ? 'Hide' : 'Show'}</button></div>
-      ${rawOpen ? rawBlock(it.lines) : `<div class="none mono">${esc(it.raw)}</div>`}</div>
-    <div class="sec"><div class="label"><span>Also going on in ${esc(eff.name)}</span></div>
-      ${siblings.length ? siblings.map(s => sessionRow(s)).join('') : '<div class="none">Nothing else is running here.</div>'}</div>
-  </div>`;
 }
 
-function viewAttention() {
-  const all = activeItems(), items = shownItems(all), src = sourceShown(all);
-  if (!items.some(i => i.id === state.sel)) state.sel = visibleOrder()[0] || null;
-  const present = Object.keys(KINDS).filter(k => all.some(i => i.kind === k));
-  const chips = state.groupBy === 'source' && present.length > 1
-    ? `<div class="chips">${[['all', 'All', all.length]].concat(present.map(k => [k, KINDS[k], all.filter(i => i.kind === k).length]))
-        .map(([k, name, n]) => `<button class="chip ${src === k ? 'on' : ''}" data-act="srcFilter" data-src="${k}">${k === 'all' ? '' : `<i style="${kindColor(k)}"></i>`}${esc(name)} <span class="n">${n}</span></button>`).join('')}</div>`
-    : '';
-  const groups = groupItems(items).map(g => {
-    const shut = state.collapsed[g.key];
-    const name = g.effort ? effortMark(g.effort, 's') + title(g.effort) : esc(g.name);
-    return `<div class="ghead">
-        <button class="name" data-act="collapse" data-key="${g.key}"><span class="chev ${shut ? 'shut' : ''}">▼</span> ${name}</button>
-        <span class="n">${g.items.length}</span>
-        ${g.effort && !(live && g.effort.id === 'unsorted') ? `<button class="open" data-act="effort" data-id="${g.effort.id}" title="Open this effort">open ›</button>` : ''}
+/* One thing that needs the user, as Home lists it: a row naming it and, for the one that is open, what is
+   asked, the means of answering it there, and the way to where it lives. */
+function queueItem(it, open) {
+  const s = it.live && !it.feed ? it.session : null, p = it.feed ? pullOfItem(it) : null;
+  const head = `<button class="qh" data-act="select" data-id="${it.id}" aria-expanded="${open}">
+      <span class="h">${title(it, 't')}<span class="w">${it.urgency === 'whenever' ? '' : `<span class="tag ${it.urgency}">${it.urgency}</span>`}<span>${ago(ageOf(it))}</span></span></span>
+      ${!open && it.subtitle && state.fluent ? `<span class="st">${esc(it.subtitle)}</span>` : ''}
+      <span class="m">${kindBadge(it.kind)}${effortChip(effortOf(it))}${s ? roleChip(s) + pullChip(s) : ''}</span></button>`;
+  if (!open) return `<div class="qi ${it.id === freshId ? 'fresh' : ''}" style="${kindColor(it.kind)}">${head}</div>`;
+  const point = p && it.point && (p.points || []).find(x => x.id === it.point);
+  const ask = point ? pointHtml(p, point) : it.ask ? `<p class="ask">${esc(it.ask)}</p>` : '';
+  let answer, menu, where = '';
+  if (s) {
+    answer = answerBox(s, it);
+    menu = sessionMenu(s, it);
+    where = `<button class="btn quiet" data-act="openItem" data-id="${it.id}">Open session ›</button>`;
+  } else if (it.feed) {
+    answer = `<div class="replies">${!point && /^https:\/\//.test(it.url || '') ? `<a class="btn go" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">Open on ${esc(it.src)} ↗</a>` : ''}</div>`;
+    menu = itemMenu(it, `<button data-act="livePark" data-id="${it.id}">Park as open question</button>
+      ${menuPart('move', `File ${esc(it.repo)} under`, menuTo('repoMoveTo', it.id, effortsBut(it.effort)))}`);
+    where = p ? `<button class="btn quiet" data-act="openItem" data-id="${it.id}">Its discussion ›</button>` : '';
+  } else {
+    answer = mockAnswer(it);
+    menu = itemMenu(it, `<button data-act="park" data-id="${it.id}">Park as open question</button>
+      ${menuPart('move', 'Move to', menuTo('moveTo', it.id, EFFORTS.concat(UNSORTED).filter(e => e.id !== effortOf(it)).map(e => [e.id, e.name])))}`);
+  }
+  return `<div class="qi open ${it.id === freshId ? 'fresh' : ''}" style="${kindColor(it.kind)}">${head}
+    <div class="need qb">${ask}${answer}<div class="qf"><span>${where}</span>${menu}</div></div></div>`;
+}
+
+/* What needs the user, the most pressing first and open, with what has been handled behind a button. */
+function homeQueue() {
+  const items = queue(), done = allItems().filter(i => !isActive(i));
+  if (!items.some(i => i.id === state.sel)) state.sel = items[0]?.id || null;
+  return `<div class="sec"><div class="label"><span>Needs you${items.length ? ` (${items.length})` : ''}</span>
+      ${done.length ? `<button data-act="toggleHandled" aria-expanded="${!!state.showHandled}">${done.length} handled ${state.showHandled ? '▴' : '▾'}</button>` : ''}</div>
+    ${items.length ? `<div class="queue">${items.map(i => queueItem(i, i.id === state.sel)).join('')}</div>` : '<div class="none">Nothing.</div>'}
+    ${done.length && state.showHandled ? `<div class="handled">${done.map(i => `<div><span class="gen">${esc(i.title)}</span><span style="white-space:nowrap">${esc(state.handled[i.id].how)} · <button class="link" data-act="restore" data-id="${i.id}">restore</button></span></div>`).join('')}</div>` : ''}</div>`;
+}
+
+/* What moved today, by effort in the user's order: each session that did anything, the latest first, with
+   what the model made of its last exchanges or, where it wrote nothing, what the user said. A session that
+   closed today says how it stood. */
+const isToday = at => !!at && new Date(at).toDateString() === new Date().toDateString();
+const TODAY_LINES = 2;
+function todayGroups() {
+  if (!live) return (MOCK_JOURNAL.find(d => d.day === dayKey(0))?.efforts || []).map(e => ({ effort: effortById(e.id),
+    rows: e.sessions.map(s => ({ id: s.id, label: s.label, dot: ['done', 'finished'], lines: e.points.filter(p => p.sessions.includes(s.id)).map(p => [p.text, true]), more: 0 })) }));
+  const rows = live.map(s => {
+    const moments = (s.timeline || []).filter(m => !m.compacted && isToday(m.at));
+    if (!moments.length && !isToday(s.activeAt)) return null;
+    return { id: s.id, effort: s.effort || 'unsorted', label: s.label, at: s.activeAt, dot: statusOf(s),
+      lines: moments.slice(-TODAY_LINES).reverse().map(m => m.line ? [m.line, true] : [m.prompt, false]), more: Math.max(0, moments.length - TODAY_LINES) };
+  }).filter(Boolean).concat(archive.filter(a => isToday(a.endedAt) && !live.some(s => s.id === a.id))
+    .map(a => ({ id: a.id, effort: a.effort || 'unsorted', label: a.label, at: a.endedAt, dot: ['done', 'closed'], lines: a.title ? [[a.title, true]] : [], more: 0 })));
+  return liveEfforts.concat(LIVE_UNSORTED).map(e => ({ effort: e, rows: rows.filter(r => r.effort === e.id).sort((a, b) => new Date(b.at) - new Date(a.at)) })).filter(g => g.rows.length);
+}
+function homeToday() {
+  const groups = todayGroups();
+  const row = r => `<div class="tr"><div class="th"><span class="dot ${r.dot[0]}" title="${r.dot[1]}"></span>${live ? `<button data-act="journalSession" data-id="${esc(r.id)}">${esc(clip(r.label, 80))}</button>` : `<span>${esc(r.label)}</span>`}
+        ${r.at ? `<span class="w">${ago(minsSince(r.at))}</span>` : ''}</div>
+      ${r.lines.length ? `<ul>${r.lines.map(([text, written]) => `<li class="${written ? '' : 'you'}">${esc(clip(text, written ? 180 : 110))}</li>`).join('')}${r.more ? `<li class="more">and ${num(r.more)} earlier</li>` : ''}</ul>` : ''}</div>`;
+  return `<div class="sec"><div class="label"><span>Today</span><button data-act="wrapOpen" title="Today's page of the journal (w)">Journal ›</button></div>
+    ${groups.length ? groups.map(g => `<div class="tg"><button class="eff" data-act="effort" data-id="${g.effort.id}">${effortMark(g.effort, 's')}${esc(g.effort.name)}</button>${g.rows.map(row).join('')}</div>`).join('')
+      : '<div class="none">Nothing yet.</div>'}</div>`;
+}
+
+/* The box on Home that a session is started from: the prompt, what it runs on, the effort and the directory,
+   with the rest behind a button. It is the form the New Session dialog holds, on the same draft, so there is
+   none here while that dialog is open. */
+let homeMore = false;
+function homeStart() {
+  if (!live || modal === 'start') return '';
+  if (!startDraft.claude) draftStart('', state.startDir || '');
+  loadStartCatalog();
+  const on = startWith, last = startDraft[on], local = localName(), problem = startProblem();
+  const way = (id, label, off) => `<button type="button" class="${on === id ? 'on' : ''}" data-act="startWith" data-to="${id}" aria-pressed="${on === id}" ${off ? `disabled title="${esc(off)}"` : ''}>${esc(label)}</button>`;
+  const pick = (name, label, options, chosen) => `<label><span>${label}</span><select class="btn" name="${name}" data-keep="start-${on}-${name}">${options.map(([v, t]) => `<option value="${esc(v)}" ${v === (chosen || '') ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`;
+  const kept = (name, value) => `<input type="hidden" name="${name}" value="${esc(value ?? '')}">`;
+  const runs = on === 'claude' ? [['model', last.model], ['effortLevel', last.effortLevel]] : on === 'local' ? [['temperature', last.temperature]] : [];
+  const more = !homeMore ? kept('name', startDraft.name) + kept('role', startDraft.role) + runs.map(([name, value]) => kept(name, value)).join('')
+    : `<div class="cmore">
+        <label class="${knowledge.roles.length ? '' : 'wide'}"><span>Name <i>optional</i></span><input name="name" data-keep="start-name" value="${esc(startDraft.name)}" maxlength="80" autocomplete="off"></label>
+        ${knowledge.roles.length ? pick('role', 'Slorp role', [['', 'No role']].concat(knowledge.roles.map(r => [r.id, esc(r.name)])), startDraft.role) : ''}
+        ${on === 'claude' ? pick('model', 'Model', START_MODELS, last.model) + pick('effortLevel', 'Effort level', START_EFFORTS, last.effortLevel)
+          : on === 'opencode' ? openCodeOptions() : `<div class="field"><span>Thinking</span><div class="seg" role="group" aria-label="Thinking"><button type="button" class="${startThinking ? 'on' : ''}" data-act="startThinking" data-to="1" aria-pressed="${startThinking}">On</button><button type="button" class="${startThinking ? '' : 'on'}" data-act="startThinking" data-to="" aria-pressed="${!startThinking}">Off</button></div></div>
+            <label><span>Temperature <i>optional</i></span><input name="temperature" type="number" min="0" max="2" step="0.05" data-keep="start-temperature" value="${esc(last.temperature ?? '')}" placeholder="The model's own"></label>`}</div>`;
+  return `<form class="compose" data-form="start" data-id="${esc(starting || 'unsorted')}" data-engine="${on}">
+      <textarea name="prompt" data-keep="start-prompt" placeholder="Start a session…" required aria-label="Prompt for a new session">${esc(startDraft.prompt)}</textarea>
+      <div class="cbar">
+        <div class="seg" role="group" aria-label="What it runs on">${way('claude', 'Claude Code', lifecycleCap('claude', 'start') ? '' : 'Starting Claude is not supported')}${way('opencode', 'OpenCode', lifecycleCap('opencode', 'start') && lifecycleCap('opencode', 'launchOptions') ? '' : 'Starting OpenCode is not supported')}${way('local', local || 'Local model', !local ? 'No local model is running' : lifecycleCap('claude', 'start') ? '' : 'Starting Claude is not supported')}</div>
+        <select class="btn" name="effortPick" data-keep="start-effort" aria-label="Effort to file it under">${[['', 'No effort']].concat(openEfforts().map(e => [e.id, e.name])).map(([id, name]) => `<option value="${esc(id)}" ${id === (starting || '') ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select>
+        <input name="dir" class="mono" data-keep="start-dir" list="start-dirs" value="${esc(startDraft.dir)}" placeholder="~/dev/project" required spellcheck="false" autocomplete="off" aria-label="Directory">
+        <datalist id="start-dirs">${startDirs().map(d => `<option value="${esc(d)}"></option>`).join('')}</datalist>
+        <button type="button" class="btn quiet" data-act="homeMore" aria-expanded="${homeMore}">Options ${homeMore ? '▴' : '▾'}</button>
+        <button class="btn go" ${launching || problem ? 'disabled' : ''} title="${esc(problem)}">${launching ? 'Starting…' : 'Start'}</button>
       </div>
-      ${g.effort && g.effort.line && state.fluent && !shut ? `<div class="gline">${esc(g.effort.line)}</div>` : ''}
-      ${shut ? '' : g.items.map(i => rowHtml(i)).join('')}`;
-  }).join('');
-  const seg = ['effort', 'urgency', 'source'].map(b => `<button class="${state.groupBy === b ? 'on' : ''}" data-act="group" data-by="${b}">${cap(b)}</button>`).join('');
-  const rows = ['long', 'short'].map(as => `<button class="${(state.rows || 'long') === as ? 'on' : ''}" data-act="rows" data-as="${as}">${cap(as)}</button>`).join('');
-  const sel = state.sel && itemById(state.sel);
-  const sided = sel && sel.live && !sel.feed;
-  const side = sided ? sessionSide(sel.session, sel.summary, false, 'att-side') : '';
-  return `<div class="split ${sided ? 'sided' : ''} ${sided && state.sideShut ? 'shut' : ''}">
-    <section class="pane list" data-scroll="att-list">
-      ${briefing(all)}
-      <div class="listbar"><span class="label">Needs you</span><span class="segs"><span class="seg" role="group" aria-label="Group by">${seg}</span>
-        <span class="seg" role="group" aria-label="How much each row shows" title="Short rows show only the title, how long ago, and the description.">${rows}</span></span></div>
-      ${chips}
-      ${groups}
-      ${handledFooter()}
-    </section>
-    <section class="pane detail" data-scroll="att-${state.sel}">${sel ? itemDetail(sel) : `<div class="empty">${spark}All clear. Go make something.</div>`}</section>
-    ${side}
-  </div>`;
+      ${more}
+      ${on === 'opencode' && !homeMore ? `<div class="cwhy" role="status" id="start-status">${esc(problem)}</div>` : ''}
+    </form>`;
+}
+
+/* Home: the day and what the journal says of it, the box a session is started from and what needs the user,
+   beside what moved today. */
+function viewHome() {
+  const day = (live ? journal : MOCK_JOURNAL).find(d => d.day === dayKey(0));
+  return `<div class="full" data-scroll="home"><div class="page home"><div>
+      <h1>${new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}</h1>
+      ${day?.headline && state.fluent ? `<p class="subt">${spark}${esc(day.headline)} <span class="age">${ago(minsSince(day.at))}</span></p>` : ''}
+      ${homeStart()}
+      ${homeQueue()}
+    </div><aside>${homeToday()}</aside></div></div>`;
 }
 
 /* ───────────────────────── Efforts ───────────────────────── */
@@ -1215,7 +1282,6 @@ function effortDetail(e) {
 }
 
 const VIA = { you: 'filed by you', rule: 'filed by directory', guess: 'filed by the model' };
-const VIA_REPO = { you: 'repository filed by you', rule: 'a checkout is in this effort' };
 
 function moveSelect(s) {
   const cur = s.effort || 'unsorted';
@@ -1275,16 +1341,17 @@ function runSearch() {
   fetch('/api/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ q }) })
     .then(r => r.ok ? r.json() : { hits: [] }).then(d => { if (n === searchSeq) { hits = d.hits || []; hitSel = 0; render(); } }).catch(() => {});
 }
+/* Goes to a session under Sessions, open or closed, unfolding the part of the list it is in. */
+function showSession(id) {
+  const s = live.find(x => x.id === id);
+  state.actSel = id;
+  state.collapsed[!s ? 'act:closed' : itemOf(s) ? 'act:needs' : 'act:active'] = false;
+  go('sessions');
+}
 function openHit(x) {
   if (!x) return;
   modal = null;
-  const item = !x.closed && liveItems.find(i => i.session && i.session.id === x.sessionId && isActive(i));
-  if (item) { state.sel = item.id; go('attention'); }
-  else {
-    state.actSel = x.sessionId;
-    state.collapsed[x.closed ? 'act:closed' : 'act:active'] = false;
-    go('sessions');
-  }
+  showSession(x.sessionId);
   save(); render();
   $('.row.sel')?.scrollIntoView({ block: 'center' });
 }
@@ -1381,11 +1448,11 @@ function roleChip(s) {
   const r = s.role && roleById(s.role);
   return r ? `<span class="role" title="${s.roleVia === 'guess' ? 'The local model guessed this role' : 'You gave it this role'}">${s.roleVia === 'guess' ? spark : ''}${esc(r.name)}</span>` : '';
 }
-/* What a session's role keeps from Attention, when the user chose the role. */
+/* What a session's role keeps from Home, when the user chose the role. */
 function roleNote(s) {
   const r = s.roleVia === 'you' && roleById(s.role);
   return r && r.attention !== 'all'
-    ? `<div class="none" style="margin-bottom:10px">As a ${esc(r.name)} session it ${r.attention === 'none' ? 'never shows under Attention' : 'shows under Attention only when it is stopped'}.</div>` : '';
+    ? `<div class="none" style="margin-bottom:10px">As a ${esc(r.name)} session it ${r.attention === 'none' ? 'never shows on Home' : 'shows on Home only when it is stopped'}.</div>` : '';
 }
 
 /* Starting a session: the effort the dialog was opened from, or none when it was opened from Sessions, whether
@@ -1498,11 +1565,16 @@ const START_MODELS = [['', 'Default'], ['fable', 'Fable'], ['opus', 'Opus'], ['s
 const START_EFFORTS = [['', 'Default'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max']];
 const localName = () => summarizer.model ? summarizer.model.split('/').pop() : '';
 function openStart(effort) {
-  if (launching || partialStart || startAttempt) { modal = 'start'; modalFocus = true; return; }
+  modal = 'start'; modalFocus = true;
+  if (!(launching || partialStart || startAttempt)) draftStart(effort);
+}
+/* Begins the draft of a new session afresh: under an effort or none, in a directory or the effort's first,
+   and running on what the last one started ran on. */
+function draftStart(effort, dir = '') {
   const last = state.startOpts || {};
-  starting = effort; launching = false; modal = 'start'; modalFocus = true;
+  starting = effort; launching = false;
   startWith = ['claude', 'opencode', 'local'].includes(last.engine) ? last.engine : 'claude';
-  startDraft = { dir: starting ? startDirs()[0] || '' : '', name: '', role: '', prompt: '',
+  startDraft = { dir: dir || (starting ? startDirs()[0] || '' : ''), name: '', role: '', prompt: '',
     claude: { model: last.model || '', effortLevel: last.effortLevel || '' }, local: { temperature: last.temperature ?? '' },
     opencode: { agentName: '', model: '', variant: '' } };
   startCatalog = {}; ++catalogVersion; clearTimeout(catalogTimer);
@@ -1978,7 +2050,7 @@ document.addEventListener('dragend', () => {
 /* The Sessions list: the sessions in two parts that fold, each a run of rows, beside the page of the one selected. */
 function sessionsView(parts, detail, side = '') {
   const rows = ['long', 'short'].map(as => `<button class="${(state.rows || 'long') === as ? 'on' : ''}" data-act="rows" data-as="${as}">${cap(as)}</button>`).join('');
-  const list = parts.map(([key, name, n, line, html]) => {
+  const list = parts.filter(Boolean).map(([key, name, n, line, html]) => {
     const shut = isShut('act:' + key);
     return `<div class="ghead"><button class="name" data-act="collapse" data-key="act:${key}"><span class="chev ${shut ? 'shut' : ''}">▼</span> ${name}</button><span class="n">${n}</span></div>
       ${shut ? '' : `${line ? `<div class="gline">${line}</div>` : ''}${html}`}`;
@@ -2012,7 +2084,7 @@ function viewSessions() {
     <div class="crumb"><button class="eff" data-act="effort" data-id="${sessEffort(s)}">${effortMark(effortById(sessEffort(s)), 's')}${esc(effortById(sessEffort(s)).name)} ›</button>${kindBadge(s.kind)}${stat(s.status, STATUS[s.status])}<span>active ${ago(s.last)}</span><span>started ${ago(s.started)}</span><span class="mono">${esc(s.where)}</span></div>
     <h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? s.title : s.raw)}</h1>
     ${state.fluent ? `<p class="subt">${spark}${esc(s.doing)}</p>` : ''}
-    ${it ? `<div class="need"><div class="label">${spark}What's needed from you</div><p class="ask">${esc(it.ask)}</p><div class="replies"><button class="btn go" data-act="openItem" data-id="${it.id}">Answer it under Attention ›</button></div></div>` : ''}
+    ${it ? `<div class="need"><div class="label">${spark}What's needed from you</div><p class="ask">${esc(it.ask)}</p><div class="replies"><button class="btn go" data-act="openItem" data-id="${it.id}">Answer it on Home ›</button></div></div>` : ''}
     <div class="sec"><div class="label"><span>Its last output, verbatim</span></div>${rawBlock(s.tail.map(t => ['last output', t]))}</div>
   </div>`;
   return sessionsView([
@@ -2054,7 +2126,7 @@ const rawOf = s => `${s.agent} · ${shortPath(s.cwd)} · ${s.id.slice(0, 8)}`;
 const statusOf = s => LIVE_STATUS[s.status] || LIVE_STATUS.idle;
 /* Whether there is nowhere for pull requests to come from: the service is there and GitHub is not turned on. */
 const pullsOff = () => !!live && !integrations.find(i => i.id === 'github')?.enabled;
-/* The item a session has under Attention, while the user has yet to deal with it. */
+/* The item a session has on Home, while the user has yet to deal with it. */
 const itemOf = s => liveItems.find(i => i.session && i.session.id === s.id && isActive(i));
 
 async function refresh(force) {
@@ -2088,7 +2160,7 @@ async function refresh(force) {
   render();
 }
 
-/* Server items take the mock items' shape so the Attention pane draws both.
+/* Server items take the mock items' shape so Home draws both.
    An item with a source came from an integration's feed and has no session. */
 function toItems(data) {
   const byId = Object.fromEntries(data.sessions.map(s => [s.id, s]));
@@ -2210,14 +2282,10 @@ const alsoRows = (effort, except) => {
         <div class="body"><div class="ttl">${esc(clip(x.label, 90))}</div></div>
         <span class="side">${kindBadge(x.agent)} · ${(LIVE_STATUS[x.status] || LIVE_STATUS.idle)[1]}</span></div>`).join('') : '<div class="none">No other sessions here.</div>' };
 };
-const alsoIn = (effort, except) => `<div class="sec"><div class="label"><span>Also going on in ${esc(effortById(effort).name)}</span></div>
-      ${alsoRows(effort, except).html}</div>`;
 
-/* A feed item: nothing to reply to, only somewhere to go. Moving it files its
-   whole repository, since that is what the next items from there go by. */
-/* The sessions working on the branch a pull request's item is about, each with a box to tell it so. */
+/* The pull request an integration's item is about, if it is listed. */
 const pullOfItem = it => pulls.find(x => it.pull ? pullKey(x) === it.pull : x.url && x.url === it.url);
-const onBranch = it => branchSessions(pullOfItem(it));
+/* The sessions working on a pull request's branch, each with a box to tell it so. */
 function branchSessions(p) {
   const on = p ? sessionsOn(p) : [];
   if (!on.length) return '';
@@ -2229,26 +2297,6 @@ function branchSessions(p) {
         ? `<div class="livebox">${pullAsks(p, `live-${s.id}`) ? `<div class="replies">${pullAsks(p, `live-${s.id}`)}</div>` : ''}<textarea data-keep="live-${s.id}" placeholder="Tell this session…"></textarea>
             <div class="send"><span>Suggestions fill the box; nothing is sent until you press Send.</span><button class="btn go" data-act="liveSend" data-id="${s.id}">Send</button></div></div>`
         : `<div class="none" style="margin:4px 0 12px">It isn't running the Slorp mod, so tell it in its terminal: <span class="mono">${esc(shortPath(s.cwd))}</span></div>`}`).join('')}</div>`;
-}
-
-function feedItemDetail(it) {
-  const real = it.effort !== 'unsorted', p = pullOfItem(it), point = p && it.point && (p.points || []).find(x => x.id === it.point);
-  const menu = itemMenu(it, `<button data-act="livePark" data-id="${it.id}">Park as open question</button>
-    ${menuPart('move', `File ${esc(it.repo)} under`, menuTo('repoMoveTo', it.id, effortsBut(it.effort)))}`);
-  return `<div class="inner">
-    <div class="crumb">${real ? `<button class="eff" data-act="effort" data-id="${it.effort}">${effortMark(effortById(it.effort), 's')}${esc(effortById(it.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${real && VIA_REPO[it.effortVia] ? `<span>${VIA_REPO[it.effortVia]}</span>` : ''}${kindBadge(it.kind, it.src)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span><span class="mono">${esc(it.repo)}</span></div>
-    <div class="titled"><h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>${menu}</div>
-    <div class="need"><div class="label">${it.point ? spark : ''}What's needed from you</div>${point ? pointHtml(p, point) : `<p class="ask">${esc(it.ask)}</p>`}
-      ${/^https:\/\//.test(it.url || '') ? `<div class="replies" ${point ? 'style="margin-top:14px"' : ''}>${point ? '' : `<a class="btn go" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">Open on ${esc(it.src)} ↗</a>`}
-        ${p ? `<button class="btn" data-act="pullOpen" data-id="${esc(pullKey(p))}">Its discussion, under PRs ›</button>` : ''}
-        <span class="none" style="align-self:center">Slorp only ever reads ${esc(it.src)}.</span></div>` : ''}</div>
-    ${onBranch(it)}
-    ${it.point && p ? `<div class="sec"><div class="label"><span>${p.brief ? spark : ''}Where it stands</span></div>${pullStands(p)}
-        <div class="none" style="margin-top:8px">${spark}The local model picked this out of the discussion of <span class="mono">${esc(it.pull)}</span>, as ${esc(it.src)} had it ${ago(minsSince(p.readAt || it.at))}.</div></div>`
-      : `<div class="sec"><div class="label"><span>Recap</span></div><p class="prose">${esc(it.summary)}</p>
-      <div class="none" style="margin-top:8px">As ${esc(it.src)} reported it ${ago(minsSince((feeds[it.source] || {}).at || it.at))}. No model wrote any of this.</div></div>`}
-    ${alsoIn(it.effort, '')}
-  </div>`;
 }
 
 /* Renders the Markdown an agent wrote. All of it is escaped before any
@@ -2497,7 +2545,7 @@ function answerBox(s, it) {
     <button class="btn go" data-act="${it ? 'liveItemSend' : 'liveSend'}" data-id="${it ? it.id : s.id}">Send</button></div>`;
 }
 
-/* A session's page. With the item it has under Attention it leads with what is needed; stands is how it stands, for its first line. */
+/* A session's page. With the item it has on Home it leads with what is needed; stands is how it stands, for its first line. */
 function sessionPage(s, it, stands) {
   const subtitle = it ? it.subtitle : s.status !== 'working' && s.insight?.title;
   const summary = it ? it.summary : s.insight?.summary;
@@ -2525,10 +2573,6 @@ function sessionSide(s, summary, stale, key) {
   return state.sideShut
     ? `<aside class="pane side"><button class="rail" data-act="side" title="Show the recap" aria-expanded="false"><span>‹</span>${label}</button></aside>`
     : `<aside class="pane side" data-scroll="${key}">${vitals(s)}<div class="head">${label}<button data-act="side" title="Hide this panel" aria-expanded="true">›</button></div>${goingOn(s, summary, stale)}${aboutSession(s)}${timeline(s, true)}</aside>`;
-}
-
-function liveItemDetail(it) {
-  return it.feed ? feedItemDetail(it) : sessionPage(it.session, it, `<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span>`);
 }
 
 function connect() {
@@ -2720,14 +2764,20 @@ function closedPage(a) {
   </div>`;
 }
 
-function viewSessionsLive() {
+/* The sessions the Sessions list shows, top to bottom: those that need the user, the other open ones, then the closed. */
+function liveShown() {
   const [open, closed] = liveSessions();
+  return (state.collapsed['act:needs'] ? [] : open.filter(itemOf)).concat(actShown(open.filter(s => !itemOf(s)), closed));
+}
+
+function viewSessionsLive() {
+  const [open, closed] = liveSessions(), needing = open.filter(itemOf), rest = open.filter(s => !itemOf(s));
   const find = id => open.find(s => s.id === id) || closed.find(a => a.id === id);
-  if (!find(state.actSel)) state.actSel = actShown(open, closed).map(x => x.id)[0] || null;
+  if (!find(state.actSel)) state.actSel = liveShown().map(x => x.id)[0] || null;
   const sel = find(state.actSel), isOpen = sel && open.includes(sel), it = isOpen && itemOf(sel);
   if (sel && !isOpen) fetchArchived(sel.id);
-  const n = k => open.filter(s => s.status === k).length;
-  const line = `${open.length ? `${cap(num(n('waiting')))} awaiting you, ${num(n('working'))} working, ${num(n('idle') + n('done') + n('failed'))} quiet.` : 'No agent sessions are open on this machine.'}${isOffline ? ' <b>The Slorp service stopped responding; this is the last it reported.</b>' : ''}`;
+  const n = k => rest.filter(s => s.status === k).length;
+  const line = `${rest.length ? `${cap(num(n('waiting')))} awaiting you, ${num(n('working'))} working, ${num(n('idle') + n('done') + n('failed'))} quiet.` : open.length ? '' : 'No agent sessions are open on this machine.'}${isOffline ? ' <b>The Slorp service stopped responding; this is the last it reported.</b>' : ''}`;
   let detail = '', side = '';
   if (isOpen) {
     const [dot, word] = statusOf(sel), stale = !it && sel.status === 'working';
@@ -2735,7 +2785,8 @@ function viewSessionsLive() {
     side = sessionSide(sel, it ? it.summary : sel.insight?.summary, stale, 'act-side');
   } else if (sel) detail = closedPage(sel);
   return sessionsView([
-    ['active', 'Active', open.length, line, open.map(sessionRowLive).join('')],
+    needing.length ? ['needs', 'Needs you', needing.length, '', needing.map(sessionRowLive).join('')] : null,
+    ['active', 'Active', rest.length, line, rest.map(sessionRowLive).join('')],
     ['closed', 'Closed', closed.length, closed.length ? '' : 'Sessions are kept here once they close.', closed.map(a => closedRow(a)).join('')],
   ], detail, side);
 }
@@ -3195,7 +3246,7 @@ const KB_LIVE_LEDE = {
   questions: 'Things you have not decided yet. They show under their effort, and the model reads them when it writes that effort\'s status.',
   context: 'Facts the model should always know. It reads them before describing any session, so changing one re-describes everything.',
   routing: 'Plain-language notes on how to file things, read by the model when it guesses an effort. Directories that file automatically are listed under each effort.',
-  roles: 'The kinds of session you tell apart, such as one that reviews pull requests on a loop. Give a session a role from the menu beside its name under Attention or Sessions. The local model guesses a role for the rest from what each role is about; a guess only labels a session, and never keeps it from asking for you.',
+  roles: 'The kinds of session you tell apart, such as one that reviews pull requests on a loop. Give a session a role from the menu beside its name on Home or under Sessions. The local model guesses a role for the rest from what each role is about; a guess only labels a session, and never keeps it from asking for you.',
 };
 /* Says which parts of the knowledge base nothing reads without a local model. */
 const KB_UNREAD = {
@@ -3222,7 +3273,7 @@ function integrationsBody() {
       <div class="body"><div class="nm">${esc(i.name)} <span class="tag ${i.enabled && i.available ? 'blocking' : 'whenever'}">${i.enabled ? (i.available ? 'on' : 'on, but unavailable') : 'off'}</span></div>
       <div class="why">${esc(i.about)}</div>
       <div class="meta"><span>${esc(i.detail)}</span></div>
-      ${(i.watches || []).length ? `<div class="seen">While it is on, Slorp lists under Attention:</div>${i.watches.map(l => `<div class="seen">· ${esc(l)}</div>`).join('')}${checked(i)}` : ''}
+      ${(i.watches || []).length ? `<div class="seen">While it is on, Slorp lists on Home:</div>${i.watches.map(l => `<div class="seen">· ${esc(l)}</div>`).join('')}${checked(i)}` : ''}
       ${i.lookups.length ? `<div class="seen">While it is on, the model may:</div>` : ''}
       ${i.lookups.map(l => `<div class="seen">· ${esc(l)}</div>`).join('')}</div>
       <button class="btn ${i.enabled ? '' : 'go'}" data-act="integrationToggle" data-id="${i.id}" data-on="${i.enabled ? '0' : '1'}" ${!i.enabled && !i.available ? 'disabled' : ''}>${i.enabled ? 'Turn off' : 'Turn on'}</button></div>`).join('');
@@ -3384,7 +3435,7 @@ function modelBody() {
     </form>`;
 }
 
-const keys = () => [[`1 – ${nav().length}`, nav().map(v => VIEW_NAMES[v] || cap(v)).join(', ')], [',', 'Settings'], ['j  k', `Next and previous in the ${listOf(['Attention', 'Sessions'].concat(pullsOff() ? [] : 'PRs', 'Journal'))} lists`], ['e', 'Dismiss the selected item'], ['s', 'Snooze the selected item for an hour'],
+const keys = () => [[`1 – ${nav().length}`, nav().map(v => VIEW_NAMES[v] || cap(v)).join(', ')], [',', 'Settings'], ['j  k', `Next and previous in the ${listOf(['Home', 'Sessions'].concat(pullsOff() ? [] : 'PRs', 'Journal'))} lists`], ['e', 'Dismiss the selected item'], ['s', 'Snooze the selected item for an hour'],
   ['r', 'Fluent or raw'], ['/  ⌘K', 'Search sessions'], ['w', "Today's page of the journal"], ['⌘↵', 'Send what is in a message box'], ['Esc', 'Close a menu, the search, or a rename']];
 
 const SETTINGS_LEDE = {
@@ -3400,7 +3451,7 @@ function settingsBody(sec) {
   if (!live) return '<div class="none">Integrations belong to the Slorp service, which this demo is not connected to.</div>';
   return `<div class="label">Agents</div>${agentsBody()}
     <div class="label" style="margin-top:34px">Tools</div>
-    <p class="lede" style="margin-bottom:10px">Tools Slorp reads, and never changes. While one is on, Slorp checks it every few minutes for things that need you and lists them under Attention, with no model involved. The local model may also look things up in it while it describes a session: it picks from the lookups listed and supplies only a number and, where there are several, which repository.</p>
+    <p class="lede" style="margin-bottom:10px">Tools Slorp reads, and never changes. While one is on, Slorp checks it every few minutes for things that need you and lists them on Home, with no model involved. The local model may also look things up in it while it describes a session: it picks from the lookups listed and supplies only a number and, where there are several, which repository.</p>
     ${modelless() ? `<p class="none" style="margin-bottom:10px">${NO_MODEL}, so nothing is looked up while describing a session. Checking for things that need you goes on as before.</p>` : ''}
     ${integrationsBody()}`;
 }
@@ -3448,7 +3499,7 @@ const rain = (() => {
   return want => { on = want; sync(); };
 })();
 
-const RENDER = { attention: viewAttention, efforts: viewEfforts, sessions: viewSessions, pulls: viewPulls, journal: viewJournal, knowledge: viewKnowledge, settings: viewSettings };
+const RENDER = { home: viewHome, efforts: viewEfforts, sessions: viewSessions, pulls: viewPulls, journal: viewJournal, knowledge: viewKnowledge, settings: viewSettings };
 
 function render() {
   if (dragged || filing) return;  // a card or a session's row is held: the page is drawn again when it is let go
@@ -3471,10 +3522,10 @@ function render() {
   document.documentElement.dataset.theme = state.theme;
   document.documentElement.dataset.look = state.look;
   rain(state.look === 'matrix');
-  if (state.view === 'pulls' && pullsOff()) { state.view = 'attention'; history.replaceState(place(), '', '#attention'); }
+  if (state.view === 'pulls' && pullsOff()) { state.view = 'home'; history.replaceState(place(), '', '#home'); }
   const main = RENDER[state.view]();  // first: it may settle the selection
   const n = activeItems().length;
-  $('#nav').innerHTML = nav().map(v => `<button class="${state.view === v ? 'on' : ''}" data-act="view" data-view="${v}">${VIEW_NAMES[v] || cap(v)}${v === 'attention' && n ? `<span class="count">${n}</span>` : ''}</button>`).join('');
+  $('#nav').innerHTML = nav().map(v => `<button class="${state.view === v ? 'on' : ''}" data-act="view" data-view="${v}">${VIEW_NAMES[v] || cap(v)}${v === 'home' && n ? `<span class="count">${n}</span>` : ''}</button>`).join('');
   const limitsScroll = $('#provider-limits')?.scrollLeft || 0;
   $('#tools').innerHTML = `
     <span class="model" ${modelless() ? `title="${esc(modelWhy(true))}"` : ''}><span class="dot ${live && isOffline ? 'error' : modelless() ? 'idle' : 'running'}"></span>${live ? (isOffline ? 'service offline' : `live · ${summarizer.model ? summarizer.model.split('/').pop() : 'no local model'}`) : 'qwen3:14b · local · caught up'}</span>${live ? usageTotal() + limitMeters() + `<span id="provider-limits" class="provider-limits" role="group" aria-label="Provider usage limits">${providerLimitMeters()}</span>` : ''}
@@ -3505,7 +3556,7 @@ function render() {
     if (!el.closest('[data-form="start"]') && el.dataset.keep in drafts) el.value = drafts[el.dataset.keep];
     if (el.dataset.keep === focused) { el.focus(); if (el.setSelectionRange && caret[0] != null) el.setSelectionRange(caret[0], caret[1]); }
   });
-  if (modal === 'start') syncStartSubmit();
+  if (modal === 'start' || $('form.compose')) syncStartSubmit();
   if (renameFocus) { renameFocus = false; $('.rename input')?.focus(); $('.rename input')?.select(); }
   if (card) document.querySelector(`.ecard[data-id="${CSS.escape(card)}"]`)?.focus({ preventScroll: true });
   if (editFocus) { editFocus = false; $('.eedit input')?.focus(); $('.eedit input')?.select(); }
@@ -3518,13 +3569,11 @@ const actions = {
   subRetry: d => { delete subDocs[d.id]; },
   view: d => visit(d.view),
   select: d => { state.sel = d.id; },
-  group: d => { state.groupBy = d.by; },
   rows: d => { state.rows = d.as; },
   liveMoveTo: d => changes.liveMove(d, { value: d.to }),
   liveRoleTo: d => changes.liveRole(d, { value: d.to }),
   repoMoveTo: d => changes.repoMove(d, { value: d.to }),
   moveTo: d => changes.move(d, { value: d.to }),
-  srcFilter: d => { state.srcFilter = d.src; },
   collapse: d => { state.collapsed[d.key] = !isShut(d.key); },
   noop: () => false,
   searchOpen: () => { openSearch(); },
@@ -3535,7 +3584,7 @@ const actions = {
   journalSel: d => { state.journalSel = d.id; },
   journalTag: d => { journalTag = d.only || journalTag !== d.tag ? d.tag : ''; },
   journalClear: () => { clearJournalSearch(); },
-  journalSession: d => { state.actSel = d.id; state.collapsed[live.some(s => s.id === d.id) ? 'act:active' : 'act:closed'] = false; go('sessions'); },
+  journalSession: d => showSession(d.id),
   tagOff: d => { tagDay(d.day, d.tag, false); return !live; },
   wrapCopy: d => {
     Promise.resolve().then(() => navigator.clipboard.writeText(wrapupMarkdown(entryOf(d.day))))
@@ -3598,7 +3647,14 @@ const actions = {
   },
   effort: d => openEffort(d.id),
   effortBoard: () => openEffort(null),
-  openItem: d => { state.sel = d.id; go('attention'); },
+  /* Goes to where a thing that needs the user lives: its session, its pull request, or else Home with it open. */
+  openItem: d => {
+    const it = itemById(d.id), p = it?.feed && pullOfItem(it);
+    if (it?.live && it.session) showSession(it.session.id);
+    else if (p) { state.pullSel = pullKey(p); go('pulls'); }
+    else { state.sel = d.id; go('home'); }
+  },
+  homeMore: () => { captureStart(); homeMore = !homeMore; },
   modelNoticeOff: () => { state.modelNoticeOff = true; },
   installMod: () => {
     if (installing || updating) return false;
@@ -3879,6 +3935,14 @@ document.addEventListener('input', e => {
 document.addEventListener('change', e => {
   if (e.target.closest('[data-form="start"]')) {
     captureStart();
+    /* Choosing an effort on Home files the session there and offers the effort's first directory, written
+       into the box as well as the draft because drawing the page again reads the form once more. */
+    if (e.target.name === 'effortPick') {
+      starting = e.target.value;
+      const dir = starting && startDirs()[0];
+      if (dir) e.target.form.elements.dir.value = startDraft.dir = dir;
+      loadStartCatalog(); render(); return;
+    }
     if (e.target.tagName !== 'SELECT') { syncStartSubmit(); return; }
     if (startWith === 'opencode' && e.target.name === 'model') startDraft.opencode.variant = '';
     render(); return;
@@ -3934,7 +3998,8 @@ document.addEventListener('submit', e => {
     launchSession('/api/sessions', body, () => {
       startAttempt = null;
       if (modal === 'start') modal = null;
-      state.startOpts = { ...state.startOpts, ...opts }; save();
+      state.startOpts = { ...state.startOpts, ...opts }; state.startDir = f.dir;
+      startDraft.prompt = startDraft.name = ''; save();
       toast('Started. It will show up here in a moment.');
     }).catch(err => {
       if (err.sessionId) {
@@ -3975,7 +4040,7 @@ document.addEventListener('keydown', e => {
     return;
   }
   if (modal || e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
-  const att = state.view === 'attention', card = e.target.matches?.('.ecard[data-id]') ? e.target : null;
+  const att = state.view === 'home', card = e.target.matches?.('.ecard[data-id]') ? e.target : null;
   if (card && (e.key === 'Enter' || e.key === ' ')) openEffort(card.dataset.id);
   else if (card && card.draggable && e.shiftKey && /^Arrow/.test(e.key)) {
     const shown = [...card.parentNode.querySelectorAll('.ecard[draggable]')], i = shown.indexOf(card), back = e.key === 'ArrowLeft' || e.key === 'ArrowUp';
@@ -3988,11 +4053,11 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'w') openToday();
   else if (e.key === '/' && live) openSearch();
   else if (att && (e.key === 'j' || e.key === 'k')) {
-    const order = visibleOrder(), i = order.indexOf(state.sel) + (e.key === 'j' ? 1 : -1);
+    const order = queue().map(x => x.id), i = order.indexOf(state.sel) + (e.key === 'j' ? 1 : -1);
     if (order[i]) state.sel = order[i];
   }
   else if (state.view === 'sessions' && (e.key === 'j' || e.key === 'k')) {
-    const order = actShown(...(live ? liveSessions() : mockSessions())).map(x => x.id), i = order.indexOf(state.actSel) + (e.key === 'j' ? 1 : -1);
+    const order = (live ? liveShown() : actShown(...mockSessions())).map(x => x.id), i = order.indexOf(state.actSel) + (e.key === 'j' ? 1 : -1);
     if (order[i]) state.actSel = order[i];
   } else if (state.view === 'pulls' && (e.key === 'j' || e.key === 'k')) {
     const order = pullsShown().map(pullKey), i = order.indexOf(state.pullSel) + (e.key === 'j' ? 1 : -1);
@@ -4009,7 +4074,7 @@ document.addEventListener('keydown', e => {
   else return;
   e.preventDefault();
   save(); render();
-  $('.row.sel')?.scrollIntoView({ block: 'nearest' });
+  $('.row.sel, .qi.open')?.scrollIntoView({ block: 'nearest' });
 });
 window.addEventListener('popstate', () => {
   const v = location.hash.slice(1);
