@@ -113,8 +113,8 @@ async function world(t, hash = 'sessions') {
     await response
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
   }
-  o.open = async () => {
-    await page.getByRole('button', { name: 'New Session', exact: true }).click()
+  o.open = async (from = '#tools') => {
+    await page.locator(from).getByRole('button', { name: 'New Session', exact: true }).click()
     return page.getByRole('dialog', { name: 'New Session' })
   }
   return o
@@ -146,7 +146,7 @@ for (const entry of ['sessions', 'effort']) test(`start OpenCode from ${entry} w
     await o.page.getByLabel('Hide empty Efforts').uncheck()
     await o.page.locator('[data-act="effort"][data-id="project"]').first().click()
   }
-  const dialog = await o.open()
+  const dialog = await o.open(entry === 'effort' ? '#main' : '#tools')
   assert.equal(await field(dialog, 'dir').inputValue(), entry === 'effort' ? '/work/project' : '')
   await field(dialog, 'dir').fill('/work/chosen directory')
   await field(dialog, 'prompt').fill('Review the implementation')
@@ -200,7 +200,7 @@ test('engine switches and SSE preserve independent options and common form value
   assert.equal(await field(dialog, 'effortLevel').inputValue(), 'high')
   await dialog.getByRole('button', { name: 'OpenCode', exact: true }).click()
   await o.tick()
-  assert.deepEqual(await dialog.locator('select').evaluateAll(els => Object.fromEntries(els.map(el => [el.name, el.value]))), { role: 'reviewer', agentName: 'plan', model: 'other/fast', variant: 'quick' })
+  assert.deepEqual(await dialog.locator('select').evaluateAll(els => Object.fromEntries(els.map(el => [el.name, el.value]))), { effortPick: '', role: 'reviewer', agentName: 'plan', model: 'other/fast', variant: 'quick' })
   assert.equal(await field(dialog, 'prompt').inputValue(), 'Keep this prompt')
   assert.equal(await field(dialog, 'name').inputValue(), 'Keep this name')
   await dialog.getByRole('button', { name: 'fixture', exact: true }).click()
@@ -557,7 +557,7 @@ test('partial start only restores the launch draft after an explicit new-session
   await retained.getByRole('button', { name: 'Prepare a new session' }).click()
   await dialog.waitFor()
   assert.equal(o.calls.filter(c => c.body).length, 1)
-  assert.deepEqual(await dialog.locator('select').evaluateAll(els => Object.fromEntries(els.map(el => [el.name, el.value]))), { role: 'reviewer', agentName: 'plan', model: 'other/fast', variant: 'quick' })
+  assert.deepEqual(await dialog.locator('select').evaluateAll(els => Object.fromEntries(els.map(el => [el.name, el.value]))), { effortPick: '', role: 'reviewer', agentName: 'plan', model: 'other/fast', variant: 'quick' })
   assert.equal(await field(dialog, 'name').inputValue(), 'Original task')
   assert.equal(await field(dialog, 'dir').inputValue(), '/work/project')
   assert.equal(await field(dialog, 'prompt').inputValue(), 'Do the work')

@@ -189,6 +189,7 @@ a.pr:hover, button.pr:hover { border-color: var(--k-github); color: var(--ink); 
 .icon { width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; color: var(--ink2); border: 1px solid var(--line); background: var(--raised); list-style: none; cursor: pointer; }
 .icon::-webkit-details-marker { display: none; }
 .top .icon { width: 30px; height: 30px; font-size: 16px; }
+.top .btn.new { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px 5px 9px; }
 .menu { position: relative; }
 .menu .pop { position: absolute; right: 0; top: 34px; width: 230px; background: var(--raised); border: 1px solid var(--line); border-radius: 9px; padding: 6px; box-shadow: 0 8px 28px rgb(0 0 0 / 0.16); }
 .menu .pop button { display: block; width: 100%; padding: 7px 9px; border-radius: 6px; }
@@ -383,27 +384,6 @@ h1 .pen:hover { color: var(--accent); background: var(--sel); }
 .home { display: grid; grid-template-columns: minmax(0, 740px) minmax(260px, 420px); gap: 0 56px; align-items: start; }
 .home .subt .age { margin-left: 6px; color: var(--ink3); font-size: 12px; white-space: nowrap; }
 .home aside .sec { margin-top: 8px; }
-.compose { margin-top: 24px; border: 1px solid var(--line); border-radius: 12px; background: var(--raised); transition: border-color 0.12s, box-shadow 0.12s; }
-.compose:focus-within { border-color: var(--ink3); box-shadow: 0 4px 16px rgb(0 0 0 / 0.07); }
-.compose textarea { display: block; width: 100%; min-height: 92px; padding: 14px 16px 8px; border: 0; border-radius: 12px; background: none; resize: vertical; font-size: 15px; line-height: 1.5; outline: none; }
-.cbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 10px 10px; }
-.cbar .seg button { padding: 4px 11px; font-size: 12.5px; }
-.cbar .seg button:disabled, .cmore .seg button:disabled { color: var(--ink3); opacity: 0.6; cursor: not-allowed; }
-.cbar select.btn, .cbar input { padding: 4px 9px; border: 1px solid var(--line); border-radius: 7px; background-color: var(--bg); font-size: 12.5px; }
-.cbar select.btn { padding-right: 24px; max-width: 150px; text-overflow: ellipsis; }
-.cbar input { flex: 1; min-width: 110px; }
-.cbar .btn.quiet { padding: 4px 8px; font-size: 12.5px; }
-.cbar .btn.go { padding: 5px 16px; }
-.cmore { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px 14px 14px; border-top: 1px solid var(--line); }
-.cmore .wide { grid-column: 1 / -1; }
-.cmore label, .cmore .field { display: grid; gap: 5px; min-width: 0; align-content: start; }
-.cmore label > span, .cmore .field > span { font-size: 12px; font-weight: 600; color: var(--ink2); }
-.cmore label > span i { font-style: normal; font-weight: 400; color: var(--ink3); }
-.cmore input, .cmore select.btn { width: 100%; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background-color: var(--bg); font-size: 13.5px; }
-.cmore select.btn { padding-right: 26px; }
-.cmore .seg { justify-self: start; }
-.cwhy { padding: 0 14px 10px; color: var(--ink3); font-size: 12px; }
-.cwhy:empty { display: none; }
 .queue { display: flex; flex-direction: column; gap: 8px; }
 .qi { border: 1px solid var(--line); border-left: 3px solid var(--k, var(--line)); border-radius: 0 10px 10px 0; background: var(--raised); }
 .qi.open { border-top-color: var(--ink3); border-right-color: var(--ink3); border-bottom-color: var(--ink3); }
@@ -613,7 +593,7 @@ button.ecard.new:hover { border-color: var(--ink3); color: var(--ink); }
 .modal.start label > span i { font-style: normal; font-weight: 400; color: var(--ink3); }
 .modal.start input, .modal.start textarea, .modal.start select.btn { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background-color: var(--bg); color: var(--ink); font-size: 14px; }
 .modal.start select.btn { padding-right: 26px; }
-.modal.start textarea { display: block; min-height: 130px; resize: vertical; line-height: 1.45; }
+.modal.start textarea { display: block; min-height: 110px; resize: vertical; line-height: 1.45; }
 .modal.start .seg { justify-self: start; }
 .modal.start .seg button { padding: 6px 14px; font-size: 13px; }
 .modal.start .seg button:disabled { color: var(--ink3); opacity: 0.6; cursor: not-allowed; }
@@ -683,6 +663,8 @@ button.ecard.new:hover { border-color: var(--ink3); color: var(--ink); }
 .add.model .send span:last-child { display: flex; gap: 8px; }
 .none.warn { color: var(--warn); }
 .card.set .why { max-width: 58ch; font-size: 13.5px; }
+.card.set > input, .card.set > select.btn { flex: none; width: 230px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background-color: var(--bg); font-size: 13.5px; }
+.card.set > select.btn { padding-right: 26px; }
 .icon.on { background: var(--sel); color: var(--ink); border-color: var(--ink3); }
 .facts.keys { gap: 9px 26px; }
 .card input[type="checkbox"] { width: 17px; height: 17px; margin: 4px 0 0 6px; accent-color: var(--accent); flex: none; }
@@ -1372,49 +1354,12 @@ function homeToday() {
       : '<div class="none">Nothing yet.</div>'}</div>`;
 }
 
-/* The box on Home that a session is started from: the prompt, what it runs on, the effort and the directory,
-   with the rest behind a button. It is the form the New Session dialog holds, on the same draft, so there is
-   none here while that dialog is open. */
-let homeMore = false;
-function homeStart() {
-  if (!live || modal === 'start') return '';
-  if (!startDraft.claude) draftStart('', state.startDir || '');
-  loadStartCatalog();
-  const on = startWith, last = startDraft[on], local = localName(), problem = startProblem();
-  const way = (id, label, off) => `<button type="button" class="${on === id ? 'on' : ''}" data-act="startWith" data-to="${id}" aria-pressed="${on === id}" ${off ? `disabled title="${esc(off)}"` : ''}>${esc(label)}</button>`;
-  const pick = (name, label, options, chosen) => `<label><span>${label}</span><select class="btn" name="${name}" data-keep="start-${on}-${name}">${options.map(([v, t]) => `<option value="${esc(v)}" ${v === (chosen || '') ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`;
-  const kept = (name, value) => `<input type="hidden" name="${name}" value="${esc(value ?? '')}">`;
-  const runs = on === 'claude' ? [['model', last.model], ['effortLevel', last.effortLevel]] : on === 'local' ? [['temperature', last.temperature]] : [];
-  const more = !homeMore ? kept('name', startDraft.name) + kept('role', startDraft.role) + runs.map(([name, value]) => kept(name, value)).join('')
-    : `<div class="cmore">
-        <label class="${knowledge.roles.length ? '' : 'wide'}"><span>Name <i>optional</i></span><input name="name" data-keep="start-name" value="${esc(startDraft.name)}" maxlength="80" autocomplete="off"></label>
-        ${knowledge.roles.length ? pick('role', 'Slorp role', [['', 'No role']].concat(knowledge.roles.map(r => [r.id, esc(r.name)])), startDraft.role) : ''}
-        ${on === 'claude' ? pick('model', 'Model', START_MODELS, last.model) + pick('effortLevel', 'Effort level', START_EFFORTS, last.effortLevel)
-          : on === 'opencode' ? openCodeOptions() : `<div class="field"><span>Thinking</span><div class="seg" role="group" aria-label="Thinking"><button type="button" class="${startThinking ? 'on' : ''}" data-act="startThinking" data-to="1" aria-pressed="${startThinking}">On</button><button type="button" class="${startThinking ? '' : 'on'}" data-act="startThinking" data-to="" aria-pressed="${!startThinking}">Off</button></div></div>
-            <label><span>Temperature <i>optional</i></span><input name="temperature" type="number" min="0" max="2" step="0.05" data-keep="start-temperature" value="${esc(last.temperature ?? '')}" placeholder="The model's own"></label>`}</div>`;
-  return `<form class="compose" data-form="start" data-id="${esc(starting || 'unsorted')}" data-engine="${on}">
-      <textarea name="prompt" data-keep="start-prompt" placeholder="Start a session…" required aria-label="Prompt for a new session">${esc(startDraft.prompt)}</textarea>
-      <div class="cbar">
-        <div class="seg" role="group" aria-label="What it runs on">${way('claude', 'Claude Code', lifecycleCap('claude', 'start') ? '' : 'Starting Claude is not supported')}${way('opencode', 'OpenCode', lifecycleCap('opencode', 'start') && lifecycleCap('opencode', 'launchOptions') ? '' : 'Starting OpenCode is not supported')}${way('local', local || 'Local model', !local ? 'No local model is running' : lifecycleCap('claude', 'start') ? '' : 'Starting Claude is not supported')}</div>
-        <select class="btn" name="effortPick" data-keep="start-effort" aria-label="Effort to file it under">${[['', 'No effort']].concat(openEfforts().map(e => [e.id, e.name])).map(([id, name]) => `<option value="${esc(id)}" ${id === (starting || '') ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select>
-        <input name="dir" class="mono" data-keep="start-dir" list="start-dirs" value="${esc(startDraft.dir)}" placeholder="~/dev/project" required spellcheck="false" autocomplete="off" aria-label="Directory">
-        <datalist id="start-dirs">${startDirs().map(d => `<option value="${esc(d)}"></option>`).join('')}</datalist>
-        <button type="button" class="btn quiet" data-act="homeMore" aria-expanded="${homeMore}">Options ${homeMore ? '▴' : '▾'}</button>
-        <button class="btn go" ${launching || problem ? 'disabled' : ''} title="${esc(problem)}">${launching ? 'Starting…' : 'Start'}</button>
-      </div>
-      ${more}
-      ${on === 'opencode' && !homeMore ? `<div class="cwhy" role="status" id="start-status">${esc(problem)}</div>` : ''}
-    </form>`;
-}
-
-/* Home: the day and what the journal says of it, the box a session is started from and what needs the user,
-   beside what moved today. */
+/* Home: the day and what the journal says of it and what needs the user, beside what moved today. */
 function viewHome() {
   const day = (live ? journal : MOCK_JOURNAL).find(d => d.day === dayKey(0));
   return `<div class="full" data-scroll="home"><div class="page home"><div>
       <h1>${new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}</h1>
       ${day?.headline && state.fluent ? `<p class="subt">${spark}${esc(day.headline)} <span class="age">${ago(minsSince(day.at))}</span></p>` : ''}
-      ${homeStart()}
       ${homeQueue()}
     </div><aside>${homeToday()}</aside></div></div>`;
 }
@@ -1619,9 +1564,8 @@ function roleNote(s) {
     ? `<div class="none" style="margin-bottom:10px">As a ${esc(r.name)} session it ${r.attention === 'none' ? 'never shows on Home' : 'shows on Home only when it is stopped'}.</div>` : '';
 }
 
-/* Starting a session: the effort the dialog was opened from, or none when it was opened from Sessions, whether
-   a start is on its way, what the session is to run on, and whether the local model is to think. The last
-   choices made are kept for the next one. */
+/* Starting a session: the effort it is to be filed under, whether a start is on its way, what the session is
+   to run on, and whether the local model is to think. */
 let starting = null, launching = false, startWith = 'claude', startThinking = true;
 let startDraft = {}, startCatalog = {}, catalogTimer, catalogVersion = 0;
 let partialStart = null, startAttempt = null, partialResume = null;
@@ -1725,25 +1669,29 @@ function openCodeOptions() {
     + pick('variant', 'OpenCode variant', options(startVariants().map(v => [v, v]), opts.variant, !opts.model || opts.model === data?.defaults.model ? data?.defaults.variant : ''))
     + `<div class="none wide" role="status"><span id="start-status">${esc(startProblem())}</span>${startCatalog.error ? ' <button type="button" class="btn" data-act="startCatalogRetry">Retry launch options</button>' : ''}</div>`;
 }
+const START_ENGINES = ['claude', 'opencode', 'local'];
 const START_MODELS = [['', 'Default'], ['fable', 'Fable'], ['opus', 'Opus'], ['sonnet', 'Sonnet'], ['haiku', 'Haiku']];
 const START_EFFORTS = [['', 'Default'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max']];
 const localName = () => summarizer.model ? summarizer.model.split('/').pop() : '';
+/* Opens the New Session dialog: for an effort when it is asked for from one, and otherwise from the defaults. */
 function openStart(effort) {
   modal = 'start'; modalFocus = true;
   if (!(launching || partialStart || startAttempt)) draftStart(effort);
 }
-/* Begins the draft of a new session afresh: under an effort or none, in a directory or the effort's first,
-   and running on what the last one started ran on. */
-function draftStart(effort, dir = '') {
-  const last = state.startOpts || {};
-  starting = effort; launching = false;
-  startWith = ['claude', 'opencode', 'local'].includes(last.engine) ? last.engine : 'claude';
-  startDraft = { dir: dir || (starting ? startDirs()[0] || '' : ''), name: '', role: '', prompt: '',
-    claude: { model: last.model || '', effortLevel: last.effortLevel || '' }, local: { temperature: last.temperature ?? '' },
+/* Begins the draft of a new session afresh from the defaults kept in Settings. Asked for from an effort, it is
+   filed there and starts in that effort's first directory; otherwise the default effort and directory stand. */
+function draftStart(effort) {
+  const d = state.startOpts || {};
+  starting = effort || (openEfforts().some(e => e.id === d.effort) ? d.effort : '');
+  launching = false;
+  startWith = START_ENGINES.includes(d.engine) ? d.engine : 'claude';
+  startDraft = { dir: (effort ? startDirs()[0] || d.dir : d.dir || (starting && startDirs()[0])) || '', name: '', prompt: '',
+    role: knowledge.roles.some(r => r.id === d.role) ? d.role : '',
+    claude: { model: d.model || '', effortLevel: d.effortLevel || '' }, local: { temperature: d.temperature ?? '' },
     opencode: { agentName: '', model: '', variant: '' } };
   startCatalog = {}; ++catalogVersion; clearTimeout(catalogTimer);
   loadStartCatalog();
-  startThinking = last.thinking !== false;
+  startThinking = d.thinking !== false;
 }
 function retainedSessionModal(p) {
   return `<div class="veil"><div class="modal start" data-act="noop" role="dialog" aria-label="Conversation retained">
@@ -1806,21 +1754,23 @@ function startModal() {
   if (!live || !e) { modal = null; return ''; }
   loadStartCatalog();
   const real = e.id !== 'unsorted', local = localName(), on = startWith, last = startDraft[on];
-  const dirs = startDirs(), first = startDraft.dir;
+  const dirs = startDirs(), first = startDraft.dir, roles = knowledge.roles.length;
+  const efforts = [['', 'No effort']].concat(openEfforts().concat(real && !openEfforts().includes(e) ? e : []).map(x => [x.id, x.name]));
   const pick = (name, label, options, chosen) => `<label><span>${label}</span><select class="btn" name="${name}" data-keep="start-${on}-${name}">${options.map(([v, t]) => `<option value="${esc(v)}" ${v === (chosen || '') ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`;
   const way = (id, label, off) => `<button type="button" class="${on === id ? 'on' : ''}" data-act="startWith" data-to="${id}" aria-pressed="${on === id}" ${off ? `disabled title="${esc(off)}"` : ''}>${esc(label)}</button>`;
   return `<div class="veil"><div class="modal start" data-act="noop" role="dialog" aria-label="New Session">
     <h2>New Session</h2>
     <form data-form="start" data-id="${e.id}" data-engine="${on}">
       <div class="seg wide" role="group" aria-label="What it runs on">${way('claude', 'Claude Code', lifecycleCap('claude', 'start') ? '' : 'Starting Claude is not supported')}${way('opencode', 'OpenCode', lifecycleCap('opencode', 'start') && lifecycleCap('opencode', 'launchOptions') ? '' : 'Starting OpenCode is not supported')}${way('local', local || 'Local model', !local ? 'No local model is running' : lifecycleCap('claude', 'start') ? '' : 'Starting Claude is not supported')}</div>
+      <label class="wide"><span>Prompt</span><textarea name="prompt" data-keep="start-prompt" placeholder="What should it do?" required ${first ? 'data-first' : ''}>${esc(startDraft.prompt)}</textarea></label>
       <label class="wide"><span>Directory</span><input name="dir" class="mono" data-keep="start-dir" list="start-dirs" value="${esc(first || '')}" placeholder="~/dev/project" required spellcheck="false" autocomplete="off" ${first ? '' : 'data-first'}>
         <datalist id="start-dirs">${dirs.map(d => `<option value="${esc(d)}"></option>`).join('')}</datalist></label>
-      <label class="${knowledge.roles.length ? '' : 'wide'}"><span>Name <i>optional</i></span><input name="name" data-keep="start-name" value="${esc(startDraft.name)}" maxlength="80" autocomplete="off"></label>
-      ${knowledge.roles.length ? pick('role', 'Slorp role', [['', 'No role']].concat(knowledge.roles.map(r => [r.id, esc(r.name)])), startDraft.role) : ''}
-      ${on === 'claude' ? pick('model', 'Model', START_MODELS, last.model) + pick('effortLevel', 'Effort', START_EFFORTS, last.effortLevel)
+      <label><span>File under</span><select class="btn" name="effortPick" data-keep="start-effort">${efforts.map(([id, name]) => `<option value="${esc(id)}" ${id === (real ? e.id : '') ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select></label>
+      ${roles ? pick('role', 'Slorp role', [['', 'No role']].concat(knowledge.roles.map(r => [r.id, esc(r.name)])), startDraft.role) : ''}
+      <label class="${roles ? 'wide' : ''}"><span>Name <i>optional</i></span><input name="name" data-keep="start-name" value="${esc(startDraft.name)}" maxlength="80" autocomplete="off"></label>
+      ${on === 'claude' ? pick('model', 'Model', START_MODELS, last.model) + pick('effortLevel', 'Effort level', START_EFFORTS, last.effortLevel)
         : on === 'opencode' ? openCodeOptions() : `<div class="field"><span>Thinking</span><div class="seg" role="group" aria-label="Thinking"><button type="button" class="${startThinking ? 'on' : ''}" data-act="startThinking" data-to="1" aria-pressed="${startThinking}">On</button><button type="button" class="${startThinking ? '' : 'on'}" data-act="startThinking" data-to="" aria-pressed="${!startThinking}">Off</button></div></div>
           <label><span>Temperature <i>optional</i></span><input name="temperature" type="number" min="0" max="2" step="0.05" data-keep="start-temperature" value="${esc(last.temperature ?? '')}" placeholder="The model's own"></label>`}
-      <label class="wide"><span>Prompt</span><textarea name="prompt" data-keep="start-prompt" placeholder="What should it do?" required ${first ? 'data-first' : ''}>${esc(startDraft.prompt)}</textarea></label>
       ${on === 'opencode' && startAttempt && !launching ? '<div class="none wide">Retrying unchanged options reuses the same request ID. <button type="button" class="btn" data-act="startReset">Prepare a new session</button> to intentionally create a separate conversation.</div>' : ''}
       <div class="mfoot wide"><span>${on === 'local' ? `Starts a Claude Code session in the background that runs on ${esc(local)}` : `Starts a ${on === 'opencode' ? 'OpenCode' : 'Claude Code'} session in the background`}${real ? `, filed under ${esc(e.name)}` : ''}.</span>
         <span class="bar"><button type="button" class="btn" data-act="modalClose">Cancel</button><button class="btn go" ${launching || startProblem() ? 'disabled' : ''} title="${esc(startProblem())}">${launching ? 'Starting…' : 'Start session'}</button></span></div>
@@ -2259,7 +2209,7 @@ function sessionsView(parts, detail, side = '') {
   }).join('');
   return `<div class="split ${side ? 'sided' : ''} ${side && state.sideShut ? 'shut' : ''}">
     <section class="pane list" data-scroll="act-list">
-      <div class="listbar"><span class="label">Sessions</span><span class="segs">${live ? '<button class="btn" data-act="startOpen" data-id="">New Session</button>' : ''}<span class="seg" role="group" aria-label="How much each row shows" title="Short rows show only the name, how it stands, and what it is doing.">${rows}</span></span></div>
+      <div class="listbar"><span class="label">Sessions</span><span class="segs"><span class="seg" role="group" aria-label="How much each row shows" title="Short rows show only the name, how it stands, and what it is doing.">${rows}</span></span></div>
       ${list}
     </section>
     <section class="pane detail" data-scroll="act-${state.actSel}">${detail || '<div class="empty">No session is selected.</div>'}</section>
@@ -3582,7 +3532,7 @@ function viewKnowledge() {
 
 /* ───────────────────────── Settings ───────────────────────── */
 
-const SETTINGS = { general: 'General', integrations: 'Integrations', model: 'Local model', keys: 'Keyboard' };
+const SETTINGS = { general: 'General', start: 'New sessions', integrations: 'Integrations', model: 'Local model', keys: 'Keyboard' };
 /* One setting: what it is called, what it does, and what changes it. */
 const setting = (name, about, control) => `<div class="card set"><div class="body"><div class="nm">${name}</div><div class="why">${about}</div></div>${control}</div>`;
 const choice = (act, cur, options, about) => `<span class="seg" role="group" aria-label="${about}">${options.map(([to, name]) => `<button class="${to === cur ? 'on' : ''}" data-act="${act}" data-to="${to}">${name}</button>`).join('')}</span>`;
@@ -3598,6 +3548,25 @@ function generalBody() {
     ${setting('Show legacy Attention view', 'Adds the Attention tab beside Home: what needs you, grouped by effort, urgency or source.', choice('attentionTo', state.legacyAttention ? 'on' : 'off', [['on', 'On'], ['off', 'Off']], 'Show legacy Attention view'))}
     ${setting('This page', 'Forgets what this browser keeps for the page: what you dismissed or snoozed, what was selected, and choices such as how lists are grouped.',
       `<button class="btn" data-act="reset">Reset</button>`)}`;
+}
+
+/* What the New Session dialog opens with, which this browser keeps. */
+function startBody() {
+  const d = state.startOpts || {}, local = localName();
+  const pick = (key, about, options) => `<select class="btn" data-change="startDefault" data-key="${key}" aria-label="${about}">${options.map(([v, t]) => `<option value="${esc(v)}" ${v === (d[key] || '') ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>`;
+  const seg = (key, cur, options, about) => `<span class="seg" role="group" aria-label="${about}">${options.map(([to, name]) => `<button class="${to === cur ? 'on' : ''}" data-act="startDefaultTo" data-key="${key}" data-to="${to}" aria-pressed="${to === cur}">${esc(name)}</button>`).join('')}</span>`;
+  return `${setting('Runs on', 'What a new session runs on.', seg('engine', START_ENGINES.includes(d.engine) ? d.engine : 'claude', [['claude', 'Claude Code'], ['opencode', 'OpenCode'], ['local', local || 'Local model']], 'What a new session runs on'))}
+    ${setting('Directory', 'Where a session starts, unless it is started from an effort that has a directory of its own.',
+      `<input class="mono" data-change="startDefault" data-key="dir" value="${esc(d.dir || '')}" placeholder="~/dev/project" list="default-dirs" spellcheck="false" autocomplete="off" aria-label="Default directory">
+       <datalist id="default-dirs">${[...new Set(live.map(s => s.cwd).concat(openEfforts().flatMap(e => e.dirs)).filter(Boolean).map(tilde))].map(dir => `<option value="${esc(dir)}"></option>`).join('')}</datalist>`)}
+    ${setting('Effort', 'The effort a session is filed under, unless it is started from another.', pick('effort', 'Default effort', [['', 'No effort']].concat(openEfforts().map(e => [e.id, e.name]))))}
+    ${knowledge.roles.length ? setting('Slorp role', 'The role a session is given.', pick('role', 'Default role', [['', 'No role']].concat(knowledge.roles.map(r => [r.id, r.name])))) : ''}
+    <div class="label" style="margin-top:34px">Claude Code</div>
+    ${setting('Model', 'The model a Claude Code session runs on. Default leaves it to Claude Code.', pick('model', 'Default model', START_MODELS))}
+    ${setting('Effort level', 'How hard it thinks. Default leaves it to Claude Code.', pick('effortLevel', 'Default effort level', START_EFFORTS))}
+    <div class="label" style="margin-top:34px">${esc(local || 'Local model')}</div>
+    ${setting('Thinking', 'Whether the local model thinks before it answers.', seg('thinking', d.thinking !== false ? 'on' : 'off', [['on', 'On'], ['off', 'Off']], 'Thinking'))}
+    ${setting('Temperature', 'From 0 to 2. Left empty, it is the model\'s own.', `<input type="number" min="0" max="2" step="0.05" data-change="startDefault" data-key="temperature" value="${esc(d.temperature ?? '')}" placeholder="The model's own" aria-label="Default temperature">`)}`;
 }
 
 /* The agents Slorp watches, each with the plugin that lets it be answered from here. */
@@ -3688,16 +3657,18 @@ function modelBody() {
 }
 
 const keys = () => [[`1 – ${nav().length}`, nav().map(v => VIEW_NAMES[v] || cap(v)).join(', ')], [',', 'Settings'], ['j  k', `Next and previous in the ${listOf(['Home', 'Sessions'].concat(pullsOff() ? [] : 'PRs', 'Journal'))} lists`], ['e', 'Dismiss the selected item'], ['s', 'Snooze the selected item for an hour'],
-  ['r', 'Fluent or raw'], ['/  ⌘K', 'Search sessions'], ['w', "Today's page of the journal"], ['⌘↵', 'Send what is in a message box'], ['Esc', 'Close a menu, the search, or a rename']];
+  ['r', 'Fluent or raw'], ['/  ⌘K', 'Search sessions'], ['n  ⌃N', 'Start a session'], ['w', "Today's page of the journal"], ['⌘↵', 'Send what is in a message box'], ['Esc', 'Close a menu, a dialog, or a rename']];
 
 const SETTINGS_LEDE = {
   general: 'How this page looks and behaves.',
+  start: 'What the New Session dialog opens with. Each can still be changed there before a session is started.',
   integrations: 'What Slorp is connected to: the agents whose sessions it watches, and the tools it reads.',
   model: 'Summaries, suggested replies, automatic filing and wrap-ups are written by a model on a server you choose, usually one running on this machine. What your sessions say is sent to that server and nowhere else.',
-  keys: 'They work anywhere outside a text box.',
+  keys: 'They work anywhere outside a text box; those with ⌘ or ⌃ work inside one too.',
 };
 function settingsBody(sec) {
   if (sec === 'general') return generalBody();
+  if (sec === 'start') return live ? startBody() : '<div class="none">Sessions are started through the Slorp service, which this demo is not connected to.</div>';
   if (sec === 'model') return live ? modelBody() : '<div class="none">The demo has no local model to report on.</div>';
   if (sec === 'keys') return `<dl class="facts keys">${keys().map(([k, what]) => `<dt class="mono">${k}</dt><dd>${what}</dd>`).join('')}</dl>`;
   if (!live) return '<div class="none">Integrations belong to the Slorp service, which this demo is not connected to.</div>';
@@ -3754,6 +3725,7 @@ const rain = (() => {
 /* What the top bar says the local model is doing, by the first word of what the service calls the work. */
 const MODEL_DOING = { describe: 'describing', file: 'filing', role: 'guessing a role', note: 'writing a note', brief: 'briefing', wrap: 'wrapping up', fill: 'filling in' };
 const ICONS = {
+  plus: '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>',
   search: '<svg viewBox="0 0 16 16" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.6"/><path d="M10.5 10.5 14 14"/></svg>',
   settings: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>',
 };
@@ -3790,7 +3762,8 @@ function render() {
     <span class="model" ${modelless() ? `title="${esc(modelWhy(true))}"` : busy ? `title="The local model is at work: ${esc(busy)}"` : ''}><span class="dot ${live && isOffline ? 'error' : modelless() ? 'idle' : busy ? 'running' : 'ready'}"></span>${live ? (isOffline ? 'service offline' : `live · ${summarizer.model ? summarizer.model.split('/').pop() : 'no local model'}${busy ? ` · <span class="busy">${spark}${MODEL_DOING[busy.split(' ')[0]] || 'working'}</span>` : ''}`) : 'qwen3:14b · local · caught up'}</span>${live ? usageTotal() + limitMeters() + `<span id="provider-limits" class="provider-limits" role="group" aria-label="Provider usage limits">${providerLimitMeters()}</span>` : ''}
     <span class="seg" role="group" aria-label="Voice" title="Fluent shows what the model wrote. Raw shows what the sources said. (r)">
       <button class="${state.fluent ? 'on' : ''}" data-act="fluent" data-on="1">Fluent</button><button class="${state.fluent ? '' : 'on'}" data-act="fluent" data-on="0">Raw</button></span>
-    ${live ? `<button class="icon" data-act="searchOpen" title="Search sessions (/ or ⌘K)" aria-label="Search sessions">${ICONS.search}</button>` : ''}
+    ${live ? `<button class="btn new" data-act="startOpen" data-id="" title="Start a session (n or ⌃N)">${ICONS.plus}New Session</button>
+    <button class="icon" data-act="searchOpen" title="Search sessions (/ or ⌘K)" aria-label="Search sessions">${ICONS.search}</button>` : ''}
     ${state.look === 'slorp' ? '<button class="icon" data-act="theme" title="Light or dark" aria-label="Toggle theme">◐</button>' : ''}
     <button class="icon ${state.view === 'settings' ? 'on' : ''}" data-act="view" data-view="settings" title="Settings (,)" aria-label="Settings">${ICONS.settings}</button>
     ${live ? '' : `<details class="menu" id="menu" ${menuOpen ? 'open' : ''}><summary class="icon" title="Demo controls" aria-label="Demo controls">⋯</summary>
@@ -3815,7 +3788,7 @@ function render() {
     if (!el.closest('[data-form="start"]') && el.dataset.keep in drafts) el.value = drafts[el.dataset.keep];
     if (el.dataset.keep === focused) { el.focus(); if (el.setSelectionRange && caret[0] != null) el.setSelectionRange(caret[0], caret[1]); }
   });
-  if (modal === 'start' || $('form.compose')) syncStartSubmit();
+  if (modal === 'start') syncStartSubmit();
   if (renameFocus) { renameFocus = false; $('.rename input')?.focus(); $('.rename input')?.select(); }
   if (card) document.querySelector(`.ecard[data-id="${CSS.escape(card)}"]`)?.focus({ preventScroll: true });
   if (editFocus) { editFocus = false; $('.eedit input')?.focus(); $('.eedit input')?.select(); }
@@ -3866,6 +3839,7 @@ const actions = {
   fluent: d => { state.fluent = d.on === '1'; },
   themeTo: d => { state.theme = d.to; },
   attentionTo: d => { state.legacyAttention = d.to === 'on'; },
+  startDefaultTo: d => { state.startOpts = { ...state.startOpts, [d.key]: d.key === 'thinking' ? d.to === 'on' : d.to }; },
   lookTo: d => { state.look = d.to; },
   setSel: d => { state.setSel = d.s; },
   modelCheck: () => { checkModel(); return false; },
@@ -3918,7 +3892,6 @@ const actions = {
     else if (p) { state.pullSel = pullKey(p); go('pulls'); }
     else { state.sel = d.id; go('home'); }
   },
-  homeMore: () => { captureStart(); homeMore = !homeMore; },
   turnLeave: d => {
     const order = homeOrder(), key = turnKey(d.id), i = order.indexOf(key);
     state.left[d.id] = live.find(s => s.id === d.id)?.activeAt;
@@ -4147,6 +4120,7 @@ const changes = {
     api('POST', `/api/sessions/${d.id}/role`, { role }, () => toast(role ? `Marked as ${roleById(role).name}` : 'No role'));
     return false;
   },
+  startDefault: (d, el) => { state.startOpts = { ...state.startOpts, [d.key]: el.checkValidity() ? el.value.trim() : '' }; },
   roleAttention: (d, el) => { api('POST', `/api/roles/${d.id}`, { attention: el.value }); return false; },
   move: (d, el) => {
     if (!el.value) return false;
@@ -4198,8 +4172,8 @@ document.addEventListener('input', e => {
 document.addEventListener('change', e => {
   if (e.target.closest('[data-form="start"]')) {
     captureStart();
-    /* Choosing an effort on Home files the session there and offers the effort's first directory, written
-       into the box as well as the draft because drawing the page again reads the form once more. */
+    /* Choosing an effort files the session there and offers the effort's first directory, written into the
+       box as well as the draft because drawing the page again reads the form once more. */
     if (e.target.name === 'effortPick') {
       starting = e.target.value;
       const dir = starting && startDirs()[0];
@@ -4261,8 +4235,7 @@ document.addEventListener('submit', e => {
     launchSession('/api/sessions', body, () => {
       startAttempt = null;
       if (modal === 'start') modal = null;
-      state.startOpts = { ...state.startOpts, ...opts }; state.startDir = f.dir;
-      startDraft.prompt = startDraft.name = ''; save();
+      startDraft.prompt = startDraft.name = '';
       toast('Started. It will show up here in a moment.');
     }).catch(err => {
       if (err.sessionId) {
@@ -4285,6 +4258,7 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && modal) { modal = null; render(); return; }
   if (e.key === 'Escape' && $('#acts')?.open) { $('#acts').removeAttribute('open'); return; }
   if ((e.metaKey || e.ctrlKey) && e.key === 'k' && live) { e.preventDefault(); openSearch(); render(); return; }
+  if ((e.metaKey || e.ctrlKey) && e.key === 'n' && live) { e.preventDefault(); if (modal !== 'start') { openStart(''); render(); } return; }
   /* ⌘↵ in a message box presses the button that sends it. */
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && e.target.tagName === 'TEXTAREA') {
     const form = e.target.closest('form[data-form="start"]');
@@ -4315,6 +4289,7 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'r') state.fluent = !state.fluent;
   else if (e.key === 'w') openToday();
   else if (e.key === '/' && live) openSearch();
+  else if (e.key === 'n' && live) openStart('');
   else if (att && (e.key === 'j' || e.key === 'k')) {
     const order = state.view === 'attention' ? visibleOrder() : homeOrder(), i = order.indexOf(state.sel) + (e.key === 'j' ? 1 : -1);
     if (order[i]) state.sel = order[i];
