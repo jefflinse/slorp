@@ -73,6 +73,8 @@ type Knowledge struct {
 	Roles   []Role `json:"roles"`
 	// Workspaces are offered wherever a directory is asked for.
 	Workspaces []Workspace `json:"workspaces"`
+	// Profiles are offered when a session is started.
+	Profiles []Profile `json:"profiles"`
 }
 
 // Sections of the knowledge base, as Add and Remove name them.
@@ -109,6 +111,7 @@ func (s *Store) Knowledge() Knowledge {
 		Routing:    append([]Fact{}, k.Routing...),
 		Roles:      append([]Role{}, k.Roles...),
 		Workspaces: append([]Workspace{}, k.Workspaces...),
+		Profiles:   append([]Profile{}, k.Profiles...),
 	}
 }
 
@@ -268,6 +271,11 @@ func (s *Store) Remove(section, id string) error {
 		s.f.Revision++
 	case SectionRoles:
 		k.Roles, found = without(k.Roles, func(r Role) bool { return r.ID == id })
+		for i := range k.Profiles {
+			if k.Profiles[i].Role == id {
+				k.Profiles[i].Role = ""
+			}
+		}
 		for session, role := range s.f.SessionRoles {
 			if role == id {
 				delete(s.f.SessionRoles, session)
@@ -293,6 +301,11 @@ func (k *Knowledge) forget(effortID string) {
 	for i := range k.Watch {
 		k.Watch[i].Efforts, _ = without(k.Watch[i].Efforts, func(id string) bool { return id == effortID })
 	}
+	for i := range k.Profiles {
+		if k.Profiles[i].Effort == effortID {
+			k.Profiles[i].Effort = ""
+		}
+	}
 }
 
 // move files under one effort what was filed under another.
@@ -308,6 +321,11 @@ func (k *Knowledge) move(from, into string) {
 				kept = append(kept, into)
 			}
 			k.Watch[i].Efforts = kept
+		}
+	}
+	for i := range k.Profiles {
+		if k.Profiles[i].Effort == from {
+			k.Profiles[i].Effort = into
 		}
 	}
 }

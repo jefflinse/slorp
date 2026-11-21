@@ -176,9 +176,9 @@ func modelURL(s string) (string, bool) {
 	return u.Scheme + "://" + u.Host + strings.TrimSuffix(strings.TrimRight(u.Path, "/"), "/v1"), true
 }
 
-// directory returns path as the absolute directory it names, reading a
-// leading "~" as the user's home.
-func directory(path string) (string, error) {
+// absolute returns path as the absolute path it names, reading a leading "~"
+// as the user's home.
+func absolute(path string) (string, error) {
 	path = strings.TrimSpace(path)
 	if rest, ok := strings.CutPrefix(path, "~"); ok && (rest == "" || rest[0] == '/') {
 		home, err := os.UserHomeDir()
@@ -190,10 +190,19 @@ func directory(path string) (string, error) {
 	if !filepath.IsAbs(path) {
 		return "", errors.New("dir must be an absolute path, or start with ~")
 	}
+	return filepath.Clean(path), nil
+}
+
+// directory returns path as absolute does, when a directory is there.
+func directory(path string) (string, error) {
+	path, err := absolute(path)
+	if err != nil {
+		return "", err
+	}
 	if info, err := os.Stat(path); err != nil || !info.IsDir() {
 		return "", fmt.Errorf("%s is not a directory", path)
 	}
-	return filepath.Clean(path), nil
+	return path, nil
 }
 
 // Page serves built as the web UI, or the file at path when one is given,
@@ -670,6 +679,50 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 
 	mux.HandleFunc("DELETE /api/kb/{section}/{id}", func(w http.ResponseWriter, r *http.Request) {
 		edited(w, k.Remove(r.PathValue("section"), r.PathValue("id")))
+	})
+
+	// profile reads the profile a request carries, with its directory, which
+	// need not be there yet, made absolute.
+	profile := func(w http.ResponseWriter, r *http.Request) (p kb.Profile, ok bool) {
+		if !readJSON(w, r, &p) {
+			return p, false
+		}
+		if strings.TrimSpace(p.Dir) != "" {
+			dir, err := absolute(p.Dir)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return p, false
+			}
+			p.Dir = dir
+		}
+		return p, true
+	}
+
+	mux.HandleFunc("POST /api/profiles", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := profile(w, r)
+		if !ok {
+			return
+		}
+		id, err := k.AddProfile(p)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		h.Touch()
+		writeJSON(w, http.StatusOK, map[string]string{"id": id})
+	})
+
+	mux.HandleFunc("POST /api/profiles/{id}", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := profile(w, r)
+		if !ok {
+			return
+		}
+		p.ID = r.PathValue("id")
+		edited(w, k.SetProfile(p))
+	})
+
+	mux.HandleFunc("DELETE /api/profiles/{id}", func(w http.ResponseWriter, r *http.Request) {
+		edited(w, k.RemoveProfile(r.PathValue("id")))
 	})
 
 	mux.HandleFunc("POST /api/sessions/{id}/effort", func(w http.ResponseWriter, r *http.Request) {

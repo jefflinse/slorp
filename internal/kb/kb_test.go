@@ -778,3 +778,104 @@ func TestWorkspaces(t *testing.T) {
 	}
 	must(t, k.Add(kb.SectionWorkspaces, kb.Entry{Name: "Slorp again", Dir: "/work/slorp"}))
 }
+
+func TestProfiles(t *testing.T) {
+	st := testdb.Open(t)
+	k := testdb.KB(t, st)
+	if got := k.Knowledge().Profiles; got == nil || len(got) != 0 {
+		t.Errorf("Profiles = %v before any is added, want an empty list", got)
+	}
+	effort, err := k.Create("Docs", "")
+	must(t, err)
+	other, err := k.Create("Site", "")
+	must(t, err)
+	must(t, k.Add(kb.SectionRoles, kb.Entry{Name: "Reviewer"}))
+	role := k.Knowledge().Roles[0].ID
+	warm := 0.7
+
+	first, err := k.AddProfile(kb.Profile{ID: "mine", Name: " Review ", Default: true, Dir: "/work/docs/", Effort: effort.ID, Role: role, Terminal: true, Model: " opus ", EffortLevel: "high"})
+	must(t, err)
+	second, err := k.AddProfile(kb.Profile{Name: "Local", Engine: kb.EngineLocal, Thinking: true, Temperature: &warm})
+	must(t, err)
+	got := k.Knowledge().Profiles
+	want := []kb.Profile{
+		{ID: first, Name: "Review", Default: true, Engine: kb.EngineClaude, Dir: "/work/docs", Effort: effort.ID, Role: role, Terminal: true, Model: "opus", EffortLevel: "high"},
+		{ID: second, Name: "Local", Engine: kb.EngineLocal, Thinking: true, Temperature: &warm},
+	}
+	if first == "" || first == "mine" || first == second || !reflect.DeepEqual(got, want) {
+		t.Fatalf("Profiles = %+v, want %+v", got, want)
+	}
+
+	hot, cold := 2.5, -0.1
+	bad := map[string]kb.Profile{
+		"no name":                       {},
+		"a blank name":                  {Name: "  "},
+		"a name another has":            {Name: "review"},
+		"an engine there is none of":    {Name: "X", Engine: "gemini"},
+		"a relative directory":          {Name: "X", Dir: "work/x"},
+		"an effort that does not exist": {Name: "X", Effort: "nope"},
+		"a role that does not exist":    {Name: "X", Role: "nope"},
+		"a temperature above 2":         {Name: "X", Temperature: &hot},
+		"a temperature below 0":         {Name: "X", Temperature: &cold},
+	}
+	for name, p := range bad {
+		if _, err := k.AddProfile(p); err == nil {
+			t.Errorf("a profile with %s was accepted", name)
+		}
+		p.ID = second
+		if name != "a name another has" {
+			if err := k.SetProfile(p); err == nil {
+				t.Errorf("a profile changed to have %s was accepted", name)
+			}
+		}
+	}
+	if err := k.SetProfile(kb.Profile{ID: second, Name: "REVIEW"}); err == nil {
+		t.Error("a profile renamed to another's name was accepted")
+	}
+	if err := k.SetProfile(kb.Profile{ID: "nope", Name: "X"}); err == nil {
+		t.Error("changing a profile that does not exist was accepted")
+	}
+	if after := k.Knowledge().Profiles; !reflect.DeepEqual(after, want) {
+		t.Errorf("after the rejected ones: %+v, want %+v", after, want)
+	}
+
+	must(t, k.SetProfile(kb.Profile{ID: second, Name: "local", Default: true, Engine: kb.EngineOpenCode, Effort: other.ID}))
+	must(t, k.SetProfile(kb.Profile{ID: first, Name: "Review", Effort: effort.ID, Role: role}))
+	must(t, k.SetProfile(kb.Profile{ID: second, Name: "local", Default: true, Engine: kb.EngineOpenCode, Effort: other.ID}))
+	want = []kb.Profile{
+		{ID: first, Name: "Review", Engine: kb.EngineClaude, Effort: effort.ID, Role: role},
+		{ID: second, Name: "local", Default: true, Engine: kb.EngineOpenCode, Effort: other.ID},
+	}
+	if got := k.Knowledge().Profiles; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after changing both: %+v, want %+v, with the one default", got, want)
+	}
+	third, err := k.AddProfile(kb.Profile{Name: "Third", Default: true})
+	must(t, err)
+	for _, p := range k.Knowledge().Profiles {
+		if p.Default != (p.ID == third) {
+			t.Errorf("profile %s default = %v after a new one was added as the default", p.Name, p.Default)
+		}
+	}
+	if after := testdb.KB(t, st).Knowledge().Profiles; !reflect.DeepEqual(after, k.Knowledge().Profiles) {
+		t.Errorf("after reopening: %+v, want %+v", after, k.Knowledge().Profiles)
+	}
+
+	must(t, k.Merge(other.ID, effort.ID))
+	if got := k.Knowledge().Profiles[1].Effort; got != effort.ID {
+		t.Errorf("a profile filed under a merged effort is filed under %q, want the effort it was merged into", got)
+	}
+	must(t, k.Delete(effort.ID))
+	must(t, k.Remove(kb.SectionRoles, role))
+	for _, p := range k.Knowledge().Profiles {
+		if p.Effort != "" || p.Role != "" {
+			t.Errorf("profile %s keeps effort %q and role %q after both were deleted", p.Name, p.Effort, p.Role)
+		}
+	}
+	must(t, k.RemoveProfile(first))
+	if left := k.Knowledge().Profiles; len(left) != 2 || left[0].ID != second {
+		t.Errorf("after removing the first: %+v", left)
+	}
+	if err := k.RemoveProfile(first); err == nil {
+		t.Error("removing a profile that is gone was accepted")
+	}
+}

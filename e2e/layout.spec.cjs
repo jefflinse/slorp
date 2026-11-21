@@ -20,12 +20,25 @@ async function world(t, hash, extra = {}, replies = {}) {
     summarizer: { model: 'fixture' }, capabilities: {}, ...extra,
   }
   const posts = []
+  /* Profiles are kept as the service keeps them, so that a change made in Settings is there to be read back. */
+  const profiled = (method, id, sent) => {
+    const list = (data.knowledge ||= { watch: [], questions: [], context: [], routing: [], roles: [], workspaces: [] }).profiles ||= []
+    const at = list.findIndex(p => p.id === id), kept = { ...sent, id: id || `p${list.length + 1}` }
+    if (method === 'DELETE') { list.splice(at, 1); return {} }
+    if (kept.default) list.forEach(p => { p.default = false })
+    if (id) list[at] = kept; else list.push(kept)
+    return id ? {} : { id: kept.id }
+  }
   const server = createServer((req, res) => {
     if (req.url === '/api/events') {
       res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write(': connected\n\n')
     } else if (req.method === 'POST' || req.method === 'DELETE') {
       let body = ''
-      req.on('data', chunk => { body += chunk }).on('end', () => { posts.push([req.method === 'POST' ? req.url : `${req.method} ${req.url}`, JSON.parse(body || '{}')]); res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(replies[req.url] || {})) })
+      req.on('data', chunk => { body += chunk }).on('end', () => {
+        const sent = JSON.parse(body || '{}'), profile = req.url.match(/^\/api\/profiles(?:\/(.+))?$/)
+        posts.push([req.method === 'POST' ? req.url : `${req.method} ${req.url}`, sent])
+        res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(profile ? profiled(req.method, profile[1], sent) : replies[req.url] || {}))
+      })
     } else if (req.url === '/api/sessions') {
       res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(data))
     } else {
@@ -164,8 +177,8 @@ test('a key opens the New Session dialog from anywhere, and only Escape or Cance
   await page.keyboard.press('Escape')
   assert.equal(await dialog.count(), 0)
   await page.getByRole('button', { name: 'Settings' }).click()
-  await page.getByRole('button', { name: 'New sessions' }).click()
-  await page.getByLabel('Default directory').focus()
+  await page.getByRole('button', { name: 'Session profiles' }).click()
+  await page.locator('form[data-form="profiles"]').getByLabel('Name').focus()
   await page.keyboard.press('Control+n')
   await dialog.waitFor()
   await dialog.getByRole('button', { name: 'Cancel' }).click()
@@ -173,34 +186,141 @@ test('a key opens the New Session dialog from anywhere, and only Escape or Cance
   assert.equal(await page.getByRole('button', { name: 'New Session', exact: true }).count(), 1)
 })
 
-test('the New Session dialog opens with the defaults chosen in Settings, and starting a session leaves them be', async t => {
+/* What a profile in the fixture leaves unsaid. */
+const profile = (id, name, sets = {}) => ({ id, name, default: false, engine: 'claude', dir: '', effort: '', role: '', terminal: false, model: '', effortLevel: '', thinking: true, temperature: null, ...sets })
+const kept = profiles => ({ knowledge: { watch: [], questions: [], context: [], routing: [], roles: [], workspaces: [], profiles } })
+
+test('a profile is made and edited in Settings, with only one of them the default', async t => {
   const page = await world(t, 'settings')
-  await page.getByRole('button', { name: 'New sessions' }).click()
-  await page.getByLabel('Default directory').fill('/work/elsewhere')
-  await page.getByLabel('Default directory').press('Tab')
-  await page.getByLabel('Default effort', { exact: true }).selectOption('pair')
-  await page.getByLabel('Default model').selectOption('opus')
-  await page.reload()
+  await page.getByRole('button', { name: /^Session profiles/ }).click()
+  const cards = page.locator('.card.profile'), form = page.locator('form[data-form="profiles"]')
+  const changes = () => page.posts.filter(([url]) => url.startsWith('/api/profiles/')).length
+  assert.match(await page.locator('.pane.detail .none').innerText(), /^No profiles yet/)
+  await form.getByLabel('Name').fill('  Reviews ')
+  await form.getByRole('button', { name: 'Add profile' }).click()
+  await page.getByLabel('Profile name').waitFor()
+  assert.deepEqual(page.posts, [['/api/profiles', { engine: 'claude', thinking: true, name: 'Reviews' }]])
+  assert.equal(await form.getByLabel('Name').inputValue(), '')
+  assert.equal(await cards.locator('.why').innerText(), 'Claude Code')
+
+  await page.getByLabel('Profile directory').fill('/work/elsewhere')
+  await page.getByLabel('Profile directory').press('Tab')
+  await page.getByLabel('Profile effort', { exact: true }).selectOption('pair')
+  await page.getByLabel('Profile model').selectOption('opus')
+  await page.getByLabel('Profile effort level').selectOption('high')
+  await page.getByRole('group', { name: 'Default profile' }).getByRole('button', { name: 'On' }).click()
+  await cards.locator('.tag', { hasText: 'Default' }).waitFor()
+  assert.equal(changes(), 5)
+  assert.deepEqual(page.posts.at(-1), ['/api/profiles/p1', { name: 'Reviews', engine: 'claude', thinking: true, dir: '/work/elsewhere', effort: 'pair', model: 'opus', effortLevel: 'high', default: true }])
+  assert.equal(await cards.locator('.why').innerText(), 'Claude Code · Opus · high effort')
+  assert.deepEqual(await cards.locator('.meta span:not(.mono)').allInnerTexts(), ['/work/elsewhere', 'filed under pair'])
+
+  await page.getByRole('group', { name: 'What a session runs on' }).getByRole('button', { name: 'fixture' }).click()
+  await page.getByLabel('Profile temperature').fill('0.4')
+  await page.getByLabel('Profile temperature').press('Tab')
+  await page.getByRole('group', { name: 'Thinking' }).getByRole('button', { name: 'Off' }).click()
+  await page.waitForFunction(() => document.querySelector('.card.profile .why')?.textContent === 'fixture · no thinking · temperature 0.4')
+  assert.equal(await page.getByLabel('Profile model').count(), 0)
+  await page.getByLabel('Profile name').fill('   ')
+  await page.getByLabel('Profile name').press('Tab')
+  assert.equal(await page.getByLabel('Profile name').inputValue(), 'Reviews')
+  assert.equal(changes(), 8)
+  await page.getByLabel('Profile name').fill('Reviewing')
+  await page.evaluate(() => refresh(true))
+  assert.deepEqual([await page.getByLabel('Profile name').inputValue(), await page.getByLabel('Profile name').evaluate(el => el === document.activeElement), changes()], ['Reviewing', true, 8])
+  await page.getByLabel('Profile name').press('Tab')
+  await page.waitForFunction(() => document.querySelector('.card.profile .nm')?.textContent.startsWith('Reviewing'))
+  assert.deepEqual([changes(), page.posts.at(-1)[1].name], [9, 'Reviewing'])
+  await page.getByLabel('Profile name').fill('Reviews')
+  await page.getByLabel('Profile name').press('Enter')
+  await page.waitForFunction(() => document.querySelector('.card.profile .nm')?.textContent.trim() === 'Reviews Default')
+  assert.equal(changes(), 10)
+
+  await form.getByLabel('Name').fill('Quick')
+  await form.getByRole('button', { name: 'Add profile' }).click()
+  await cards.nth(1).waitFor()
+  assert.equal(await page.getByLabel('Profile name').inputValue(), 'Quick')
+  await page.getByRole('group', { name: 'Default profile' }).getByRole('button', { name: 'On' }).click()
+  await page.waitForFunction(() => [...document.querySelectorAll('.card.profile')].map(c => !!c.querySelector('.tag')).join() === 'false,true')
+  await cards.nth(1).getByRole('button', { name: 'Done' }).click()
+  assert.equal(await page.locator('.pedit').count(), 0)
+  await cards.first().getByRole('button', { name: 'Remove' }).click()
+  await page.waitForFunction(() => document.querySelectorAll('.card.profile').length === 1)
+  assert.deepEqual(page.posts.at(-1), ['DELETE /api/profiles/p1', {}])
+  assert.equal(await cards.locator('.nm').innerText(), 'Quick DEFAULT')
+})
+
+test('the New Session dialog opens with the default profile, and takes on another that is chosen, keeping what was written', async t => {
+  const page = await world(t, 'home', kept([profile('p1', 'Reviews', { default: true, dir: '/work/elsewhere', effort: 'pair', model: 'opus' }),
+    profile('p2', 'Thinker', { engine: 'local', thinking: false, temperature: 0.4 }), profile('p3', 'Solo', { effort: 'solo', effortLevel: 'high' })]))
   const dialog = page.getByRole('dialog', { name: 'New Session' }), field = name => dialog.locator(`[name="${name}"]`)
-  const shown = async () => [await field('dir').inputValue(), await field('effortPick').inputValue(), await field('model').inputValue()]
+  const shown = async () => [await field('profile').inputValue(), await field('dir').inputValue(), await field('effortPick').inputValue(), await field('model').inputValue()]
+  const engine = () => dialog.getByRole('group', { name: 'What it runs on' }).locator('button.on').innerText()
   await page.getByRole('button', { name: 'New Session', exact: true }).click()
-  assert.deepEqual(await shown(), ['/work/elsewhere', 'pair', 'opus'])
+  assert.deepEqual(await field('profile').locator('option').allInnerTexts(), ['No profile', 'Reviews (default)', 'Thinker', 'Solo'])
+  assert.deepEqual(await shown(), ['p1', '/work/elsewhere', 'pair', 'opus'])
   assert.equal(await field('prompt').evaluate(el => el === document.activeElement), true)
   await field('prompt').fill('Add a dead-letter queue')
+
+  await field('profile').selectOption('p2')
+  assert.deepEqual([await engine(), await field('temperature').inputValue(), await dialog.getByRole('group', { name: 'Thinking' }).locator('button.on').innerText()], ['fixture', '0.4', 'Off'])
+  assert.deepEqual([await field('dir').inputValue(), await field('effortPick').inputValue(), await field('prompt').inputValue()], ['/work/elsewhere', 'pair', 'Add a dead-letter queue'])
+  await field('profile').selectOption('p3')
+  assert.deepEqual([await engine(), ...await shown(), await field('effortLevel').inputValue()], ['Claude Code', 'p3', '/work/solo', 'solo', '', 'high'])
+  await field('profile').selectOption('')
+  assert.deepEqual([...await shown(), await field('effortLevel').inputValue(), await field('prompt').inputValue()], ['', '/work/solo', 'solo', '', '', 'Add a dead-letter queue'])
+  await field('profile').selectOption('p1')
   await field('effortPick').selectOption('solo')
   assert.equal(await field('dir').inputValue(), '/work/solo')
-  assert.equal(await field('prompt').inputValue(), 'Add a dead-letter queue')
   await dialog.getByRole('button', { name: 'Start session' }).click()
   await page.waitForFunction(() => !document.querySelector('.modal.start'))
   const [, body] = page.posts.find(([url]) => url === '/api/sessions')
   assert.deepEqual([body.prompt, body.dir, body.effort, body.model], ['Add a dead-letter queue', '/work/solo', 'solo', 'opus'])
   await page.keyboard.press('n')
-  assert.deepEqual(await shown(), ['/work/elsewhere', 'pair', 'opus'])
+  assert.deepEqual(await shown(), ['p1', '/work/elsewhere', 'pair', 'opus'])
   await page.keyboard.press('Escape')
+
   await page.goto(page.url().replace(/#.*/, '#efforts'))
   await page.locator('.ecard[data-id="fleet"] .eh').click()
   await page.locator('.ebig').getByRole('button', { name: 'New Session', exact: true }).click()
-  assert.deepEqual(await shown(), ['/work/fleet', 'fleet', 'opus'])
+  assert.deepEqual(await shown(), ['p1', '/work/fleet', 'fleet', 'opus'])
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: 'Settings' }).click()
+  await page.getByRole('button', { name: /^Session profiles/ }).click()
+  await page.locator('.card.profile', { hasText: 'Solo' }).getByRole('button', { name: 'New Session' }).click()
+  assert.deepEqual([...await shown(), await field('effortLevel').inputValue()], ['p3', '/work/solo', 'solo', '', 'high'])
+})
+
+test('with no default profile the New Session dialog opens with none, and without profiles it does not ask for one', async t => {
+  const page = await world(t, 'home', kept([profile('p1', 'Reviews', { model: 'opus' })]))
+  const dialog = page.getByRole('dialog', { name: 'New Session' }), field = name => dialog.locator(`[name="${name}"]`)
+  await page.getByRole('button', { name: 'New Session', exact: true }).click()
+  assert.deepEqual([await field('profile').inputValue(), await field('model').inputValue()], ['', ''])
+  await field('profile').selectOption('p1')
+  assert.equal(await field('model').inputValue(), 'opus')
+  const bare = await world(t, 'home')
+  await bare.getByRole('button', { name: 'New Session', exact: true }).click()
+  await bare.getByRole('dialog', { name: 'New Session' }).locator('[name=prompt]').waitFor()
+  assert.equal(await bare.getByRole('dialog', { name: 'New Session' }).locator('[name=profile]').count(), 0)
+})
+
+test('the defaults a browser kept before there were profiles become the default profile, once', async t => {
+  const page = await world(t, 'home')
+  await page.locator('.home').waitFor()
+  await page.evaluate(() => {
+    const state = JSON.parse(localStorage.getItem('slorp.proto.v1') || '{}')
+    localStorage.setItem('slorp.proto.v1', JSON.stringify({ ...state, startOpts: { engine: 'claude', dir: '/work/elsewhere', effort: 'pair', role: 'gone', model: 'opus', temperature: '' } }))
+  })
+  await page.reload()
+  const dialog = page.getByRole('dialog', { name: 'New Session' }), field = name => dialog.locator(`[name="${name}"]`)
+  await page.waitForFunction(() => !('startOpts' in JSON.parse(localStorage.getItem('slorp.proto.v1'))))
+  assert.deepEqual(page.posts, [['/api/profiles', { name: 'Default', default: true, engine: 'claude', dir: '/work/elsewhere', effort: 'pair', role: '', terminal: false, model: 'opus', effortLevel: '', thinking: true, temperature: null }]])
+  await page.getByRole('button', { name: 'New Session', exact: true }).click()
+  await page.waitForFunction(() => document.querySelector('.modal.start [name=profile]')?.value === 'p1')
+  assert.deepEqual([await field('dir').inputValue(), await field('effortPick').inputValue(), await field('model').inputValue()], ['/work/elsewhere', 'pair', 'opus'])
+  await page.reload()
+  await page.locator('.home').waitFor()
+  assert.equal(page.posts.length, 1)
 })
 
 test('Home lists a stopped session as your turn, with what it last said, a box to answer in and a way to set it aside', async t => {
@@ -388,7 +508,7 @@ test('nothing offers a terminal where Slorp knows of none', async t => {
   assert.equal(await page.getByLabel('Terminal', { exact: true }).count(), 0)
 })
 
-test('a new session is opened in a terminal once it is running, when the dialog or its defaults ask for that', async t => {
+test('a new session is opened in a terminal once it is running, when the dialog or its profile asks for that', async t => {
   const page = await world(t, 'settings', { ...mac, sessions: [{ ...session('bg', 'solo', 'Runs in the background', 'idle', 3), kind: 'background', job: 'j1' }] },
     { '/api/sessions': { sessionId: 'bg' } })
   const dialog = page.getByRole('dialog', { name: 'New Session' }), tick = dialog.getByLabel('Open it in iTerm2 once it has started')
@@ -396,8 +516,12 @@ test('a new session is opened in a terminal once it is running, when the dialog 
   await page.keyboard.press('n')
   assert.equal(await tick.isChecked(), false)
   await page.keyboard.press('Escape')
-  await page.getByRole('button', { name: 'New sessions' }).click()
+  await page.getByRole('button', { name: /^Session profiles/ }).click()
+  await page.locator('form[data-form="profiles"]').getByLabel('Name').fill('In a terminal')
+  await page.getByRole('button', { name: 'Add profile' }).click()
+  await page.getByRole('group', { name: 'Default profile' }).getByRole('button', { name: 'On' }).click()
   await page.getByRole('group', { name: 'Open in terminal' }).getByRole('button', { name: 'On' }).click()
+  await page.waitForFunction(() => document.querySelector('.card.profile .meta')?.textContent === 'opened in iTerm2' && document.querySelector('.card.profile .tag'))
   await page.keyboard.press('n')
   assert.equal(await tick.isChecked(), true)
   await dialog.locator('[name=dir]').fill('/work/solo')
@@ -465,10 +589,11 @@ test('the New Session dialog asks for a workspace, and for a directory only when
   assert.equal(page.posts.find(([url]) => url === '/api/sessions')[1].dir, '/work/thing/')
 })
 
-test('the default directory in Settings is a workspace, or one typed when none of them will do', async t => {
-  const page = await world(t, 'settings', spaces)
-  await page.getByRole('button', { name: 'New sessions' }).click()
-  const space = page.getByLabel('Default workspace'), dir = page.getByLabel('Default directory')
+test('the directory of a profile is a workspace, or one typed when none of them will do', async t => {
+  const page = await world(t, 'settings', { knowledge: { ...spaces.knowledge, profiles: [profile('p1', 'Reviews', { default: true })] } })
+  await page.getByRole('button', { name: /^Session profiles/ }).click()
+  await page.locator('.card.profile').getByRole('button', { name: 'Edit' }).click()
+  const space = page.getByLabel('Profile workspace'), dir = page.getByLabel('Profile directory')
   const dialog = page.getByRole('dialog', { name: 'New Session' }), field = name => dialog.locator(`[name="${name}"]`)
   const opens = async () => {
     await page.keyboard.press('Control+n')
@@ -476,23 +601,24 @@ test('the default directory in Settings is a workspace, or one typed when none o
     await page.keyboard.press('Escape')
     return got
   }
-  assert.deepEqual(await space.locator('option').allInnerTexts(), ['No default', 'Pairing — /work/pair', 'Elsewhere — /work/elsewhere', 'Another directory…'])
+  const sent = () => page.posts.at(-1)[1].dir
+  assert.deepEqual(await space.locator('option').allInnerTexts(), ['Left open', 'Pairing — /work/pair', 'Elsewhere — /work/elsewhere', 'Another directory…'])
   assert.deepEqual([await space.inputValue(), await dir.count()], ['', 0])
   await space.selectOption('w2')
-  assert.deepEqual([await space.inputValue(), await dir.count()], ['w2', 0])
+  assert.deepEqual([await space.inputValue(), await dir.count(), sent()], ['w2', 0, '/work/elsewhere'])
   assert.deepEqual(await opens(), ['w2', '/work/elsewhere'])
   await space.selectOption('__other')
   await dir.waitFor()
   assert.equal(await dir.evaluate(el => el === document.activeElement), true)
   await dir.fill('/work/thing')
   await dir.press('Tab')
-  assert.deepEqual([await space.inputValue(), await dir.inputValue()], ['__other', '/work/thing'])
+  assert.deepEqual([await space.inputValue(), await dir.inputValue(), sent()], ['__other', '/work/thing', '/work/thing'])
   assert.deepEqual(await opens(), ['__other', '/work/thing'])
   await dir.fill('/work/pair/')
   await dir.press('Tab')
   assert.deepEqual([await space.inputValue(), await dir.count()], ['w1', 0])
   await space.selectOption('')
-  assert.deepEqual(await opens(), ['', ''])
+  assert.deepEqual([sent(), await opens()], ['', ['', '']])
 })
 
 test('an OpenCode session Slorp runs is opened in a terminal where the service can attach to one', async t => {

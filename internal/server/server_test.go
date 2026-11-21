@@ -1625,3 +1625,46 @@ func TestWorkspacesOverHTTP(t *testing.T) {
 		t.Errorf("remove a workspace = %d, leaving %+v", code, f.state().Knowledge.Workspaces)
 	}
 }
+
+func TestProfilesOverHTTP(t *testing.T) {
+	f := newFixture(t)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip(err)
+	}
+	if _, body := f.do("GET", "/api/sessions", "", nil); !strings.Contains(body, `"profiles":[]`) {
+		t.Errorf("state lacks an empty list of profiles, which the page reads: %s", body)
+	}
+	code, body := f.do("POST", "/api/profiles", `{"name":"Review","default":true,"engine":"claude","dir":"~/not/there/yet/","model":"opus","thinking":true,"temperature":0.4}`, nil)
+	var made struct{ ID string }
+	if err := json.Unmarshal([]byte(body), &made); code != 200 || err != nil || made.ID == "" {
+		t.Fatalf("add a profile = %d %s, want its id", code, body)
+	}
+	got := f.state().Knowledge.Profiles
+	if len(got) != 1 || got[0].ID != made.ID || got[0].Dir != filepath.Join(home, "not/there/yet") || !got[0].Default || got[0].Model != "opus" || got[0].Temperature == nil || *got[0].Temperature != 0.4 {
+		t.Fatalf("profiles = %+v, want the one added, with its directory made absolute", got)
+	}
+	for name, body := range map[string]string{
+		"no name":              `{"name":""}`,
+		"a name another has":   `{"name":"review"}`,
+		"a relative directory": `{"name":"Rel","dir":"work"}`,
+		"an unknown effort":    `{"name":"Filed","effort":"nope"}`,
+	} {
+		if code := f.post("/api/profiles", body); code != 400 {
+			t.Errorf("a profile with %s = %d, want 400", name, code)
+		}
+	}
+	if code := f.post("/api/profiles/"+made.ID, `{"id":"other","name":"Reviews","engine":"local","temperature":null}`); code != 204 {
+		t.Fatalf("change a profile = %d", code)
+	}
+	got = f.state().Knowledge.Profiles
+	if len(got) != 1 || got[0].ID != made.ID || got[0].Name != "Reviews" || got[0].Engine != "local" || got[0].Dir != "" || got[0].Default || got[0].Temperature != nil {
+		t.Errorf("profiles = %+v, want the one there was, replaced whole", got)
+	}
+	if code := f.post("/api/profiles/nope", `{"name":"X"}`); code != 400 {
+		t.Errorf("change a profile that does not exist = %d, want 400", code)
+	}
+	if code, _ := f.do("DELETE", "/api/profiles/"+made.ID, "", nil); code != 204 || len(f.state().Knowledge.Profiles) != 0 {
+		t.Errorf("remove a profile = %d, leaving %+v", code, f.state().Knowledge.Profiles)
+	}
+}

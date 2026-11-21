@@ -654,6 +654,10 @@ button.ecard.new:hover { border-color: var(--ink3); color: var(--ink); }
 .card .q { font-size: 14.5px; }
 .card .does { display: flex; flex-direction: column; gap: 8px; flex: none; }
 .card.set { align-items: center; }
+.card.profile .tag { margin-left: 6px; vertical-align: 2px; }
+.card.profile .does { flex-direction: row; }
+.pedit { margin: 0 0 14px 44px; padding-left: 16px; border-left: 2px solid var(--line); }
+.pedit .card.set:first-child { border-top: 0; }
 .check { margin: 0 0 6px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--raised); font-size: 13.5px; line-height: 1.5; }
 .check > div + div { margin-top: 4px; }
 .add.model { flex-direction: column; gap: 16px; padding-top: 18px; }
@@ -981,7 +985,7 @@ const viewOn = v => VIEWS.includes(v) && (v !== 'attention' || state.legacyAtten
 /* The views the top bar names, in its order; Settings is reached by its own button. Pull requests are named only while GitHub is turned on to list them. */
 const nav = () => VIEWS.filter(v => viewOn(v) && v !== 'settings' && !(v === 'pulls' && pullsOff()));
 const VIEW_NAMES = { pulls: 'PRs' };
-const fresh = () => ({ view: 'home', sel: null, effortSel: null, effortOrder: null, hideEmpty: true, kbSel: 'watch', setSel: 'general', groupBy: 'effort', srcFilter: 'all', legacyAttention: false, pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', effortTab: 'sessions', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto', look: 'slorp',
+const fresh = () => ({ view: 'home', sel: null, effortSel: null, effortOrder: null, hideEmpty: true, kbSel: 'watch', setSel: 'general', profileSel: null, groupBy: 'effort', srcFilter: 'all', legacyAttention: false, pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', effortTab: 'sessions', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto', look: 'slorp',
   handled: {}, moved: {}, sessMoved: {}, extra: [], arrived: {}, collapsed: {}, left: {}, showHandled: false, variant: {}, rawOpen: {},
   actSel: null, pullSel: null, journalSel: null, pullTab: 'talk', expanded: {}, kb: structuredClone(KB_SEED), seq: 100 });
 let state = fresh();
@@ -1680,27 +1684,38 @@ const START_MODELS = [['', 'Default'], ['fable', 'Fable'], ['opus', 'Opus'], ['s
 const START_EFFORTS = [['', 'Default'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max']];
 const localName = () => summarizer.model ? summarizer.model.split('/').pop() : '';
 /* Opens the New Session dialog: for an effort when it is asked for from one, in a directory when it is asked
-   for from a workspace, and otherwise from the defaults. */
-function openStart(effort, dir = '') {
+   for from a workspace, and from a profile when it is asked for from one, the default profile otherwise. */
+function openStart(effort, dir = '', profile = defaultProfile()) {
   modal = 'start'; modalFocus = true;
   if (launching || partialStart || startAttempt) return;
-  draftStart(effort || (dir && effortOfDir(dir)?.id) || '');
+  draftStart(effort || (dir && effortOfDir(dir)?.id) || '', profile);
   if (dir) { startDraft.dir = tilde(dir); loadStartCatalog(); }
 }
-/* Begins the draft of a new session afresh from the defaults kept in Settings. Asked for from an effort, it is
-   filed there and starts in that effort's first directory; otherwise the default effort and directory stand. */
-function draftStart(effort) {
-  const d = state.startOpts || {};
+/* Begins the draft of a new session afresh from a profile, or from nothing when there is none. Asked for from
+   an effort, it is filed there and starts in that effort's first directory; otherwise the profile's effort and
+   directory stand. */
+function draftStart(effort, profile) {
+  const d = profile || {}, dir = tilde(d.dir || '');
   starting = effort || (openEfforts().some(e => e.id === d.effort) ? d.effort : '');
   launching = false;
   startWith = START_ENGINES.includes(d.engine) ? d.engine : 'claude';
-  startDraft = { dir: (effort ? startDirs()[0] || d.dir : d.dir || (starting && startDirs()[0])) || '', name: '', prompt: '',
+  startDraft = { profile: d.id || '', dir: (effort ? startDirs()[0] || dir : dir || (starting && startDirs()[0])) || '', name: '', prompt: '',
     role: knowledge.roles.some(r => r.id === d.role) ? d.role : '', terminal: !!d.terminal, typing: false,
     claude: { model: d.model || '', effortLevel: d.effortLevel || '' }, local: { temperature: d.temperature ?? '' },
     opencode: { agentName: '', model: '', variant: '' } };
   startCatalog = {}; ++catalogVersion; clearTimeout(catalogTimer);
   loadStartCatalog();
   startThinking = d.thinking !== false;
+}
+/* Draws the draft again from another profile, or from none, keeping what has been written. Where the profile
+   leaves the directory or the effort open, the one already chosen stands. */
+function redraftStart(profile) {
+  const was = startDraft, filed = starting;
+  draftStart('', profile);
+  Object.assign(startDraft, { prompt: was.prompt, name: was.name });
+  if (!startDraft.dir) Object.assign(startDraft, { dir: was.dir, typing: was.typing });
+  if (!starting) starting = filed;
+  loadStartCatalog();
 }
 function retainedSessionModal(p) {
   return `<div class="veil"><div class="modal start" data-act="noop" role="dialog" aria-label="Conversation retained">
@@ -1771,6 +1786,7 @@ function startModal() {
   return `<div class="veil"><div class="modal start" data-act="noop" role="dialog" aria-label="New Session">
     <h2>New Session</h2>
     <form data-form="start" data-id="${e.id}" data-engine="${on}">
+      ${knowledge.profiles.length ? `<label class="wide"><span>Profile</span><select class="btn" name="profile" data-keep="start-profile"><option value="">No profile</option>${knowledge.profiles.map(x => `<option value="${esc(x.id)}" ${x.id === startDraft.profile ? 'selected' : ''}>${esc(x.name)}${x.default ? ' (default)' : ''}</option>`).join('')}</select></label>` : ''}
       <div class="seg wide" role="group" aria-label="What it runs on">${way('claude', 'Claude Code', lifecycleCap('claude', 'start') ? '' : 'Starting Claude is not supported')}${way('opencode', 'OpenCode', lifecycleCap('opencode', 'start') && lifecycleCap('opencode', 'launchOptions') ? '' : 'Starting OpenCode is not supported')}${way('local', local || 'Local model', !local ? 'No local model is running' : lifecycleCap('claude', 'start') ? '' : 'Starting Claude is not supported')}</div>
       <label class="wide"><span>Prompt</span><textarea name="prompt" data-keep="start-prompt" placeholder="What should it do?" required ${first ? 'data-first' : ''}>${esc(startDraft.prompt)}</textarea></label>
       ${spaces ? `<label class="${typed ? '' : 'wide'}"><span>Workspace</span><select class="btn" name="workspace" data-keep="start-workspace" ${choice ? '' : 'data-first'}>${workspaceChoices(choice, choice ? '' : '<option value="" selected disabled>Choose a workspace…</option>')}</select></label>` : ''}
@@ -2272,7 +2288,7 @@ let capabilities = {};
 let platform = '', terminal = { apps: [], default: '' };
 const onMac = () => platform ? platform === 'darwin' : /Mac/.test(navigator.platform);
 const historyReading = new Set();
-let knowledge = { watch: [], questions: [], context: [], routing: [], roles: [], workspaces: [] }, integrations = [], lookups = [], feeds = {}, pulls = [], limits = [], archive = [], plugins = {}, archiveDocs = {};
+let knowledge = { watch: [], questions: [], context: [], routing: [], roles: [], workspaces: [], profiles: [] }, integrations = [], lookups = [], feeds = {}, pulls = [], limits = [], archive = [], plugins = {}, archiveDocs = {};
 let providerLimits = [];
 /* Fetches a closed session's timeline, once per time it closes. */
 const archiveAsked = {};
@@ -2310,7 +2326,8 @@ async function refresh(force) {
     capabilities = data.capabilities || {};
     platform = data.platform || '';
     terminal = { apps: [], default: '', ...data.terminal };
-    knowledge = { roles: [], workspaces: [], ...(data.knowledge || knowledge) };
+    knowledge = { roles: [], workspaces: [], profiles: [], ...(data.knowledge || knowledge) };
+    adoptStartDefaults();
     integrations = data.integrations || [];
     lookups = data.lookups || [];
     feeds = data.feeds || {};
@@ -3632,7 +3649,7 @@ function viewKnowledge() {
 
 /* ───────────────────────── Settings ───────────────────────── */
 
-const SETTINGS = { general: 'General', start: 'New sessions', integrations: 'Integrations', model: 'Local model', keys: 'Keyboard' };
+const SETTINGS = { general: 'General', start: 'Session profiles', integrations: 'Integrations', model: 'Local model', keys: 'Keyboard' };
 /* One setting: what it is called, what it does, and what changes it. */
 const setting = (name, about, control) => `<div class="card set"><div class="body"><div class="nm">${name}</div><div class="why">${about}</div></div>${control}</div>`;
 const choice = (act, cur, options, about) => `<span class="seg" role="group" aria-label="${about}">${options.map(([to, name]) => `<button class="${to === cur ? 'on' : ''}" data-act="${act}" data-to="${to}">${name}</button>`).join('')}</span>`;
@@ -3652,27 +3669,98 @@ function generalBody() {
       `<button class="btn" data-act="reset">Reset</button>`)}`;
 }
 
-/* What the New Session dialog opens with, which this browser keeps. defaultDirTyping is whether the default
-   directory is being typed in place of a workspace being chosen. */
-let defaultDirTyping = false;
-function startBody() {
-  const d = state.startOpts || {}, local = localName(), choice = dirChoice(d.dir, defaultDirTyping);
-  const typed = `<input class="mono" data-change="startDefault" data-key="dir" value="${esc(d.dir || '')}" placeholder="~/dev/project" list="default-dirs" spellcheck="false" autocomplete="off" aria-label="Default directory">
-    <datalist id="default-dirs">${dirOptions([...new Set(live.map(s => s.cwd).concat(openEfforts().flatMap(e => e.dirs)).filter(Boolean).map(tilde))])}</datalist>`;
-  const pick = (key, about, options) => `<select class="btn" data-change="startDefault" data-key="${key}" aria-label="${about}">${options.map(([v, t]) => `<option value="${esc(v)}" ${v === (d[key] || '') ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>`;
-  const seg = (key, cur, options, about) => `<span class="seg" role="group" aria-label="${about}">${options.map(([to, name]) => `<button class="${to === cur ? 'on' : ''}" data-act="startDefaultTo" data-key="${key}" data-to="${to}" aria-pressed="${to === cur}">${esc(name)}</button>`).join('')}</span>`;
-  return `${setting('Runs on', 'What a new session runs on.', seg('engine', START_ENGINES.includes(d.engine) ? d.engine : 'claude', [['claude', 'Claude Code'], ['opencode', 'OpenCode'], ['local', local || 'Local model']], 'What a new session runs on'))}
-    ${setting('Directory', 'Where a session starts, unless it is started from an effort that has a directory of its own.', knowledge.workspaces.length
-      ? `<span class="pick"><select class="btn" data-change="startDefaultSpace" aria-label="Default workspace">${workspaceChoices(choice, `<option value="" ${choice ? '' : 'selected'}>No default</option>`)}</select>${choice === OTHER_DIR ? typed : ''}</span>` : typed)}
-    ${setting('Effort', 'The effort a session is filed under, unless it is started from another.', pick('effort', 'Default effort', [['', 'No effort']].concat(openEfforts().map(e => [e.id, e.name]))))}
-    ${knowledge.roles.length ? setting('Slorp role', 'The role a session is given.', pick('role', 'Default role', [['', 'No role']].concat(knowledge.roles.map(r => [r.id, r.name])))) : ''}
-    ${terminalApp() ? setting('Open in terminal', `Whether a new session is also opened in ${esc(terminalApp().name)} once it has started.`, seg('terminal', d.terminal ? 'on' : 'off', [['on', 'On'], ['off', 'Off']], 'Open in terminal')) : ''}
-    <div class="label" style="margin-top:34px">Claude Code</div>
-    ${setting('Model', 'The model a Claude Code session runs on. Default leaves it to Claude Code.', pick('model', 'Default model', START_MODELS))}
-    ${setting('Effort level', 'How hard it thinks. Default leaves it to Claude Code.', pick('effortLevel', 'Default effort level', START_EFFORTS))}
-    <div class="label" style="margin-top:34px">${esc(local || 'Local model')}</div>
-    ${setting('Thinking', 'Whether the local model thinks before it answers.', seg('thinking', d.thinking !== false ? 'on' : 'off', [['on', 'On'], ['off', 'Off']], 'Thinking'))}
-    ${setting('Temperature', 'From 0 to 2. Left empty, it is the model\'s own.', `<input type="number" min="0" max="2" step="0.05" data-change="startDefault" data-key="temperature" value="${esc(d.temperature ?? '')}" placeholder="The model's own" aria-label="Default temperature">`)}`;
+/* The session profiles. profileDirTyping is whether the directory of the one being edited is being typed in
+   place of a workspace being chosen. */
+let profileDirTyping = false, adopting = false;
+const profileById = id => knowledge.profiles.find(p => p.id === id);
+const defaultProfile = () => knowledge.profiles.find(p => p.default);
+const serviceSaid = err => toast(err instanceof TypeError ? 'Could not reach the Slorp service' : `That did not work: ${err.message}`);
+/* Changes a profile, here at once and then in the service, and says why when the service would not have it.
+   What was typed for the profile is then drawn again from what the service kept. */
+function setProfile(p, changes) {
+  Object.assign(p, changes);
+  if (changes.default) for (const o of knowledge.profiles) o.default = o === p;
+  const { id, ...body } = p;
+  fetch(`/api/profiles/${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    .then(async res => { if (!res.ok) throw new Error((await res.text()).trim() || res.status); })
+    .catch(serviceSaid)
+    .finally(() => {
+      for (const el of document.querySelectorAll(`[data-keep^="profile-${id}-"]`)) if (el !== document.activeElement) el.removeAttribute('data-keep');
+      refresh(true);
+    });
+}
+/* Adds a profile and opens it to be edited. */
+function addProfile(profile, done) {
+  return fetch('/api/profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ engine: 'claude', thinking: true, ...profile }) })
+    .then(async res => {
+      if (!res.ok) throw new Error((await res.text()).trim() || res.status);
+      state.profileSel = (await res.json()).id; profileDirTyping = false; save();
+      if (done) done();
+      refresh(true);
+    }).catch(serviceSaid);
+}
+/* Carries the New Session defaults this browser kept before there were profiles into a default profile, once,
+   where the service has no profiles yet and the defaults say anything. */
+function adoptStartDefaults() {
+  const d = state.startOpts;
+  if (!d || adopting) return;
+  const forget = () => { delete state.startOpts; save(); };
+  const t = d.temperature === '' || d.temperature == null ? NaN : +d.temperature;
+  const kept = { engine: START_ENGINES.includes(d.engine) ? d.engine : 'claude', dir: /^[~/]/.test(d.dir || '') ? d.dir : '',
+    effort: liveEfforts.some(e => e.id === d.effort) ? d.effort : '', role: knowledge.roles.some(r => r.id === d.role) ? d.role : '', terminal: !!d.terminal,
+    model: d.model || '', effortLevel: d.effortLevel || '', thinking: d.thinking !== false, temperature: t >= 0 && t <= 2 ? t : null };
+  const says = kept.engine !== 'claude' || kept.dir || kept.effort || kept.role || kept.terminal || kept.model || kept.effortLevel || !kept.thinking || kept.temperature != null;
+  if (knowledge.profiles.length || !says) { forget(); return; }
+  adopting = true;
+  fetch('/api/profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Default', default: true, ...kept }) })
+    .then(res => { if (res.ok || res.status === 400) { forget(); refresh(true); } }).catch(() => {});
+}
+/* What a profile sets, in a few words: what it runs on and how, then where, under which effort and in which
+   role. */
+function profileSays(p) {
+  const named = (list, v) => v && list.find(([id]) => id === v)?.[1];
+  const e = openEfforts().find(x => x.id === p.effort), r = knowledge.roles.find(x => x.id === p.role), w = p.dir && workspaceAt(p.dir);
+  const runs = p.engine === 'local' ? [localName() || 'Local model', p.thinking ? 'thinking' : 'no thinking', p.temperature != null && `temperature ${p.temperature}`]
+    : p.engine === 'opencode' ? ['OpenCode'] : ['Claude Code', named(START_MODELS, p.model), named(START_EFFORTS, p.effortLevel) && `${named(START_EFFORTS, p.effortLevel).toLowerCase()} effort`];
+  const rest = [p.dir && (w ? `${esc(w.name)} — <span class="mono">${esc(tilde(w.dir))}</span>` : `<span class="mono">${esc(tilde(p.dir))}</span>`), e && `filed under ${esc(e.name)}`, r && `as ${esc(r.name)}`,
+    p.terminal && terminalApp() && `opened in ${esc(terminalApp().name)}`];
+  return `<div class="why">${esc(runs.filter(Boolean).join(' · '))}</div>${rest.some(Boolean) ? `<div class="meta">${rest.filter(Boolean).map(x => `<span>${x}</span>`).join('')}</div>` : ''}`;
+}
+/* The boxes a profile is edited in, each change kept as it is made. */
+function profileEdit(p) {
+  const local = localName(), choice = dirChoice(p.dir, profileDirTyping), at = `data-id="${p.id}"`;
+  const typed = `<input class="mono" data-change="profileSet" ${at} data-key="dir" data-keep="profile-${p.id}-dir" value="${esc(tilde(p.dir || ''))}" placeholder="~/dev/project" list="profile-dirs" spellcheck="false" autocomplete="off" aria-label="Profile directory">
+    <datalist id="profile-dirs">${dirOptions([...new Set(live.map(s => s.cwd).concat(openEfforts().flatMap(e => e.dirs)).filter(Boolean).map(tilde))])}</datalist>`;
+  const pick = (key, about, options) => `<select class="btn" data-change="profileSet" ${at} data-key="${key}" aria-label="${about}">${options.map(([v, t]) => `<option value="${esc(v)}" ${v === (p[key] || '') ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>`;
+  const seg = (key, cur, options, about) => `<span class="seg" role="group" aria-label="${about}">${options.map(([to, name]) => `<button class="${to === cur ? 'on' : ''}" data-act="profileTo" ${at} data-key="${key}" data-to="${to}" aria-pressed="${to === cur}">${esc(name)}</button>`).join('')}</span>`;
+  const onOff = (key, about) => seg(key, p[key] ? 'on' : 'off', [['on', 'On'], ['off', 'Off']], about);
+  return `<div class="pedit">
+    ${setting('Name', 'What the profile is called where it is chosen.', `<input data-change="profileSet" ${at} data-key="name" data-keep="profile-${p.id}-name" value="${esc(p.name)}" maxlength="60" required autocomplete="off" aria-label="Profile name">`)}
+    ${setting('Default', 'Whether the New Session dialog opens with this profile. Only one profile is the default.', onOff('default', 'Default profile'))}
+    ${setting('Runs on', 'What a session runs on.', seg('engine', p.engine, [['claude', 'Claude Code'], ['opencode', 'OpenCode'], ['local', local || 'Local model']], 'What a session runs on'))}
+    ${setting('Directory', 'Where a session starts, unless it is started from an effort that has a directory of its own. Left open, it is chosen when the session is started.', knowledge.workspaces.length
+      ? `<span class="pick"><select class="btn" data-change="profileSpace" ${at} aria-label="Profile workspace">${workspaceChoices(choice, `<option value="" ${choice ? '' : 'selected'}>Left open</option>`)}</select>${choice === OTHER_DIR ? typed : ''}</span>` : typed)}
+    ${setting('Effort', 'The effort a session is filed under, unless it is started from another.', pick('effort', 'Profile effort', [['', 'No effort']].concat(openEfforts().map(e => [e.id, e.name]))))}
+    ${knowledge.roles.length ? setting('Slorp role', 'The role a session is given.', pick('role', 'Profile role', [['', 'No role']].concat(knowledge.roles.map(r => [r.id, r.name])))) : ''}
+    ${terminalApp() ? setting('Open in terminal', `Whether a session is also opened in ${esc(terminalApp().name)} once it has started.`, onOff('terminal', 'Open in terminal')) : ''}
+    ${p.engine === 'claude' ? setting('Model', 'The model the session runs on. Default leaves it to Claude Code.', pick('model', 'Profile model', START_MODELS))
+        + setting('Effort level', 'How hard it thinks. Default leaves it to Claude Code.', pick('effortLevel', 'Profile effort level', START_EFFORTS))
+      : p.engine === 'local' ? setting('Thinking', 'Whether the local model thinks before it answers.', onOff('thinking', 'Thinking'))
+        + setting('Temperature', 'From 0 to 2. Left empty, it is the model\'s own.', `<input type="number" min="0" max="2" step="0.05" data-change="profileSet" ${at} data-key="temperature" data-keep="profile-${p.id}-temperature" value="${esc(p.temperature ?? '')}" placeholder="The model's own" aria-label="Profile temperature">`)
+      : '<div class="none">OpenCode\'s agent, model and variant are chosen when the session is started, from what its directory offers.</div>'}
+  </div>`;
+}
+function profilesBody() {
+  if (!profileById(state.profileSel)) state.profileSel = null;
+  const cards = knowledge.profiles.map(p => {
+    const open = state.profileSel === p.id;
+    return `<div class="card profile"><span class="glyph">${esc(p.name[0].toUpperCase())}</span>
+      <div class="body"><div class="nm">${esc(p.name)}${p.default ? ' <span class="tag whenever">Default</span>' : ''}</div>${profileSays(p)}</div>
+      <span class="does"><button class="btn" data-act="profileSel" data-id="${p.id}" aria-expanded="${open}">${open ? 'Done' : 'Edit'}</button><button class="btn" data-act="startFrom" data-id="${p.id}">New Session</button></span>
+      <button class="x" data-act="profileRemove" data-id="${p.id}" title="Remove" aria-label="Remove">×</button></div>${open ? profileEdit(p) : ''}`;
+  }).join('');
+  return `${cards || '<div class="none">No profiles yet. Without one, the New Session dialog opens with nothing chosen.</div>'}
+    <form class="add" data-form="profiles"><input name="name" data-keep="profiles-name" placeholder="Name, such as Reviews" maxlength="60" required autocomplete="off" aria-label="Name"><button class="btn go">Add profile</button></form>`;
 }
 
 /* The agents Slorp watches, each with the plugin that lets it be answered from here. */
@@ -3767,14 +3855,14 @@ const keys = () => [[`1 – ${nav().length}`, nav().map(v => VIEW_NAMES[v] || ca
 
 const SETTINGS_LEDE = {
   general: 'How this page looks and behaves.',
-  start: 'What the New Session dialog opens with. Each can still be changed there before a session is started.',
+  start: 'A profile is a named set of what a new session starts with: what it runs on, where, and how. The New Session dialog offers them and opens with the default one, when there is one. Whatever a profile sets can still be changed there before a session is started.',
   integrations: 'What Slorp is connected to: the agents whose sessions it watches, and the tools it reads.',
   model: 'Summaries, suggested replies, automatic filing and wrap-ups are written by a model on a server you choose, usually one running on this machine. What your sessions say is sent to that server and nowhere else.',
   keys: 'They work anywhere outside a text box; those with ⌘, ⌃ or Ctrl work inside one too.',
 };
 function settingsBody(sec) {
   if (sec === 'general') return generalBody();
-  if (sec === 'start') return live ? startBody() : '<div class="none">Sessions are started through the Slorp service, which this demo is not connected to.</div>';
+  if (sec === 'start') return live ? profilesBody() : '<div class="none">Sessions are started through the Slorp service, which this demo is not connected to.</div>';
   if (sec === 'model') return live ? modelBody() : '<div class="none">The demo has no local model to report on.</div>';
   if (sec === 'keys') return `<dl class="facts keys">${keys().map(([k, what]) => `<dt class="mono">${k}</dt><dd>${what}</dd>`).join('')}</dl>`;
   if (!live) return '<div class="none">Integrations belong to the Slorp service, which this demo is not connected to.</div>';
@@ -3788,7 +3876,7 @@ function settingsBody(sec) {
 function viewSettings() {
   if (!SETTINGS[state.setSel]) state.setSel = 'general';
   const on = Object.values(plugins).filter(p => p.installed && p.enabled).length + integrations.filter(i => i.enabled).length;
-  const aside = { integrations: live ? on : '', model: live ? (summarizer.off ? 'off' : summarizer.model ? 'on' : 'none') : '' };
+  const aside = { start: live ? knowledge.profiles.length || '' : '', integrations: live ? on : '', model: live ? (summarizer.off ? 'off' : summarizer.model ? 'on' : 'none') : '' };
   const nav = Object.entries(SETTINGS).map(([k, name]) => `<button class="${state.setSel === k ? 'on' : ''}" data-act="setSel" data-s="${k}">${name}<span>${aside[k] ?? ''}</span></button>`).join('');
   return `<div class="split narrow">
     <section class="pane list kbnav"><div class="label">Settings</div>${nav}</section>
@@ -3838,7 +3926,16 @@ const ICONS = {
 
 const RENDER = { home: viewHome, attention: viewAttention, efforts: viewEfforts, sessions: viewSessions, pulls: viewPulls, journal: viewJournal, knowledge: viewKnowledge, settings: viewSettings };
 
+/* Draws the page. Taking a box that is being typed in off the page makes the browser say the box has lost the
+   user, which can ask for the page to be drawn while it is being drawn: it is then drawn once more afterwards. */
+let drawing = false, drawAgain = false;
 function render() {
+  if (drawing) { drawAgain = true; return; }
+  drawing = true;
+  try { draw(); } finally { drawing = false; }
+  if (drawAgain) { drawAgain = false; render(); }
+}
+function draw() {
   if (dragged || filing) return;  // a card or a session's row is held: the page is drawn again when it is let go
   if (morph) {
     morph = false;
@@ -3945,7 +4042,9 @@ const actions = {
   fluent: d => { state.fluent = d.on === '1'; },
   themeTo: d => { state.theme = d.to; },
   attentionTo: d => { state.legacyAttention = d.to === 'on'; },
-  startDefaultTo: d => { state.startOpts = { ...state.startOpts, [d.key]: ['thinking', 'terminal'].includes(d.key) ? d.to === 'on' : d.to }; },
+  profileSel: d => { state.profileSel = state.profileSel === d.id ? null : d.id; profileDirTyping = false; },
+  profileTo: d => { const p = profileById(d.id); if (p) setProfile(p, { [d.key]: d.key === 'engine' ? d.to : d.to === 'on' }); },
+  profileRemove: d => { api('DELETE', `/api/profiles/${d.id}`, null, () => toast('Removed')); return false; },
   lookTo: d => { state.look = d.to; },
   setSel: d => { state.setSel = d.s; },
   modelCheck: () => { checkModel(); return false; },
@@ -4129,6 +4228,7 @@ const actions = {
   holdTo: d => { api('POST', '/api/settings', { answerPermissions: d.to === 'both' }); return false; },
   startOpen: d => { openStart(d.id); },
   startIn: d => { openStart('', d.dir); },
+  startFrom: d => { openStart('', '', profileById(d.id)); },
   startViewExisting: () => { viewRetainedSession(partialStart); return false; },
   resumeViewExisting: () => { viewRetainedSession(partialResume); return false; },
   resumeReset: () => { if (partialResume && !partialResume.viewing) partialResume.resetConfirm = true; },
@@ -4229,15 +4329,19 @@ const changes = {
     return false;
   },
   terminalApp: (d, el) => { api('POST', '/api/settings', { terminal: el.value }); return false; },
-  startDefault: (d, el) => {
-    state.startOpts = { ...state.startOpts, [d.key]: el.checkValidity() ? el.value.trim() : '' };
-    if (d.key === 'dir') defaultDirTyping = false;
+  profileSet: (d, el) => {
+    const p = profileById(d.id), v = el.value.trim();
+    if (!p) return false;
+    if (!el.checkValidity() || (d.key === 'name' && !v)) { el.removeAttribute('data-keep'); return; }
+    if (d.key === 'dir') profileDirTyping = false;
+    setProfile(p, { [d.key]: d.key === 'temperature' ? (v === '' ? null : +v) : v });
   },
-  startDefaultSpace: (d, el) => {
-    const w = knowledge.workspaces.find(x => x.id === el.value);
-    defaultDirTyping = el.value === OTHER_DIR;
-    state.startOpts = { ...state.startOpts, dir: w ? tilde(w.dir) : '' };
-    if (defaultDirTyping) queueMicrotask(() => $('[data-change="startDefault"][data-key="dir"]')?.focus());
+  profileSpace: (d, el) => {
+    const p = profileById(d.id), w = knowledge.workspaces.find(x => x.id === el.value);
+    if (!p) return false;
+    profileDirTyping = el.value === OTHER_DIR;
+    setProfile(p, { dir: w ? w.dir : '' });
+    if (profileDirTyping) queueMicrotask(() => $(`[data-keep="profile-${p.id}-dir"]`)?.focus());
   },
   roleAttention: (d, el) => { api('POST', `/api/roles/${d.id}`, { attention: el.value }); return false; },
   move: (d, el) => {
@@ -4253,6 +4357,7 @@ const changes = {
   },
 };
 
+const changed = el => { if (changes[el.dataset.change](el.dataset, el) !== false) { save(); render(); } };
 document.addEventListener('click', e => {
   if (!e.target.closest('#menu')) $('#menu')?.removeAttribute('open');
   /* An item's menu shuts on a click outside it, and once something in it is chosen. */
@@ -4294,6 +4399,7 @@ document.addEventListener('change', e => {
     /* Choosing an effort files the session there and offers the effort's first directory, written into the
        box as well as the draft because drawing the page again reads the form once more. */
     const boxes = e.target.form.elements;
+    if (e.target.name === 'profile') { redraftStart(profileById(e.target.value)); render(); return; }
     if (e.target.name === 'effortPick') {
       starting = e.target.value;
       const dir = starting && startDirs()[0];
@@ -4315,7 +4421,14 @@ document.addEventListener('change', e => {
     render(); return;
   }
   const el = e.target.closest('[data-change]');
-  if (el && changes[el.dataset.change](el.dataset, el) !== false) { save(); render(); }
+  if (el && !(drawing && el.dataset.keep)) changed(el);
+});
+/* A box that keeps what is typed in it across a drawing of the page is not changed by being drawn again, and
+   afterwards the browser no longer says so when it is left. It is then taken as changed here, when it is left
+   holding something other than it was drawn with. */
+document.addEventListener('focusout', e => {
+  const el = e.target;
+  if (!drawing && el.matches?.('input[data-change][data-keep]') && el.value !== el.defaultValue) changed(el);
 });
 document.addEventListener('submit', e => {
   const form = e.target.closest('[data-form]');
@@ -4380,6 +4493,7 @@ document.addEventListener('submit', e => {
     return;
   }
   if (sec === 'workspaces') { addWorkspace(f.name.trim(), f.dir, clear); return; }
+  if (sec === 'profiles') { addProfile({ name: f.name.trim() }, clear); return; }
   if (live) { api('POST', `/api/kb/${sec}`, { ...f, origin: 'you wrote this down' }); clear(); return; }
   if (sec === 'watch') state.kb.watch.push({ id, type: f.type, name: f.name, why: f.why, efforts: [f.effort], cadence: 'daily', seen: '', seenAge: 0 });
   else if (sec === 'questions') state.kb.questions.unshift({ id, text: f.text, effort: f.effort, age: 0, origin: 'you wrote this down' });
