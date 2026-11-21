@@ -158,7 +158,7 @@ func raised(p PullRequest) []Item {
 		sum := sha1.Sum([]byte(ref.id() + "\x00" + pt.ID))
 		it := Item{ID: p.Source + "-" + hex.EncodeToString(sum[:6]), Kind: kind, Urgency: "blocking", Title: word + ": " + p.Title, Subtitle: pt.Gist,
 			Ask: cmp.Or(pt.Gist, pt.Who+" spoke last") + ".", Summary: fmt.Sprintf("%s#%d, %s. %s wrote: %s", p.Repo, p.Number, whose(p), pt.Who, pt.Text),
-			Replies: []string{}, At: pt.At, Source: p.Source, URL: cmp.Or(pt.URL, p.URL), Repo: p.Repo, Pull: p.Repo + "#" + strconv.Itoa(p.Number), Point: pt.ID,
+			Replies: []string{}, At: pt.At, Source: p.Source, URL: cmp.Or(pt.URL, p.URL), Repo: p.Repo, Pull: pullName(p.PullRequest), Point: pt.ID,
 			Effort: p.Effort, EffortVia: p.EffortVia}
 		if p.Mine {
 			it.Urgency = "awaiting"

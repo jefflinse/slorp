@@ -198,7 +198,7 @@ func TestFeedItemSaysWhatItIsAbout(t *testing.T) {
 		Key: "Acme/Widgets#7:ready-to-merge", Kind: FeedReady, Urgency: "whenever",
 		Title: "Ready to merge: Add a thing", Ask: ready.Ask,
 		Summary: "Acme/Widgets#7, opened by you. Review: none required. Checks: passing. No conflicts with its base branch.",
-		URL:     "https://github.com/Acme/Widgets/pull/7", Repo: "Acme/Widgets", At: time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC),
+		URL:     "https://github.com/Acme/Widgets/pull/7", Repo: "Acme/Widgets", Pull: "Acme/Widgets#7", At: time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC),
 	}
 	if !reflect.DeepEqual(ready, want) {
 		t.Errorf("ready item =\n%+v, want\n%+v", ready, want)

@@ -337,11 +337,12 @@ type Item struct {
 	// Source is the integration whose feed found the item.
 	Source string `json:"source,omitempty"`
 	URL    string `json:"url,omitempty"`
-	// Repo is the repository a feed item belongs to, which is what it is filed by.
+	// Repo is the repository a feed item belongs to, and Pull the pull
+	// request it is about, as "owner/name#number": it is filed with the
+	// pull request, or by the repository when it is about none.
 	Repo string `json:"repo,omitempty"`
-	// Pull and Point name the pull request, as "owner/name#number", and
-	// the point of its discussion an item was raised for.
-	Pull  string `json:"pull,omitempty"`
+	Pull string `json:"pull,omitempty"`
+	// Point is the point of the pull request's discussion an item was raised for.
 	Point string `json:"point,omitempty"`
 	// Effort is the effort the item is filed under, empty when unsorted.
 	Effort    string `json:"effort"`
@@ -362,8 +363,8 @@ type feed struct {
 	FeedStatus
 }
 
-// PullRequest is an open pull request an integration listed, filed like the
-// feed items from its repository.
+// PullRequest is an open pull request an integration listed, filed where
+// the user put it or else with its repository.
 type PullRequest struct {
 	integrations.PullRequest
 	Source    string `json:"source"`
@@ -1418,12 +1419,12 @@ func (h *Hub) fed() []Item {
 	out := []Item{}
 	for _, id := range sources {
 		for _, it := range h.feeds[id].items {
-			it.Effort, it.EffortVia = h.fileRepo(it.Repo)
+			it.Effort, it.EffortVia = h.filePull(it.Repo, it.Pull)
 			out = append(out, it)
 		}
 		for _, p := range h.feeds[id].pulls {
 			pr := PullRequest{PullRequest: p, Source: id}
-			pr.Effort, pr.EffortVia = h.fileRepo(p.Repo)
+			pr.Effort, pr.EffortVia = h.filePull(p.Repo, pullName(p))
 			h.discuss(&pr)
 			out = append(out, raised(pr)...)
 		}
@@ -1439,7 +1440,7 @@ func (h *Hub) pulls() []PullRequest {
 	for id, f := range h.feeds {
 		for _, p := range f.pulls {
 			pr := PullRequest{PullRequest: p, Source: id}
-			pr.Effort, pr.EffortVia = h.fileRepo(p.Repo)
+			pr.Effort, pr.EffortVia = h.filePull(p.Repo, pullName(p))
 			h.discuss(&pr)
 			out = append(out, pr)
 		}
@@ -1457,9 +1458,16 @@ func (h *Hub) pulls() []PullRequest {
 	return out
 }
 
-// fileRepo reports the effort a repository's items belong under, empty when
-// neither the user nor a directory rule says.
-func (h *Hub) fileRepo(repo string) (effort, via string) {
+// pullName names a pull request as "owner/name#number".
+func pullName(p integrations.PullRequest) string {
+	return p.Repo + "#" + strconv.Itoa(p.Number)
+}
+
+// filePull reports the effort something from a repository belongs under:
+// where the user filed the pull request it is about, if pull names one, or
+// else where its repository's items go. Both are empty when neither the user
+// nor a directory rule says.
+func (h *Hub) filePull(repo, pull string) (effort, via string) {
 	var held []string
 	for dir, repos := range h.clones {
 		for _, r := range repos {
@@ -1469,7 +1477,11 @@ func (h *Hub) fileRepo(repo string) (effort, via string) {
 			}
 		}
 	}
-	if effort, via, ok := h.kb.ResolveRepo(repo, held); ok {
+	resolve := h.kb.ResolveRepo
+	if pull != "" {
+		repo, resolve = pull, h.kb.ResolvePull
+	}
+	if effort, via, ok := resolve(repo, held); ok {
 		return effort, via
 	}
 	return "", ""

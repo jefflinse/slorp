@@ -324,8 +324,9 @@ func (p feedPR) pull(mine bool) PullRequest {
 
 func (p feedPR) item(by string) FeedItem {
 	it := FeedItem{
-		Key:     fmt.Sprintf("%s#%d", p.Repository.Name, p.Number),
+		Key:     p.key(),
 		Repo:    p.Repository.Name,
+		Pull:    p.key(),
 		At:      p.UpdatedAt,
 		Summary: fmt.Sprintf("%s#%d, %s.", p.Repository.Name, p.Number, by),
 	}

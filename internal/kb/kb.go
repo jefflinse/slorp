@@ -37,9 +37,12 @@ type Changes struct {
 	Name, About, Color, Glyph *string
 }
 
-// How a session came to be filed under an effort.
+// How a session, or something from a repository, came to be filed under an
+// effort: by the user, by the user's filing of its repository, or by a
+// directory rule.
 const (
 	ViaUser = "you"
+	ViaRepo = "repo"
 	ViaDir  = "rule"
 )
 
@@ -286,8 +289,8 @@ func (s *Store) Assign(sessionID, effortID string) error {
 const repoKey = "repo:"
 
 // AssignRepo files everything from a repository under an effort on the
-// user's say-so. An empty effortID records that the user wants it left
-// unsorted.
+// user's say-so, but for the pull requests filed on their own. An empty
+// effortID records that the user wants it left unsorted.
 func (s *Store) AssignRepo(repo, effortID string) error {
 	if strings.TrimSpace(repo) == "" {
 		return errors.New("needs a repository")
@@ -295,15 +298,53 @@ func (s *Store) AssignRepo(repo, effortID string) error {
 	return s.Assign(repoKey+strings.ToLower(repo), effortID)
 }
 
-// ResolveRepo reports where the user's own filing or a directory rule puts a
-// repository. held lists the directories known to hold a checkout of it; the
-// rule applies when exactly one effort has any of them. ok is false when
-// neither applies.
+// pullKey prefixes a pull request's entry among the assignments.
+const pullKey = "pull:"
+
+// AssignPull files one pull request, named as "owner/name#number", under an
+// effort on the user's say-so, wherever its repository is filed. An empty
+// effortID records that the user wants it left unsorted.
+func (s *Store) AssignPull(pull, effortID string) error {
+	repo, number, _ := strings.Cut(pull, "#")
+	if n, err := strconv.Atoi(number); err != nil || n <= 0 || strings.TrimSpace(repo) == "" {
+		return errors.New("needs a pull request")
+	}
+	return s.Assign(pullKey+strings.ToLower(pull), effortID)
+}
+
+// UnassignPull forgets the user's filing of a pull request, which is then
+// filed with its repository.
+func (s *Store) UnassignPull(pull string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.f.Assignments, pullKey+strings.ToLower(pull))
+	return s.save()
+}
+
+// ResolvePull reports where a pull request, named as "owner/name#number", is
+// filed: where the user filed it, or else where ResolveRepo puts its
+// repository.
+func (s *Store) ResolvePull(pull string, held []string) (effortID, via string, ok bool) {
+	s.mu.Lock()
+	id, found := s.f.Assignments[pullKey+strings.ToLower(pull)]
+	found = found && (id == "" || s.index(id) >= 0)
+	s.mu.Unlock()
+	if found {
+		return id, ViaUser, true
+	}
+	repo, _, _ := strings.Cut(pull, "#")
+	return s.ResolveRepo(repo, held)
+}
+
+// ResolveRepo reports where the user's own filing or a directory rule puts
+// what comes from a repository. held lists the directories known to hold a
+// checkout of it; the rule applies when exactly one effort has any of them.
+// ok is false when neither applies.
 func (s *Store) ResolveRepo(repo string, held []string) (effortID, via string, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if id, found := s.f.Assignments[repoKey+strings.ToLower(repo)]; found && (id == "" || s.index(id) >= 0) {
-		return id, ViaUser, true
+		return id, ViaRepo, true
 	}
 	for _, e := range s.f.Efforts {
 		for _, d := range e.Dirs {

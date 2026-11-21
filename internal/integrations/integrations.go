@@ -65,8 +65,10 @@ type FeedItem struct {
 	// Summary states the facts the item rests on.
 	Summary string
 	URL     string
-	// Repo is the repository the item belongs to, as "owner/name".
+	// Repo is the repository the item belongs to, as "owner/name", and Pull
+	// the pull request it is about, as "owner/name#number", if it is about one.
 	Repo string
+	Pull string
 	At   time.Time
 }
 

@@ -1300,7 +1300,7 @@ function queueItem(it, open) {
   } else if (it.feed) {
     answer = `<div class="replies">${!point && /^https:\/\//.test(it.url || '') ? `<a class="btn go" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">Open on ${esc(it.src)} ↗</a>` : ''}</div>`;
     menu = itemMenu(it, `<button data-act="livePark" data-id="${it.id}">Park as open question</button>
-      ${menuPart('move', `File ${esc(it.repo)} under`, menuTo('repoMoveTo', it.id, effortsBut(it.effort)))}`);
+      ${filingParts(it.pull, it.repo, it.effort, it.effortVia)}`);
     where = p ? `<button class="btn quiet" data-act="openItem" data-id="${it.id}">Its discussion ›</button>` : '';
   } else {
     answer = mockAnswer(it);
@@ -1445,7 +1445,7 @@ function effortDetail(e) {
 }
 
 const VIA = { you: 'filed by you', rule: 'filed by directory', guess: 'filed by the model' };
-const VIA_REPO = { you: 'repository filed by you', rule: 'a checkout is in this effort' };
+const VIA_REPO = { you: 'filed by you', repo: 'repository filed by you', rule: 'a checkout is in this effort' };
 
 function moveSelect(s) {
   const cur = s.effort || 'unsorted';
@@ -1870,7 +1870,7 @@ function effortNeeds(e, needs) {
 function effortPulls(e) {
   if (pullsOff()) return null;
   const list = allPulls().filter(p => (p.effort || 'unsorted') === e.id);
-  return ['pulls', 'PRs', list.length, list.length ? `<div class="rows">${list.map(p => pullRow(p, 'pullOpen', dragsRepo(p.repo, e.id))).join('')}</div>` : '<div class="none">No open pull requests are filed here.</div>'];
+  return ['pulls', 'PRs', list.length, list.length ? `<div class="rows">${list.map(p => pullRow(p, 'pullOpen', dragsPull(pullKey(p), e.id))).join('')}</div>` : '<div class="none">No open pull requests are filed here.</div>'];
 }
 /* The days an effort moved on as the journal has them, the latest first: the last two in full, and the rest
    behind a button. days is undefined until they have been fetched. */
@@ -2093,12 +2093,13 @@ const newEffortMini = () => adding ? `<form class="ecard mini new" data-form="ef
       <span class="send"><button type="button" class="btn" data-act="effortAddCancel">Cancel</button><button class="btn go">Add</button></span>
     </form>` : '<button class="ecard mini new" data-act="effortAdd">+ New effort</button>';
 /* What makes a row one that can be dragged onto an effort, from the effort it is filed under: a session's,
-   a pull request's, which takes its repository with it, or that of a thing that needs the user, which goes
-   by its session or its repository and, in the demo, by itself. */
+   a pull request's, or that of a thing that needs the user, which goes by its session, by the pull request
+   it is about or else by its repository, and, in the demo, by itself. */
 const dragsFrom = (id, from) => `draggable="true" data-session="${esc(id)}" data-from="${from}" title="Drag onto an effort to file it there"`;
+const dragsPull = (key, from) => `draggable="true" data-pull="${esc(key)}" data-from="${from}" title="Drag onto an effort to file it there"`;
 const dragsRepo = (repo, from) => `draggable="true" data-repo="${esc(repo)}" data-from="${from}" title="Drag onto an effort to file ${esc(repo)} there"`;
 const dragsItem = (it, from) => !it.live ? `draggable="true" data-item="${esc(it.id)}" data-from="${from}" title="Drag onto an effort to move it there"`
-  : it.feed ? (it.repo ? dragsRepo(it.repo, from) : '') : it.session ? dragsFrom(it.session.id, from) : '';
+  : it.feed ? (it.pull ? dragsPull(it.pull, from) : it.repo ? dragsRepo(it.repo, from) : '') : it.session ? dragsFrom(it.session.id, from) : '';
 /* The open sessions filed under no effort, beneath the column, each to be dragged onto the effort it belongs to. */
 function unsortedTray() {
   const list = live ? live.filter(s => !s.effort).map(s => [s.id, statusOf(s), s.label]) : SESSIONS.filter(s => sessEffort(s) === 'unsorted').map(s => [s.id, [s.status, STATUS[s.status]], s.title || s.name]);
@@ -2114,11 +2115,20 @@ function fileSession(id, to) {
   toast(to === 'unsorted' ? 'Left unsorted' : `Filed under ${effortById(to).name}`, () => { if (prev) state.sessMoved[id] = prev; else delete state.sessMoved[id]; });
 }
 
-/* Files a repository, and so every pull request from it, under an effort, or under none when given Unsorted. */
+/* Files a repository, and so every pull request from it that is not filed on its own, under an effort, or
+   under none when given Unsorted. */
 function fileRepo(repo, to) {
-  const said = to === 'unsorted' ? `${repo} left unsorted` : `Everything from ${repo} now files under ${effortById(to).name}`;
+  const said = to === 'unsorted' ? `${repo} left unsorted` : `${repo} now files under ${effortById(to).name}`;
   if (live) { api('POST', '/api/repos/effort', { repo, effort: to === 'unsorted' ? '' : to }, () => toast(said)); return; }
   MOCK_PULLS.filter(x => x.repo === repo).forEach(x => { x.effort = to; });
+  toast(said);
+}
+/* Files one pull request, named as pullKey names it, under an effort, or under none when given Unsorted,
+   wherever its repository is filed. */
+function filePull(key, to) {
+  const said = to === 'unsorted' ? `${key} left unsorted` : `${key} filed under ${effortById(to).name}`;
+  if (live) { api('POST', '/api/pulls/effort', { pull: key, effort: to === 'unsorted' ? '' : to }, () => toast(said)); return; }
+  MOCK_PULLS.filter(x => pullKey(x) === key).forEach(x => { x.effort = to; });
   toast(said);
 }
 
@@ -2177,8 +2187,9 @@ const dropTarget = el => {
   return to && to !== filing.dataset.from ? on : null;
 };
 function fileDragged(row, to) {
-  const { session, repo, item } = row.dataset;
+  const { session, pull, repo, item } = row.dataset;
   if (session) fileSession(session, to);
+  else if (pull) filePull(pull, to);
   else if (repo) fileRepo(repo, to);
   else changes.move({ id: item }, { value: to });
 }
@@ -2192,7 +2203,7 @@ document.addEventListener('dragstart', e => {
   if (row) {
     filing = row;
     e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', row.dataset.session || row.dataset.repo || row.dataset.item);
+    e.dataTransfer.setData('text/plain', row.dataset.session || row.dataset.pull || row.dataset.repo || row.dataset.item);
     requestAnimationFrame(() => row.classList.add('dragging'));
     return;
   }
@@ -2454,6 +2465,14 @@ function itemMenu(it, more) {
 const openEfforts = () => liveEfforts.filter(e => !e.shelved);
 /* The efforts a live session or repository could be filed under other than cur. */
 const effortsBut = cur => openEfforts().concat(LIVE_UNSORTED).filter(e => e.id !== cur).map(e => [e.id, e.name]).concat([['__new', 'New effort…']]);
+/* The parts of a menu that file something from a repository: the pull request it is about on its own, that
+   pull request back with its repository once it has been filed apart, and everything from the repository. */
+function filingParts(pull, repo, effort, via) {
+  const under = effort || 'unsorted';
+  return `${pull ? menuPart('move', 'Move to', menuTo('pullMoveTo', esc(pull), effortsBut(under))) : ''}
+    ${pull && via === 'you' ? `<button data-act="pullFollow" data-id="${esc(pull)}">File with ${esc(repo)} again</button>` : ''}
+    ${menuPart('repo', `File all of ${esc(repo)} under`, menuTo('repoMoveTo', esc(repo), effortsBut(via === 'you' ? '' : under)))}`;
+}
 /* The menu beside a session's title: what can be done with the session, after what can be done with its item, if it has one. */
 function sessionMenu(s, it) {
   const roles = knowledge.roles.filter(r => !(r.id === s.role && s.roleVia === 'you')).map(r => [r.id, r.name])
@@ -2494,12 +2513,11 @@ function branchSessions(p) {
         : `<div class="none" style="margin:4px 0 12px">It isn't running the Slorp mod, so tell it in its terminal: <span class="mono">${esc(shortPath(s.cwd))}</span></div>`}`).join('')}</div>`;
 }
 
-/* A feed item: nothing to reply to, only somewhere to go. Moving it files its
-   whole repository, since that is what the next items from there go by. */
+/* A feed item: nothing to reply to, only somewhere to go. Moving it files the pull request it is about. */
 function feedItemDetail(it) {
   const real = it.effort !== 'unsorted', p = pullOfItem(it), point = p && it.point && (p.points || []).find(x => x.id === it.point);
   const menu = itemMenu(it, `<button data-act="livePark" data-id="${it.id}">Park as open question</button>
-    ${menuPart('move', `File ${esc(it.repo)} under`, menuTo('repoMoveTo', it.id, effortsBut(it.effort)))}`);
+    ${filingParts(it.pull, it.repo, it.effort, it.effortVia)}`);
   return `<div class="inner">
     <div class="crumb">${real ? `<button class="eff" data-act="effort" data-id="${it.effort}">${effortMark(effortById(it.effort), 's')}${esc(effortById(it.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${real && VIA_REPO[it.effortVia] ? `<span>${VIA_REPO[it.effortVia]}</span>` : ''}${kindBadge(it.kind, it.src)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span><span class="mono">${esc(it.repo)}</span></div>
     <div class="titled"><h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>${menu}</div>
@@ -3230,9 +3248,9 @@ function pullTimeline(d) {
 function pullPage(p, d) {
   const real = p.effort && p.effort !== 'unsorted', [word, tone] = pullState(p), on = live ? sessionsOn(p) : [];
   return `<div class="inner">
-    <div class="crumb">${real ? `<button class="eff" data-act="effort" data-id="${p.effort}">${effortMark(effortById(p.effort), 's')}${esc(effortById(p.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${kindBadge('github')}
+    <div class="crumb">${real ? `<button class="eff" data-act="effort" data-id="${p.effort}">${effortMark(effortById(p.effort), 's')}${esc(effortById(p.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${real && VIA_REPO[p.effortVia] ? `<span>${VIA_REPO[p.effortVia]}</span>` : ''}${kindBadge('github')}
       ${p.urgency === 'blocking' || p.urgency === 'awaiting' ? `<span class="tag ${p.urgency}">${p.urgency}</span>` : ''}<span class="mono">${esc(p.repo)}#${p.number}</span><span>${p.mine ? 'yours' : `by ${esc(p.author || 'someone')}`}</span><span class="pr ${tone}">${word}</span><span>changed ${ago(pullAt(p))}</span></div>
-    <div class="titled"><h1>${esc(p.title)}</h1></div>
+    <div class="titled"><h1>${esc(p.title)}</h1>${actsMenu(esc(pullKey(p)), 'File it under an effort', filingParts(pullKey(p), p.repo, p.effort, p.effortVia))}</div>
     <p class="subt">${esc(p.needs)}</p>
     ${pullNeeds(p)}
     ${pullSince(p, d)}
@@ -3815,7 +3833,9 @@ const actions = {
   rows: d => { state.rows = d.as; },
   liveMoveTo: d => changes.liveMove(d, { value: d.to }),
   liveRoleTo: d => changes.liveRole(d, { value: d.to }),
-  repoMoveTo: d => changes.repoMove(d, { value: d.to }),
+  repoMoveTo: d => { if (d.to === '__new') openEffort(null); else { fileRepo(d.id, d.to); return !live; } },
+  pullMoveTo: d => { if (d.to === '__new') openEffort(null); else { filePull(d.id, d.to); return !live; } },
+  pullFollow: d => { api('DELETE', '/api/pulls/effort', { pull: d.id }, () => toast(`${d.id} files with its repository again`)); return false; },
   moveTo: d => changes.move(d, { value: d.to }),
   collapse: d => { state.collapsed[d.key] = !isShut(d.key); },
   noop: () => false,
@@ -4128,13 +4148,6 @@ const changes = {
     return false;
   },
   roleAttention: (d, el) => { api('POST', `/api/roles/${d.id}`, { attention: el.value }); return false; },
-  repoMove: (d, el) => {
-    const to = el.value, it = itemById(d.id);
-    if (!to) return false;
-    if (to === '__new') { openEffort(null); return; }
-    fileRepo(it.repo, to);
-    return false;
-  },
   move: (d, el) => {
     if (!el.value) return false;
     const prev = state.moved[d.id];

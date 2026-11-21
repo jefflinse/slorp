@@ -509,7 +509,7 @@ func TestResolveRepo(t *testing.T) {
 
 	must(t, k.AssignRepo("Acme/Widgets", a))
 	for _, name := range []string{"acme/widgets", "ACME/Widgets"} {
-		if got, via, ok := k.ResolveRepo(name, []string{"/work/b"}); got != a || via != kb.ViaUser || !ok {
+		if got, via, ok := k.ResolveRepo(name, []string{"/work/b"}); got != a || via != kb.ViaRepo || !ok {
 			t.Errorf("%s after the user filed it: %q, %q, %v; want their choice over the directory rule, whatever the case", name, got, via, ok)
 		}
 	}
@@ -521,7 +521,7 @@ func TestResolveRepo(t *testing.T) {
 	}
 
 	must(t, k.AssignRepo("acme/widgets", ""))
-	if got, via, ok := k.ResolveRepo("acme/widgets", []string{"/work/b"}); got != "" || via != kb.ViaUser || !ok {
+	if got, via, ok := k.ResolveRepo("acme/widgets", []string{"/work/b"}); got != "" || via != kb.ViaRepo || !ok {
 		t.Errorf("after the user left it unsorted: %q, %q, %v; want unsorted to hold against the rule", got, via, ok)
 	}
 
@@ -544,7 +544,81 @@ func TestRepoFilingSurvivesReopen(t *testing.T) {
 	k := testdb.KB(t, st)
 	id := create(t, k, "A")
 	must(t, k.AssignRepo("acme/widgets", id))
-	if got, via, ok := testdb.KB(t, st).ResolveRepo("acme/widgets", nil); got != id || via != kb.ViaUser || !ok {
+	if got, via, ok := testdb.KB(t, st).ResolveRepo("acme/widgets", nil); got != id || via != kb.ViaRepo || !ok {
+		t.Errorf("after reopening: %q, %q, %v", got, via, ok)
+	}
+}
+
+func TestResolvePull(t *testing.T) {
+	k := open(t)
+	a, b, c := create(t, k, "A"), create(t, k, "B"), create(t, k, "C")
+	must(t, k.AddDir(c, "/work/c"))
+	held := []string{"/work/c"}
+	resolve := func(pull string) [2]string {
+		id, via, ok := k.ResolvePull(pull, held)
+		if !ok {
+			return [2]string{}
+		}
+		return [2]string{id, via}
+	}
+
+	if got := resolve("acme/widgets#7"); got != [2]string{c, kb.ViaDir} {
+		t.Errorf("before anything is filed: %v, want the directory rule for its repository", got)
+	}
+	must(t, k.AssignRepo("acme/widgets", a))
+	if got := resolve("acme/widgets#7"); got != [2]string{a, kb.ViaRepo} {
+		t.Errorf("after its repository was filed: %v, want it to go with the repository", got)
+	}
+
+	must(t, k.AssignPull("Acme/Widgets#7", b))
+	for _, name := range []string{"acme/widgets#7", "ACME/Widgets#7"} {
+		if got := resolve(name); got != [2]string{b, kb.ViaUser} {
+			t.Errorf("%s after the user filed it: %v, want their choice over its repository's, whatever the case", name, got)
+		}
+	}
+	if got := resolve("acme/widgets#70"); got != [2]string{a, kb.ViaRepo} {
+		t.Errorf("another pull request of the repository: %v, want it left with the repository", got)
+	}
+	if got, via, _ := k.ResolveRepo("acme/widgets", held); got != a || via != kb.ViaRepo {
+		t.Errorf("the repository after one of its pull requests was filed: %q, %q; want it where it was", got, via)
+	}
+
+	must(t, k.AssignRepo("acme/widgets", c))
+	if got := resolve("acme/widgets#7"); got != [2]string{b, kb.ViaUser} {
+		t.Errorf("after its repository was filed elsewhere: %v, want its own filing to hold", got)
+	}
+	must(t, k.AssignPull("acme/widgets#7", ""))
+	if got := resolve("acme/widgets#7"); got != [2]string{"", kb.ViaUser} {
+		t.Errorf("after the user left it unsorted: %v, want unsorted to hold against its repository", got)
+	}
+
+	must(t, k.AssignPull("acme/widgets#7", b))
+	must(t, k.Delete(b))
+	if got := resolve("acme/widgets#7"); got != [2]string{c, kb.ViaRepo} {
+		t.Errorf("after its effort was deleted: %v, want it with its repository again", got)
+	}
+	must(t, k.AssignPull("acme/widgets#7", a))
+	must(t, k.UnassignPull("ACME/widgets#7"))
+	if got := resolve("acme/widgets#7"); got != [2]string{c, kb.ViaRepo} {
+		t.Errorf("after its filing was forgotten: %v, want it with its repository again", got)
+	}
+
+	for _, bad := range []string{"acme/widgets", "acme/widgets#", "acme/widgets#x", "acme/widgets#0", "#7", " #7"} {
+		if err := k.AssignPull(bad, a); err == nil {
+			t.Errorf("filing %q as a pull request was accepted", bad)
+		}
+	}
+	if err := k.AssignPull("acme/widgets#7", "nope"); err == nil {
+		t.Error("filing under an effort that does not exist was accepted")
+	}
+}
+
+func TestPullFilingSurvivesReopen(t *testing.T) {
+	st := testdb.Open(t)
+	k := testdb.KB(t, st)
+	id := create(t, k, "A")
+	must(t, k.AssignPull("acme/widgets#7", id))
+	if got, via, ok := testdb.KB(t, st).ResolvePull("acme/widgets#7", nil); got != id || via != kb.ViaUser || !ok {
 		t.Errorf("after reopening: %q, %q, %v", got, via, ok)
 	}
 }

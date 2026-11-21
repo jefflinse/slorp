@@ -23,9 +23,9 @@ async function world(t, hash, extra = {}) {
   const server = createServer((req, res) => {
     if (req.url === '/api/events') {
       res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write(': connected\n\n')
-    } else if (req.method === 'POST') {
+    } else if (req.method === 'POST' || req.method === 'DELETE') {
       let body = ''
-      req.on('data', chunk => { body += chunk }).on('end', () => { posts.push([req.url, JSON.parse(body || '{}')]); res.setHeader('content-type', 'application/json'); res.end('{}') })
+      req.on('data', chunk => { body += chunk }).on('end', () => { posts.push([req.method === 'POST' ? req.url : `${req.method} ${req.url}`, JSON.parse(body || '{}')]); res.setHeader('content-type', 'application/json'); res.end('{}') })
     } else if (req.url === '/api/sessions') {
       res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(data))
     } else {
@@ -277,13 +277,36 @@ test('a session or a thing that needs you is dragged from one card on the board 
   assert.equal(filed().length, 2)
 })
 
-test('a pull request is dragged onto an effort to file its repository there', async t => {
+const github = { integrations: [{ id: 'github', name: 'GitHub', enabled: true, available: true, lookups: [], watches: [] }] }
+
+test('a pull request is dragged onto an effort to file it there on its own', async t => {
   const pull = { source: 'github', repo: 'acme/widgets', number: 7, title: 'Prune old snapshots', url: 'https://github.com/acme/widgets/pull/7', author: 'marta', mine: true, at: ago(30), needs: 'Waiting on review', effort: 'solo' }
-  const page = await world(t, 'efforts', { integrations: [{ id: 'github', name: 'GitHub', enabled: true, lookups: [], watches: [] }], pullRequests: [pull] })
+  const page = await world(t, 'efforts', { ...github, pullRequests: [pull] })
   await page.locator('.ecard[data-id="solo"] .eh').click()
   await page.locator('.ebig').getByRole('tab', { name: /^PRs/ }).click()
   await page.locator('.ebig .tabbody .row', { hasText: 'Prune old snapshots' }).dragTo(page.locator('.estack .ecard[data-id="pair"]'))
   await page.waitForFunction(() => document.querySelector('#toast.show'))
-  assert.deepEqual(page.posts.filter(([url]) => url === '/api/repos/effort'), [['/api/repos/effort', { repo: 'acme/widgets', effort: 'pair' }]])
-  assert.equal(await page.locator('#toast').innerText(), 'Everything from acme/widgets now files under pair')
+  assert.deepEqual(page.posts.filter(([url]) => /effort$/.test(url)), [['/api/pulls/effort', { pull: 'acme/widgets#7', effort: 'pair' }]])
+  assert.equal(await page.locator('#toast').innerText(), 'acme/widgets#7 filed under pair')
+})
+
+test("a pull request's page files it on its own, back with its repository, or files the whole repository", async t => {
+  const pull = { source: 'github', repo: 'acme/widgets', number: 7, title: 'Prune old snapshots', url: 'https://github.com/acme/widgets/pull/7', author: 'marta', mine: true, at: ago(30), needs: 'Waiting on review', effort: 'solo', effortVia: 'you', points: [] }
+  const page = await world(t, 'pulls', { ...github, pullRequests: [pull] })
+  const menu = page.locator('#acts')
+  await page.locator('.crumb', { hasText: 'filed by you' }).waitFor()
+  const pick = async (part, to) => {
+    await menu.locator('summary.icon').click()
+    if (part) await menu.locator('summary', { hasText: part }).click()
+    await menu.getByRole('button', { name: to, exact: true }).click()
+  }
+  await pick('Move to', 'pair')
+  await pick('', 'File with acme/widgets again')
+  await pick('File all of acme/widgets under', 'fleet')
+  await page.waitForFunction(() => document.querySelector('#toast.show'))
+  assert.deepEqual(page.posts.filter(([url]) => /effort$/.test(url)), [
+    ['/api/pulls/effort', { pull: 'acme/widgets#7', effort: 'pair' }],
+    ['DELETE /api/pulls/effort', { pull: 'acme/widgets#7' }],
+    ['/api/repos/effort', { repo: 'acme/widgets', effort: 'fleet' }],
+  ])
 })

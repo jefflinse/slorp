@@ -130,7 +130,7 @@ func TestStepHandsWhatAFeedFoundToTheHub(t *testing.T) {
 	src := newSource("github")
 	at := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	src.found["github"] = []integrations.FeedItem{{Key: "acme/widgets#7:ready", Kind: "ready-to-merge", Urgency: "whenever", Title: "Ready",
-		Ask: "Merge it.", Summary: "facts", URL: "https://example.com/7", Repo: "acme/widgets", At: at}}
+		Ask: "Merge it.", Summary: "facts", URL: "https://example.com/7", Repo: "acme/widgets", Pull: "acme/widgets#7", At: at}}
 	p, h, _ := newPoller(t, src)
 	p.Step(ctx, false)
 
@@ -139,7 +139,7 @@ func TestStepHandsWhatAFeedFoundToTheHub(t *testing.T) {
 		t.Fatalf("items = %+v", got)
 	}
 	want := hub.Item{ID: got[0].ID, Kind: "ready-to-merge", Urgency: "whenever", Title: "Ready", Ask: "Merge it.", Summary: "facts",
-		URL: "https://example.com/7", Repo: "acme/widgets", At: at, Source: "github", Replies: []string{}}
+		URL: "https://example.com/7", Repo: "acme/widgets", Pull: "acme/widgets#7", At: at, Source: "github", Replies: []string{}}
 	if !reflect.DeepEqual(got[0], want) {
 		t.Errorf("item =\n%+v, want\n%+v", got[0], want)
 	}

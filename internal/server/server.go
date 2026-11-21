@@ -813,6 +813,29 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		edited(w, k.AssignRepo(in.Repo, in.Effort))
 	})
 
+	// Files one pull request, named as "owner/name#number", on its own, and
+	// deleting that files it with its repository again.
+	mux.HandleFunc("POST /api/pulls/effort", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Pull   string `json:"pull"`
+			Effort string `json:"effort"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		edited(w, k.AssignPull(in.Pull, in.Effort))
+	})
+
+	mux.HandleFunc("DELETE /api/pulls/effort", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Pull string `json:"pull"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		edited(w, k.UnassignPull(in.Pull))
+	})
+
 	// One listed pull request with its discussion. Asking says the user is
 	// looking at it, so what is still to be read or written of it comes
 	// first.

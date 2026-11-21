@@ -1059,13 +1059,13 @@ func TestFeedItemsOverHTTP(t *testing.T) {
 	if code := f.post("/api/repos/effort", `{"repo":"acme/widgets","effort":"widgets"}`); code != 204 {
 		t.Fatalf("file a repository = %d", code)
 	}
-	if it := f.state().Items[0]; it.Effort != "widgets" || it.EffortVia != kb.ViaUser {
+	if it := f.state().Items[0]; it.Effort != "widgets" || it.EffortVia != kb.ViaRepo {
 		t.Errorf("item filed %q via %q, want the user's filing of its repository", it.Effort, it.EffortVia)
 	}
 	if f.feeds.rescans != before+1 {
 		t.Errorf("%d rescans after a filing, want 1: an edit may change which directories matter", f.feeds.rescans-before)
 	}
-	if code := f.post("/api/repos/effort", `{"repo":"acme/widgets","effort":""}`); code != 204 || f.state().Items[0].EffortVia != kb.ViaUser || f.state().Items[0].Effort != "" {
+	if code := f.post("/api/repos/effort", `{"repo":"acme/widgets","effort":""}`); code != 204 || f.state().Items[0].EffortVia != kb.ViaRepo || f.state().Items[0].Effort != "" {
 		t.Errorf("leaving a repository unsorted = %d, item %+v", code, f.state().Items[0])
 	}
 	if code := f.post("/api/repos/effort", `{"repo":"acme/widgets","effort":"nope"}`); code != 400 {
@@ -1076,6 +1076,34 @@ func TestFeedItemsOverHTTP(t *testing.T) {
 	}
 	if code := f.post("/api/repos/effort", `{`); code != 400 {
 		t.Errorf("a malformed filing = %d, want 400", code)
+	}
+
+	before = f.feeds.rescans
+	if code := f.post("/api/pulls/effort", `{"pull":"acme/widgets#7","effort":"widgets"}`); code != 204 {
+		t.Fatalf("file a pull request = %d", code)
+	}
+	if p := f.state().PullRequests[0]; p.Effort != "widgets" || p.EffortVia != kb.ViaUser {
+		t.Errorf("pull request filed %q via %q, want the user's filing of it", p.Effort, p.EffortVia)
+	}
+	if it := f.state().Items[0]; it.Effort != "" || it.EffortVia != kb.ViaRepo {
+		t.Errorf("item filed %q via %q, want it left with its repository: it is about no pull request", it.Effort, it.EffortVia)
+	}
+	if f.feeds.rescans != before+1 {
+		t.Errorf("%d rescans after a filing, want 1", f.feeds.rescans-before)
+	}
+	if code, _ := f.do("DELETE", "/api/pulls/effort", `{"pull":"acme/widgets#7"}`, nil); code != 204 {
+		t.Errorf("forgetting a pull request's filing = %d, want 204", code)
+	}
+	if p := f.state().PullRequests[0]; p.Effort != "" || p.EffortVia != kb.ViaRepo {
+		t.Errorf("pull request filed %q via %q after its filing was forgotten, want it with its repository", p.Effort, p.EffortVia)
+	}
+	for _, body := range []string{`{"pull":"acme/widgets#7","effort":"nope"}`, `{"pull":"acme/widgets","effort":"widgets"}`, `{`} {
+		if code := f.post("/api/pulls/effort", body); code != 400 {
+			t.Errorf("filing %s = %d, want 400", body, code)
+		}
+	}
+	if code, _ := f.do("DELETE", "/api/pulls/effort", `{`, nil); code != 400 {
+		t.Errorf("a malformed forgetting = %d, want 400", code)
 	}
 }
 
