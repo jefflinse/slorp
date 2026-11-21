@@ -1594,3 +1594,34 @@ func TestABridgeReportsItsSubagents(t *testing.T) {
 		t.Errorf("pending = %+v, want it to name the subagent that asked", p)
 	}
 }
+
+func TestWorkspacesOverHTTP(t *testing.T) {
+	f := newFixture(t)
+	dir := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
+	if _, body := f.do("GET", "/api/sessions", "", nil); !strings.Contains(body, `"workspaces":[]`) {
+		t.Errorf("state lacks an empty list of workspaces, which the page reads: %s", body)
+	}
+	if code := f.post("/api/kb/workspaces", `{"name":"Here","dir":`+strconv.Quote(dir+"/")+`}`); code != 204 {
+		t.Fatalf("add a workspace = %d", code)
+	}
+	got := f.state().Knowledge.Workspaces
+	if len(got) != 1 || got[0].Name != "Here" || got[0].Dir != dir {
+		t.Fatalf("workspaces = %+v, want the one added, in the directory as it is", got)
+	}
+	for name, body := range map[string]string{
+		"a directory that is not there": `{"name":"Gone","dir":` + strconv.Quote(filepath.Join(dir, "missing")) + `}`,
+		"a relative directory":          `{"name":"Rel","dir":"work"}`,
+		"no name":                       `{"name":"","dir":` + strconv.Quote(dir) + `}`,
+		"a directory another has":       `{"name":"Again","dir":` + strconv.Quote(dir) + `}`,
+	} {
+		if code := f.post("/api/kb/workspaces", body); code != 400 {
+			t.Errorf("a workspace with %s = %d, want 400", name, code)
+		}
+	}
+	if code, _ := f.do("DELETE", "/api/kb/workspaces/"+got[0].ID, "", nil); code != 204 || len(f.state().Knowledge.Workspaces) != 0 {
+		t.Errorf("remove a workspace = %d, leaving %+v", code, f.state().Knowledge.Workspaces)
+	}
+}

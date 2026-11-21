@@ -652,6 +652,14 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		if !readJSON(w, r, &in) {
 			return
 		}
+		if r.PathValue("section") == kb.SectionWorkspaces {
+			dir, err := directory(in.Dir)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			in.Dir = dir
+		}
 		edited(w, k.Add(r.PathValue("section"), in))
 	})
 

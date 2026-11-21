@@ -1,6 +1,7 @@
 package kb_test
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/jefflinse/slorp/internal/kb"
@@ -734,4 +735,46 @@ func TestCarry(t *testing.T) {
 		t.Error("a session whose filing was not needed is still filed")
 	}
 	must(t, k.Carry("nothing", "new"))
+}
+
+func TestWorkspaces(t *testing.T) {
+	st := testdb.Open(t)
+	k := testdb.KB(t, st)
+	if got := k.Knowledge().Workspaces; got == nil || len(got) != 0 {
+		t.Errorf("Workspaces = %v before any is added, want an empty list", got)
+	}
+	must(t, k.Add(kb.SectionWorkspaces, kb.Entry{Name: " Slorp ", Dir: "/work/slorp/"}))
+	must(t, k.Add(kb.SectionWorkspaces, kb.Entry{Name: "Docs", Dir: "/work/docs"}))
+	got := k.Knowledge().Workspaces
+	if len(got) != 2 || got[0].Name != "Slorp" || got[0].Dir != "/work/slorp" || got[1].Name != "Docs" || got[0].ID == "" || got[0].ID == got[1].ID {
+		t.Fatalf("Workspaces = %+v, want the two added, in that order, each with an id of its own, a trimmed name and a clean directory", got)
+	}
+
+	bad := map[string]kb.Entry{
+		"no name":                 {Dir: "/work/x"},
+		"a blank name":            {Name: "  ", Dir: "/work/x"},
+		"no directory":            {Name: "X"},
+		"a relative directory":    {Name: "X", Dir: "work/x"},
+		"a directory another has": {Name: "Again", Dir: "/work/docs/"},
+	}
+	for name, entry := range bad {
+		if err := k.Add(kb.SectionWorkspaces, entry); err == nil {
+			t.Errorf("a workspace with %s was accepted", name)
+		}
+	}
+	if n := len(k.Knowledge().Workspaces); n != 2 {
+		t.Errorf("%d workspaces after the rejected ones, want 2", n)
+	}
+
+	if after := testdb.KB(t, st).Knowledge().Workspaces; !reflect.DeepEqual(after, got) {
+		t.Errorf("after reopening: %+v, want %+v", after, got)
+	}
+	must(t, k.Remove(kb.SectionWorkspaces, got[0].ID))
+	if left := k.Knowledge().Workspaces; len(left) != 1 || left[0].Name != "Docs" {
+		t.Errorf("after removing the first: %+v, want only Docs", left)
+	}
+	if err := k.Remove(kb.SectionWorkspaces, got[0].ID); err == nil {
+		t.Error("removing a workspace that is gone was accepted")
+	}
+	must(t, k.Add(kb.SectionWorkspaces, kb.Entry{Name: "Slorp again", Dir: "/work/slorp"}))
 }

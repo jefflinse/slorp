@@ -3,6 +3,7 @@ package kb
 import (
 	"cmp"
 	"errors"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -47,6 +48,13 @@ type Role struct {
 	Attention string `json:"attention"`
 }
 
+// Workspace is a directory the user works in, by a name of their own.
+type Workspace struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Dir  string `json:"dir"`
+}
+
 // What a role lets through to the user's attention.
 const (
 	AttentionAll     = "all"
@@ -63,19 +71,23 @@ type Knowledge struct {
 	// Routing is read by the model when it files a session under an effort.
 	Routing []Fact `json:"routing"`
 	Roles   []Role `json:"roles"`
+	// Workspaces are offered wherever a directory is asked for.
+	Workspaces []Workspace `json:"workspaces"`
 }
 
 // Sections of the knowledge base, as Add and Remove name them.
 const (
-	SectionWatch     = "watch"
-	SectionQuestions = "questions"
-	SectionContext   = "context"
-	SectionRouting   = "routing"
-	SectionRoles     = "roles"
+	SectionWatch      = "watch"
+	SectionQuestions  = "questions"
+	SectionContext    = "context"
+	SectionRouting    = "routing"
+	SectionRoles      = "roles"
+	SectionWorkspaces = "workspaces"
 )
 
 // Entry is what Add takes; each section reads the fields it has. A role's
-// Type is its attention and its Text what it is about.
+// Type is its attention and its Text what it is about. A workspace's Dir is
+// an absolute directory no other workspace has.
 type Entry struct {
 	Type   string `json:"type"`
 	Name   string `json:"name"`
@@ -83,6 +95,7 @@ type Entry struct {
 	Effort string `json:"effort"`
 	Text   string `json:"text"`
 	Origin string `json:"origin"`
+	Dir    string `json:"dir"`
 }
 
 func (s *Store) Knowledge() Knowledge {
@@ -90,11 +103,12 @@ func (s *Store) Knowledge() Knowledge {
 	defer s.mu.Unlock()
 	k := s.f.Knowledge
 	return Knowledge{
-		Watch:     append([]Watch{}, k.Watch...),
-		Questions: append([]Question{}, k.Questions...),
-		Context:   append([]Fact{}, k.Context...),
-		Routing:   append([]Fact{}, k.Routing...),
-		Roles:     append([]Role{}, k.Roles...),
+		Watch:      append([]Watch{}, k.Watch...),
+		Questions:  append([]Question{}, k.Questions...),
+		Context:    append([]Fact{}, k.Context...),
+		Routing:    append([]Fact{}, k.Routing...),
+		Roles:      append([]Role{}, k.Roles...),
+		Workspaces: append([]Workspace{}, k.Workspaces...),
 	}
 }
 
@@ -223,6 +237,12 @@ func (s *Store) Add(section string, e Entry) error {
 	case section == SectionRoles && name != "" && (e.Type == "" || validAttention(e.Type)):
 		k.Roles = append(k.Roles, Role{ID: id, Name: name, About: text, Attention: cmp.Or(e.Type, AttentionAll)})
 		s.f.RoleRevision++
+	case section == SectionWorkspaces && name != "" && filepath.IsAbs(e.Dir):
+		dir := filepath.Clean(e.Dir)
+		if slices.ContainsFunc(k.Workspaces, func(w Workspace) bool { return w.Dir == dir }) {
+			return errors.New("a workspace already has that directory")
+		}
+		k.Workspaces = append(k.Workspaces, Workspace{ID: id, Name: name, Dir: dir})
 	default:
 		return errors.New("that entry is missing something, or the section does not exist")
 	}
@@ -254,6 +274,8 @@ func (s *Store) Remove(section, id string) error {
 			}
 		}
 		s.f.RoleRevision++
+	case SectionWorkspaces:
+		k.Workspaces, found = without(k.Workspaces, func(w Workspace) bool { return w.ID == id })
 	}
 	if !found {
 		return errors.New("no such entry")

@@ -1677,10 +1677,13 @@ const START_ENGINES = ['claude', 'opencode', 'local'];
 const START_MODELS = [['', 'Default'], ['fable', 'Fable'], ['opus', 'Opus'], ['sonnet', 'Sonnet'], ['haiku', 'Haiku']];
 const START_EFFORTS = [['', 'Default'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max']];
 const localName = () => summarizer.model ? summarizer.model.split('/').pop() : '';
-/* Opens the New Session dialog: for an effort when it is asked for from one, and otherwise from the defaults. */
-function openStart(effort) {
+/* Opens the New Session dialog: for an effort when it is asked for from one, in a directory when it is asked
+   for from a workspace, and otherwise from the defaults. */
+function openStart(effort, dir = '') {
   modal = 'start'; modalFocus = true;
-  if (!(launching || partialStart || startAttempt)) draftStart(effort);
+  if (launching || partialStart || startAttempt) return;
+  draftStart(effort || (dir && effortOfDir(dir)?.id) || '');
+  if (dir) { startDraft.dir = tilde(dir); loadStartCatalog(); }
 }
 /* Begins the draft of a new session afresh from the defaults kept in Settings. Asked for from an effort, it is
    filed there and starts in that effort's first directory; otherwise the default effort and directory stand. */
@@ -1758,7 +1761,7 @@ function startModal() {
   if (!live || !e) { modal = null; return ''; }
   loadStartCatalog();
   const real = e.id !== 'unsorted', local = localName(), on = startWith, last = startDraft[on];
-  const dirs = startDirs(), first = startDraft.dir, roles = knowledge.roles.length;
+  const dirs = startDirs(), first = startDraft.dir, roles = knowledge.roles.length, spaces = knowledge.workspaces, at = workspaceAt(first);
   const efforts = [['', 'No effort']].concat(openEfforts().concat(real && !openEfforts().includes(e) ? e : []).map(x => [x.id, x.name]));
   const pick = (name, label, options, chosen) => `<label><span>${label}</span><select class="btn" name="${name}" data-keep="start-${on}-${name}">${options.map(([v, t]) => `<option value="${esc(v)}" ${v === (chosen || '') ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`;
   const way = (id, label, off) => `<button type="button" class="${on === id ? 'on' : ''}" data-act="startWith" data-to="${id}" aria-pressed="${on === id}" ${off ? `disabled title="${esc(off)}"` : ''}>${esc(label)}</button>`;
@@ -1767,8 +1770,9 @@ function startModal() {
     <form data-form="start" data-id="${e.id}" data-engine="${on}">
       <div class="seg wide" role="group" aria-label="What it runs on">${way('claude', 'Claude Code', lifecycleCap('claude', 'start') ? '' : 'Starting Claude is not supported')}${way('opencode', 'OpenCode', lifecycleCap('opencode', 'start') && lifecycleCap('opencode', 'launchOptions') ? '' : 'Starting OpenCode is not supported')}${way('local', local || 'Local model', !local ? 'No local model is running' : lifecycleCap('claude', 'start') ? '' : 'Starting Claude is not supported')}</div>
       <label class="wide"><span>Prompt</span><textarea name="prompt" data-keep="start-prompt" placeholder="What should it do?" required ${first ? 'data-first' : ''}>${esc(startDraft.prompt)}</textarea></label>
-      <label class="wide"><span>Directory</span><input name="dir" class="mono" data-keep="start-dir" list="start-dirs" value="${esc(first || '')}" placeholder="~/dev/project" required spellcheck="false" autocomplete="off" ${first ? '' : 'data-first'}>
-        <datalist id="start-dirs">${dirs.map(d => `<option value="${esc(d)}"></option>`).join('')}</datalist></label>
+      ${spaces.length ? `<label><span>Workspace</span><select class="btn" name="workspace" data-keep="start-workspace">${[['', 'Another directory']].concat(spaces.map(w => [w.id, w.name])).map(([id, name]) => `<option value="${esc(id)}" ${id === (at?.id || '') ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select></label>` : ''}
+      <label class="${spaces.length ? '' : 'wide'}"><span>Directory</span><input name="dir" class="mono" data-keep="start-dir" list="start-dirs" value="${esc(first || '')}" placeholder="~/dev/project" required spellcheck="false" autocomplete="off" ${first ? '' : 'data-first'}>
+        <datalist id="start-dirs">${dirOptions(dirs)}</datalist></label>
       <label><span>File under</span><select class="btn" name="effortPick" data-keep="start-effort">${efforts.map(([id, name]) => `<option value="${esc(id)}" ${id === (real ? e.id : '') ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select></label>
       ${roles ? pick('role', 'Slorp role', [['', 'No role']].concat(knowledge.roles.map(r => [r.id, esc(r.name)])), startDraft.role) : ''}
       <label class="${roles ? 'wide' : ''}"><span>Name <i>optional</i></span><input name="name" data-keep="start-name" value="${esc(startDraft.name)}" maxlength="80" autocomplete="off"></label>
@@ -2265,7 +2269,7 @@ let capabilities = {};
 let platform = '', terminal = { apps: [], default: '' };
 const onMac = () => platform ? platform === 'darwin' : /Mac/.test(navigator.platform);
 const historyReading = new Set();
-let knowledge = { watch: [], questions: [], context: [], routing: [], roles: [] }, integrations = [], lookups = [], feeds = {}, pulls = [], limits = [], archive = [], plugins = {}, archiveDocs = {};
+let knowledge = { watch: [], questions: [], context: [], routing: [], roles: [], workspaces: [] }, integrations = [], lookups = [], feeds = {}, pulls = [], limits = [], archive = [], plugins = {}, archiveDocs = {};
 let providerLimits = [];
 /* Fetches a closed session's timeline, once per time it closes. */
 const archiveAsked = {};
@@ -2303,7 +2307,7 @@ async function refresh(force) {
     capabilities = data.capabilities || {};
     platform = data.platform || '';
     terminal = { apps: [], default: '', ...data.terminal };
-    knowledge = { roles: [], ...(data.knowledge || knowledge) };
+    knowledge = { roles: [], workspaces: [], ...(data.knowledge || knowledge) };
     integrations = data.integrations || [];
     lookups = data.lookups || [];
     feeds = data.feeds || {};
@@ -3490,6 +3494,7 @@ const KB_LIVE_LEDE = {
   questions: 'Things you have not decided yet. They show under their effort, and the model reads them when it writes that effort\'s status.',
   context: 'Facts the model should always know. It reads them before describing any session, so changing one re-describes everything.',
   routing: 'Plain-language notes on how to file things, read by the model when it guesses an effort. Directories that file automatically are listed under each effort.',
+  workspaces: 'The directories you work in, each by a name of your own. They are offered wherever a session needs a directory, such as when you start one.',
   roles: 'The kinds of session you tell apart, such as one that reviews pull requests on a loop. Give a session a role from the menu beside its name on Home or under Sessions. The local model guesses a role for the rest from what each role is about; a guess only labels a session, and never keeps it from asking for you.',
 };
 /* Says which parts of the knowledge base nothing reads without a local model. */
@@ -3501,7 +3506,7 @@ const KB_UNREAD = {
 };
 const kbUnread = k => modelless() && KB_UNREAD[k] ? `<p class="none" style="margin:-6px 0 14px">${NO_MODEL}, ${KB_UNREAD[k]}</p>` : '';
 const kbData = () => live ? knowledge : state.kb;
-const kbSections = () => live ? { ...KB_SECTIONS, roles: { name: 'Session roles' } } : KB_SECTIONS;
+const kbSections = () => live ? { ...KB_SECTIONS, roles: { name: 'Session roles' }, workspaces: { name: 'Workspaces' } } : KB_SECTIONS;
 const kbCount = k => kbData()[k].length;
 
 function integrationsBody() {
@@ -3528,6 +3533,49 @@ function integrationsBody() {
     ${recent || '<div class="none">Nothing yet. Lookups appear here as the model makes them, and are forgotten when the service restarts.</div>'}</div>`;
 }
 
+/* A directory as it is compared with another: with the home directory as ~, and no slash at its end. */
+const dirKey = dir => tilde(String(dir || '').trim()).replace(/(.)\/+$/, '$1');
+/* The workspace a directory is, if it is one. */
+const workspaceAt = dir => knowledge.workspaces.find(w => dirKey(w.dir) === dirKey(dir));
+/* The effort whose directories file a session that works in dir: the one with the deepest directory at or above it. */
+function effortOfDir(dir) {
+  const at = dirKey(dir);
+  let found = null, depth = 0;
+  for (const e of openEfforts()) for (const d of e.dirs.map(dirKey)) if ((at === d || at.startsWith(d + '/')) && d.length > depth) { found = e; depth = d.length; }
+  return found;
+}
+/* The directories offered where one is typed: the workspaces, each by its name, and then the rest. */
+function dirOptions(rest) {
+  const named = knowledge.workspaces.map(w => [tilde(w.dir), w.name]);
+  return named.concat(rest.filter(d => !named.some(([dir]) => dir === d)).map(d => [d, '']))
+    .map(([dir, name]) => `<option value="${esc(dir)}" ${name ? `label="${esc(name)}"` : ''}></option>`).join('');
+}
+/* Adds a workspace, and says why when the service would not have it. */
+function addWorkspace(name, dir, done) {
+  fetch('/api/kb/workspaces', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, dir }) })
+    .then(async res => {
+      if (!res.ok) throw new Error((await res.text()).trim() || res.status);
+      toast(`${name} is now a workspace`);
+      if (done) done();
+      refresh(true);
+    }).catch(err => toast(err instanceof TypeError ? 'Could not reach the Slorp service' : `That did not work: ${err.message}`));
+}
+
+function workspacesBody() {
+  const cards = knowledge.workspaces.map(w => {
+    const open = live.filter(s => s.cwd && (dirKey(s.cwd) === dirKey(w.dir) || dirKey(s.cwd).startsWith(dirKey(w.dir) + '/'))).length, e = effortOfDir(w.dir);
+    return `<div class="card"><span class="glyph">${esc(w.name[0].toUpperCase())}</span>
+      <div class="body"><div class="nm">${esc(w.name)}</div><div class="why mono">${esc(tilde(w.dir))}</div>
+      <div class="meta">${e ? `<button class="link" data-act="effort" data-id="${e.id}">${esc(e.name)}</button>` : '<span>files under no effort</span>'}<span>${open ? plural(open, 'open session') : 'no open sessions'}</span></div></div>
+      <span class="does"><button class="btn" data-act="startIn" data-dir="${esc(w.dir)}">New Session</button></span>
+      <button class="x" data-act="kbRemove" data-sec="workspaces" data-id="${w.id}" title="Remove" aria-label="Remove">×</button></div>`;
+  }).join('');
+  const known = [...new Set(live.map(s => s.cwd).concat(openEfforts().flatMap(e => e.dirs)).filter(Boolean).map(tilde))].filter(d => !workspaceAt(d));
+  return `${cards}<form class="add" data-form="workspaces"><input name="name" data-keep="kb-workspaces-name" placeholder="Name, such as Slorp" maxlength="60" required aria-label="Name">
+    <input name="dir" class="mono" data-keep="kb-workspaces-dir" placeholder="~/dev/project" list="workspace-dirs" spellcheck="false" autocomplete="off" required aria-label="Directory">
+    <datalist id="workspace-dirs">${known.map(d => `<option value="${esc(d)}"></option>`).join('')}</datalist><button class="btn go">Add</button></form>`;
+}
+
 function rolesBody() {
   const options = cur => Object.entries(ATTENTION).map(([k, name]) => `<option value="${k}" ${k === cur ? 'selected' : ''}>${name}</option>`).join('');
   const cards = knowledge.roles.map(r => {
@@ -3545,6 +3593,7 @@ function rolesBody() {
 
 function kbBody(sec) {
   if (sec === 'roles') return rolesBody();
+  if (sec === 'workspaces') return workspacesBody();
   const list = kbData()[sec];
   const rm = id => `<button class="x" data-act="kbRemove" data-sec="${sec}" data-id="${id}" title="Remove" aria-label="Remove">×</button>`;
   if (sec === 'watch') return list.map(w => `<div class="card"><span class="glyph">${GLYPH[w.type]}</span>
@@ -3603,7 +3652,7 @@ function startBody() {
   return `${setting('Runs on', 'What a new session runs on.', seg('engine', START_ENGINES.includes(d.engine) ? d.engine : 'claude', [['claude', 'Claude Code'], ['opencode', 'OpenCode'], ['local', local || 'Local model']], 'What a new session runs on'))}
     ${setting('Directory', 'Where a session starts, unless it is started from an effort that has a directory of its own.',
       `<input class="mono" data-change="startDefault" data-key="dir" value="${esc(d.dir || '')}" placeholder="~/dev/project" list="default-dirs" spellcheck="false" autocomplete="off" aria-label="Default directory">
-       <datalist id="default-dirs">${[...new Set(live.map(s => s.cwd).concat(openEfforts().flatMap(e => e.dirs)).filter(Boolean).map(tilde))].map(dir => `<option value="${esc(dir)}"></option>`).join('')}</datalist>`)}
+       <datalist id="default-dirs">${dirOptions([...new Set(live.map(s => s.cwd).concat(openEfforts().flatMap(e => e.dirs)).filter(Boolean).map(tilde))])}</datalist>`)}
     ${setting('Effort', 'The effort a session is filed under, unless it is started from another.', pick('effort', 'Default effort', [['', 'No effort']].concat(openEfforts().map(e => [e.id, e.name]))))}
     ${knowledge.roles.length ? setting('Slorp role', 'The role a session is given.', pick('role', 'Default role', [['', 'No role']].concat(knowledge.roles.map(r => [r.id, r.name])))) : ''}
     ${terminalApp() ? setting('Open in terminal', `Whether a new session is also opened in ${esc(terminalApp().name)} once it has started. An OpenCode session is not.`, seg('terminal', d.terminal ? 'on' : 'off', [['on', 'On'], ['off', 'Off']], 'Open in terminal')) : ''}
@@ -4068,6 +4117,7 @@ const actions = {
   },
   holdTo: d => { api('POST', '/api/settings', { answerPermissions: d.to === 'both' }); return false; },
   startOpen: d => { openStart(d.id); },
+  startIn: d => { openStart('', d.dir); },
   startViewExisting: () => { viewRetainedSession(partialStart); return false; },
   resumeViewExisting: () => { viewRetainedSession(partialResume); return false; },
   resumeReset: () => { if (partialResume && !partialResume.viewing) partialResume.resetConfirm = true; },
@@ -4195,6 +4245,7 @@ document.addEventListener('click', e => {
 document.addEventListener('input', e => {
   if (e.target.closest('[data-form="start"]')) {
     captureStart();
+    if (e.target.name === 'dir' && e.target.form.elements.workspace) e.target.form.elements.workspace.value = workspaceAt(e.target.value)?.id || '';
     if (e.target.name === 'dir' && startWith === 'opencode') { loadStartCatalog(); render(); }
     else syncStartSubmit();
     return;
@@ -4222,10 +4273,19 @@ document.addEventListener('change', e => {
     captureStart();
     /* Choosing an effort files the session there and offers the effort's first directory, written into the
        box as well as the draft because drawing the page again reads the form once more. */
+    const boxes = e.target.form.elements;
     if (e.target.name === 'effortPick') {
       starting = e.target.value;
       const dir = starting && startDirs()[0];
-      if (dir) e.target.form.elements.dir.value = startDraft.dir = dir;
+      if (dir) boxes.dir.value = startDraft.dir = dir;
+      if (boxes.workspace) boxes.workspace.value = workspaceAt(startDraft.dir)?.id || '';
+      loadStartCatalog(); render(); return;
+    }
+    /* Choosing a workspace starts the session in its directory, filed under the effort that directory belongs to. */
+    if (e.target.name === 'workspace') {
+      const w = knowledge.workspaces.find(x => x.id === e.target.value), to = w && effortOfDir(w.dir);
+      boxes.dir.value = startDraft.dir = w ? tilde(w.dir) : '';
+      if (to) boxes.effortPick.value = starting = to.id;
       loadStartCatalog(); render(); return;
     }
     if (e.target.tagName !== 'SELECT') { syncStartSubmit(); return; }
@@ -4286,7 +4346,8 @@ document.addEventListener('submit', e => {
       if (modal === 'start') modal = null;
       startDraft.prompt = startDraft.name = '';
       if (inTerminal && started.sessionId) terminalWhenUp.set(started.sessionId, Date.now());
-      toast(inTerminal && !started.sessionId ? 'Started. Open it in a terminal from its page once it shows up.' : 'Started. It will show up here in a moment.');
+      const dir = f.dir.trim(), keep = !workspaceAt(dir) && (() => { addWorkspace(dir.replace(/\/+$/, '').split('/').pop() || dir, dir); });
+      toast(inTerminal && !started.sessionId ? 'Started. Open it in a terminal from its page once it shows up.' : 'Started. It will show up here in a moment.', keep, 'Save its directory as a workspace');
     }).catch(err => {
       if (err.sessionId) {
         partialStart = { sessionId: err.sessionId, message: err.message, outcome: err.outcome };
@@ -4296,6 +4357,7 @@ document.addEventListener('submit', e => {
     render();
     return;
   }
+  if (sec === 'workspaces') { addWorkspace(f.name.trim(), f.dir, clear); return; }
   if (live) { api('POST', `/api/kb/${sec}`, { ...f, origin: 'you wrote this down' }); clear(); return; }
   if (sec === 'watch') state.kb.watch.push({ id, type: f.type, name: f.name, why: f.why, efforts: [f.effort], cadence: 'daily', seen: '', seenAge: 0 });
   else if (sec === 'questions') state.kb.questions.unshift({ id, text: f.text, effort: f.effort, age: 0, origin: 'you wrote this down' });
