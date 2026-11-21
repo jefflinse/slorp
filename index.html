@@ -202,6 +202,24 @@ a.pr:hover, button.pr:hover { border-color: var(--k-github); color: var(--ink); 
 .menu .pop details[open] > summary span { transform: rotate(90deg); }
 .menu .pop details > div { margin: 2px 0 4px 9px; padding-left: 6px; border-left: 1px solid var(--line); }
 .menu .pop button { text-align: left; }
+/* What the local model did: the last of it under its name in the top bar, and all of it on a page of its own. */
+.worked > summary { cursor: pointer; list-style: none; margin: 0 -8px; padding: 4px 8px; border-radius: 7px; }
+.worked > summary::-webkit-details-marker { display: none; }
+.worked > summary:hover, .worked[open] > summary { background: var(--sel); color: var(--ink2); }
+.worked .pop { left: -8px; right: auto; width: 400px; max-width: calc(100vw - 32px); }
+.worked .pop .none { padding: 4px 9px 8px; }
+.did { padding: 8px 9px; border-top: 1px solid var(--line); }
+.did .dh { display: flex; align-items: center; gap: 2px; color: var(--ink3); font-size: 12px; }
+.did .dh .when { margin-left: auto; white-space: nowrap; }
+.did .dw { margin-top: 4px; font-size: 13.5px; }
+.did .dw.bad, .srow.act .bad { color: var(--err); }
+.about { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 5px; color: var(--ink2); font-size: 12.5px; }
+.about .link { color: inherit; }
+.about button:hover { color: var(--accent); }
+.worked .pop .about button { display: inline-flex; width: auto; padding: 0; border-radius: 0; }
+.worked .pop .about button:hover { background: none; }
+.worked .pop .about button.pr { padding: 1px 8px; border-radius: 99px; }
+.srow.act .ttl .tag { margin-right: 8px; vertical-align: 1px; }
 .acts .pop { z-index: 4; font-size: 13px; font-weight: 400; letter-spacing: 0; line-height: 1.45; }
 .titled { display: flex; align-items: flex-start; gap: 12px; }
 .titled > h1, .titled > form { flex: 1; min-width: 0; }
@@ -689,7 +707,7 @@ button.ecard.new:hover { border-color: var(--ink3); color: var(--ink); }
 #news { bottom: 70px; transform: translate(-50%, 140px); }
 #news span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-@media (max-width: 1320px) { .model { display: none; } }
+@media (max-width: 1320px) { .worked { display: none; } }
 @media (max-width: 1140px) { .lim .meter { display: none; } }
 @media (max-width: 1020px) { .used, .tbl .hide { display: none; } }
 @media (max-width: 1180px) {
@@ -701,7 +719,7 @@ button.ecard.new:hover { border-color: var(--ink3); color: var(--ink); }
 }
 @media (max-width: 860px) {
   .top { gap: 10px; overflow-x: auto; }
-  .model, .used, .lim { display: none; }
+  .worked, .used, .lim { display: none; }
   .split, .split.narrow, .split.efx, .split.sided, .split.sided.shut { grid-template-columns: 1fr; height: auto; }
   .full { height: auto; overflow: visible; }
   .estack { padding: 20px 16px 0; }
@@ -979,13 +997,13 @@ const KB_SECTIONS = {
 /* ───────────────────────── State ───────────────────────── */
 
 const KEY = 'slorp.proto.v1';
-const VIEWS = ['home', 'attention', 'efforts', 'sessions', 'pulls', 'journal', 'knowledge', 'settings'];
+const VIEWS = ['home', 'attention', 'efforts', 'sessions', 'pulls', 'journal', 'knowledge', 'settings', 'log'];
 /* Whether a view is there to go to: Attention, the view Home took the place of, is only while the user keeps it. */
 const viewOn = v => VIEWS.includes(v) && (v !== 'attention' || state.legacyAttention);
-/* The views the top bar names, in its order; Settings is reached by its own button. Pull requests are named only while GitHub is turned on to list them. */
-const nav = () => VIEWS.filter(v => viewOn(v) && v !== 'settings' && !(v === 'pulls' && pullsOff()));
+/* The views the top bar names, in its order; Settings is reached by its own button, and what the local model has done from the model's name. Pull requests are named only while GitHub is turned on to list them. */
+const nav = () => VIEWS.filter(v => viewOn(v) && v !== 'settings' && v !== 'log' && !(v === 'pulls' && pullsOff()));
 const VIEW_NAMES = { pulls: 'PRs' };
-const fresh = () => ({ view: 'home', sel: null, effortSel: null, effortOrder: null, hideEmpty: true, kbSel: 'watch', setSel: 'general', profileSel: null, groupBy: 'effort', srcFilter: 'all', legacyAttention: false, pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', effortTab: 'sessions', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto', look: 'slorp',
+const fresh = () => ({ view: 'home', sel: null, effortSel: null, effortOrder: null, hideEmpty: true, kbSel: 'watch', setSel: 'general', logKind: 'all', profileSel: null, groupBy: 'effort', srcFilter: 'all', legacyAttention: false, pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', effortTab: 'sessions', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto', look: 'slorp',
   handled: {}, moved: {}, sessMoved: {}, extra: [], arrived: {}, collapsed: {}, left: {}, showHandled: false, variant: {}, rawOpen: {},
   actSel: null, pullSel: null, journalSel: null, pullTab: 'talk', expanded: {}, kb: structuredClone(KB_SEED), seq: 100 });
 let state = fresh();
@@ -2350,6 +2368,7 @@ async function refresh(force) {
     adoptStartDefaults();
     integrations = data.integrations || [];
     lookups = data.lookups || [];
+    acted = data.actions || [];
     feeds = data.feeds || {};
     pulls = data.pullRequests || [];
     limits = data.limits || [];
@@ -3701,6 +3720,91 @@ function viewKnowledge() {
   </div>`;
 }
 
+/* ───────────────────────── What the local model has done ───────────────────────── */
+
+/* The kinds of work the local model does: what its page calls each, and what an action of that kind is tagged. */
+const ACT_KINDS = { describe: ['Descriptions', 'described'], file: ['Filings', 'filed'], role: ['Role guesses', 'role'], note: ['Effort notes', 'note'],
+  brief: ['Pull request briefs', 'briefed'], wrapup: ['Wrap-ups', 'wrapped up'], backfill: ['Earlier history', 'filled in'] };
+const MOCK_ACTS = [
+  { id: 'd1', kind: 'describe', at: minsAgo(6), millis: 2140, model: 'qwen3:14b', outcome: 'Wants to run the integration suite against your local Postgres',
+    sessions: [{ id: 's4', name: 'Bringing the work fork up to v0.14' }], efforts: [{ id: 'fork', name: 'Work fork catch-up' }] },
+  { id: 'd2', kind: 'note', at: minsAgo(11), millis: 3310, model: 'qwen3:14b', outcome: 'Two-thirds built, paused on a retention decision',
+    sessions: [{ id: 's1', name: 'Building the Postgres snapshot store' }, { id: 's2', name: 'Benchmark harness for snapshot loads' }, { id: 's3', name: 'Nightly snapshot benchmarks' }], efforts: [{ id: 'snap', name: 'Estoria snapshot store' }] },
+  { id: 'd3', kind: 'brief', at: minsAgo(24), millis: 5870, model: 'qwen3:14b', outcome: 'Yours: answer her question about the replay job',
+    pulls: [{ key: 'acme/platform#1408', title: 'Stream iterator: bound the read-ahead buffer', url: 'https://github.com/acme/platform/pull/1408' }], efforts: [{ id: 'fork', name: 'Work fork catch-up' }] },
+  { id: 'd4', kind: 'wrapup', at: minsAgo(25), millis: 9420, model: 'qwen3:14b', day: dayKey(0), outcome: 'The snapshot store got its benchmarks and the fork now builds on v0.14, with both stopped on a decision of yours.',
+    efforts: [{ id: 'snap', name: 'Estoria snapshot store' }, { id: 'fork', name: 'Work fork catch-up' }], sessions: [{ id: 's1', name: 'Building the Postgres snapshot store' }, { id: 's4', name: 'Bringing the work fork up to v0.14' }] },
+  { id: 'd5', kind: 'file', at: minsAgo(47), millis: 610, model: 'qwen3:14b', outcome: 'Filed it under Slorp',
+    sessions: [{ id: 's8', name: 'Sketching the Slorp ingest pipeline' }], efforts: [{ id: 'slorp', name: 'Slorp' }] },
+  { id: 'd6', kind: 'describe', at: minsAgo(52), millis: 1980, model: 'qwen3:14b', outcome: 'Asks which event store the quickstart should use',
+    sessions: [{ id: 's6', name: 'Rewriting the quickstart' }], efforts: [{ id: 'docs', name: 'estoria.dev docs refresh' }] },
+  { id: 'd7', kind: 'file', at: minsAgo(185), millis: 540, model: 'qwen3:14b', outcome: 'Left it unsorted', sessions: [{ id: 's10', name: 'A scratch chat about event versioning' }] },
+  { id: 'd8', kind: 'describe', at: minsAgo(540), millis: 30010, model: 'qwen3:14b', error: 'model server returned 500 Internal Server Error',
+    sessions: [{ id: 's3', name: 'Nightly snapshot benchmarks' }], efforts: [{ id: 'snap', name: 'Estoria snapshot store' }] },
+];
+/* The last few things the local model did, as the service last said, and all that is kept of what it has done,
+   which is read when its page is opened and again once the model has done more. */
+let acted = [], workLog = null, workLogAt = null, workLogAsked = false;
+const LOG_PAGE = 100;
+let logShown = LOG_PAGE;
+function fetchWorkLog() {
+  const latest = acted[0]?.id || '';
+  if (!live || workLogAsked || (workLog && workLogAt === latest)) return;
+  workLogAsked = true;
+  fetch('/api/actions').then(r => r.ok ? r.json() : null).then(d => { if (d) { workLog = d.actions || []; workLogAt = latest; } workLogAsked = false; if (d) render(); })
+    .catch(() => { workLogAsked = false; });
+}
+/* What an action was about, each a way to it while it is still there: at most this many of each sort. */
+function actAbout(a, most) {
+  const upTo = (list = [], draw) => list.slice(0, most).map(draw).concat(list.length > most ? `<span>and ${num(list.length - most)} more</span>` : []);
+  const effort = e => (live ? liveEfforts : EFFORTS).some(x => x.id === e.id)
+    ? `<button class="echip" data-act="effort" data-id="${esc(e.id)}" title="Open this effort">${effortMark(effortById(e.id), 's')}${esc(e.name)}</button>`
+    : `<span class="echip" title="This effort is no longer there">${esc(e.name)}</span>`;
+  const space = w => `<span>in ${live && knowledge.workspaces.some(x => x.id === w.id) ? `<button class="link" data-act="workspaces" title="A workspace of yours">${esc(w.name)}</button>` : esc(w.name)}</span>`;
+  const day = a.day ? [`<button class="link" data-act="journalOpen" data-id="${esc(a.day)}" title="Open this day of the journal">${esc(dayName(a.day))}</button>`] : [];
+  return day.concat(upTo(a.efforts, effort), upTo(a.pulls, journalPull), upTo(a.sessions, s => journalSession({ id: s.id, label: s.name })), upTo(a.workspaces, space)).join('');
+}
+const actTag = a => `<span class="tag whenever">${esc(ACT_KINDS[a.kind]?.[1] || a.kind)}</span>`;
+const actSaid = (a, n) => a.error ? `Failed${a.tries > 1 ? ` ${num(a.tries)} times in a row` : ''}: ${esc(clip(a.error, n))}` : esc(clip(a.outcome || 'Done', n));
+/* An action as the top bar lists it. */
+function didRow(a) {
+  const about = actAbout(a, 2);
+  return `<div class="did"><div class="dh"><span class="dot ${a.error ? 'error' : 'done'}"></span>${actTag(a)}<span class="when">${ago(minsSince(a.at))}</span></div>
+    <div class="dw ${a.error ? 'bad' : ''}">${actSaid(a, 140)}</div>${about ? `<div class="about">${about}</div>` : ''}</div>`;
+}
+/* The local model as the top bar names it, which opens onto the last things it did. */
+function workedMenu(open, says, title) {
+  const last = (live ? acted : MOCK_ACTS).slice(0, 5);
+  return `<details class="menu worked" id="worked" ${open ? 'open' : ''}><summary class="model" title="${esc(title || 'What the local model did last')}">${says}</summary>
+    <div class="pop"><p>What the local model did last</p>
+      ${last.map(didRow).join('') || `<div class="none">${modelless() ? `${NO_MODEL}, so nothing has been done.` : 'Nothing yet. What the local model does for Slorp is listed here as it does it.'}</div>`}
+      ${last.length ? '<button data-act="view" data-view="log">See everything it has done</button>' : ''}</div></details>`;
+}
+/* An action as its page lists it. */
+function actRow(a) {
+  const took = a.millis >= 1000 ? `${(a.millis / 1000).toFixed(1)}s` : `${a.millis || 0}ms`;
+  const about = actAbout(a, 6) + ((a.lookups || []).length ? `<span>looked up ${esc(listOf(a.lookups))}</span>` : '');
+  return `<div class="srow act"><span class="dot ${a.error ? 'error' : 'done'}"></span>
+    <div class="body"><div class="ttl">${actTag(a)}<span class="${a.error ? 'bad' : ''}">${actSaid(a, 400)}</span></div>${about ? `<div class="about">${about}</div>` : ''}</div>
+    <span class="side" title="${esc(new Date(a.at).toLocaleString())}">${a.model ? `${esc(a.model.split('/').pop())} · ` : ''}${took} · ${ago(minsSince(a.at))}</span></div>`;
+}
+function viewLog() {
+  fetchWorkLog();
+  const all = live ? (workLog || acted) : MOCK_ACTS;
+  const of = k => k === 'all' ? all : k === 'failed' ? all.filter(a => a.error) : all.filter(a => a.kind === k);
+  if (state.logKind !== 'all' && state.logKind !== 'failed' && !ACT_KINDS[state.logKind]) state.logKind = 'all';
+  const pick = (k, name) => `<button class="${state.logKind === k ? 'on' : ''}" data-act="logKind" data-k="${k}">${name}<span>${of(k).length || ''}</span></button>`;
+  const list = of(state.logKind), shown = list.slice(0, logShown), left = list.length - shown.length;
+  const none = all.length ? 'Nothing of this kind is in the log.' : modelless() ? `${NO_MODEL}, so nothing has been done.` : 'Nothing yet. What the local model does for Slorp is listed here as it does it.';
+  return `<div class="split narrow">
+    <section class="pane list kbnav"><div class="label">Local model</div>${pick('all', 'Everything')}${Object.entries(ACT_KINDS).map(([k, [name]]) => pick(k, name)).join('')}${pick('failed', 'Failed')}</section>
+    <section class="pane detail" data-scroll="log"><div class="inner"><h1>What the local model has done</h1>
+      <p class="lede">Each piece of work the local model did for Slorp, the latest first, with the sessions, efforts, pull requests and workspaces it was about. Slorp keeps the last thousand.</p>
+      ${shown.map(actRow).join('') || `<div class="none">${none}</div>`}
+      ${left > 0 ? `<button class="btn" data-act="logMore" style="margin-top:14px">Show ${Math.min(LOG_PAGE, left)} more</button>` : ''}</div></section>
+  </div>`;
+}
+
 /* ───────────────────────── Settings ───────────────────────── */
 
 const SETTINGS = { general: 'General', start: 'Session profiles', integrations: 'Integrations', model: 'Local model', keys: 'Keyboard' };
@@ -3927,7 +4031,8 @@ function modelBody() {
       <div class="send"><span>Saving takes effect at once.</span>
         <span><button type="button" class="btn" data-act="modelTry" ${modelChecking ? 'disabled' : ''} title="Checks the server and model typed here without saving them">Try without saving</button>
         <button class="btn go" ${s.fixedUrl && s.fixedModel ? 'disabled' : ''}>Save</button></span></div>
-    </form>`;
+    </form>
+    ${setting('What it has done', 'Each piece of work the local model did for Slorp, with the sessions, efforts, pull requests and workspaces it was about.', '<button class="btn" data-act="view" data-view="log">See the log</button>')}`;
 }
 
 const keys = () => [[`1 – ${nav().length}`, nav().map(v => VIEW_NAMES[v] || cap(v)).join(', ')], [',', 'Settings'], ['j  k', `Next and previous in the ${listOf(['Home', 'Sessions'].concat(pullsOff() ? [] : 'PRs', 'Journal'))} lists`], ['e', 'Dismiss the selected item'], ['s', 'Snooze the selected item for an hour'],
@@ -4004,7 +4109,7 @@ const ICONS = {
   settings: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>',
 };
 
-const RENDER = { home: viewHome, attention: viewAttention, efforts: viewEfforts, sessions: viewSessions, pulls: viewPulls, journal: viewJournal, knowledge: viewKnowledge, settings: viewSettings };
+const RENDER = { home: viewHome, attention: viewAttention, efforts: viewEfforts, sessions: viewSessions, pulls: viewPulls, journal: viewJournal, knowledge: viewKnowledge, settings: viewSettings, log: viewLog };
 
 /* Draws the page. Taking a box that is being typed in off the page makes the browser say the box has lost the
    user, which can ask for the page to be drawn while it is being drawn: it is then drawn once more afterwards. */
@@ -4031,7 +4136,7 @@ function draw() {
   document.querySelectorAll('[data-keep]').forEach(el => { if (!unkept.has(el.dataset.keep) || el === document.activeElement) drafts[el.dataset.keep] = el.value; });
   unkept.clear();
   const focused = document.activeElement?.dataset?.keep, caret = focused && [document.activeElement.selectionStart, document.activeElement.selectionEnd];
-  const menuOpen = $('#menu')?.open;
+  const menuOpen = $('#menu')?.open, workedOpen = $('#worked')?.open;
   const acts = $('#acts');
   actsFor = acts?.open ? acts.dataset.id : null;
   actsSub = acts?.open ? acts.querySelector('details[open]')?.dataset.sub || null : null;
@@ -4045,7 +4150,8 @@ function draw() {
   $('#nav').innerHTML = nav().map(v => `<button class="${state.view === v ? 'on' : ''}" data-act="view" data-view="${v}">${VIEW_NAMES[v] || cap(v)}${v === 'home' && n ? `<span class="count">${n}</span>` : ''}</button>`).join('');
   const limitsScroll = $('#provider-limits')?.scrollLeft || 0, busy = live && !isOffline && !modelless() && summarizer.doing || '';
   $('#tools').innerHTML = `
-    <span class="model" ${modelless() ? `title="${esc(modelWhy(true))}"` : busy ? `title="The local model is at work: ${esc(busy)}"` : ''}><span class="dot ${live && isOffline ? 'error' : modelless() ? 'idle' : busy ? 'running' : 'ready'}"></span>${live ? (isOffline ? 'service offline' : `live · ${summarizer.model ? summarizer.model.split('/').pop() : 'no local model'}${busy ? ` · <span class="busy">${spark}${MODEL_DOING[busy.split(' ')[0]] || 'working'}</span>` : ''}`) : 'qwen3:14b · local · caught up'}</span>${live ? usageTotal() + limitMeters() + `<span id="provider-limits" class="provider-limits" role="group" aria-label="Provider usage limits">${providerLimitMeters()}</span>` : ''}
+    ${workedMenu(workedOpen, `<span class="dot ${live && isOffline ? 'error' : modelless() ? 'idle' : busy ? 'running' : 'ready'}"></span>${live ? (isOffline ? 'service offline' : `live · ${summarizer.model ? summarizer.model.split('/').pop() : 'no local model'}${busy ? ` · <span class="busy">${spark}${MODEL_DOING[busy.split(' ')[0]] || 'working'}</span>` : ''}`) : 'qwen3:14b · local · caught up'}`,
+      modelless() ? modelWhy(true) : busy ? `The local model is at work: ${busy}` : '')}${live ? usageTotal() + limitMeters() + `<span id="provider-limits" class="provider-limits" role="group" aria-label="Provider usage limits">${providerLimitMeters()}</span>` : ''}
     <span class="seg" role="group" aria-label="Voice" title="Fluent shows what the model wrote. Raw shows what the sources said. (r)">
       <button class="${state.fluent ? 'on' : ''}" data-act="fluent" data-on="1">Fluent</button><button class="${state.fluent ? '' : 'on'}" data-act="fluent" data-on="0">Raw</button></span>
     ${live ? `<button class="btn new" data-act="startOpen" data-id="" title="Start a session (n${onMac() ? ' or ⌃N' : ''})">${ICONS.plus}New Session</button>
@@ -4131,6 +4237,9 @@ const actions = {
   profileRemove: d => { api('DELETE', `/api/profiles/${d.id}`, null, () => toast('Removed')); return false; },
   lookTo: d => { state.look = d.to; },
   setSel: d => { state.setSel = d.s; },
+  logKind: d => { state.logKind = d.k; logShown = LOG_PAGE; },
+  logMore: () => { logShown += LOG_PAGE; },
+  workspaces: () => { state.kbSel = 'workspaces'; go('knowledge'); },
   modelCheck: () => { checkModel(); return false; },
   modelTry: () => { checkModel(modelTyped()); return false; },
   modelOff: d => { api('POST', '/api/settings', { model: { off: d.to === 'off' } }, () => { modelCheck = null; }); return false; },
@@ -4454,6 +4563,8 @@ const changes = {
 const changed = el => { if (changes[el.dataset.change](el.dataset, el) !== false) { save(); render(); } };
 document.addEventListener('click', e => {
   if (!e.target.closest('#menu')) $('#menu')?.removeAttribute('open');
+  /* What the local model did last shuts on a click outside it, and once something in it is followed. */
+  if (!e.target.closest('#worked') || e.target.closest('#worked [data-act]')) $('#worked')?.removeAttribute('open');
   /* An item's menu shuts on a click outside it, and once something in it is chosen. */
   if (!e.target.closest('#acts') || e.target.closest('#acts [data-act]')) $('#acts')?.removeAttribute('open');
   const el = e.target.closest('[data-act]');
@@ -4599,6 +4710,7 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && e.target.closest('.eedit, .ecard.mini.new')) { editing = null; adding = false; render(); return; }
   if (e.key === 'Escape' && modal) { modal = null; render(); return; }
   if (e.key === 'Escape' && $('#acts')?.open) { $('#acts').removeAttribute('open'); return; }
+  if (e.key === 'Escape' && $('#worked')?.open) { $('#worked').removeAttribute('open'); return; }
   if ((e.metaKey || e.ctrlKey) && e.key === 'k' && live) { e.preventDefault(); openSearch(); render(); return; }
   if ((e.metaKey || e.ctrlKey) && e.key === 'n' && live) { e.preventDefault(); if (modal !== 'start') { openStart(''); render(); } return; }
   /* ⌘↵ in a message box presses the button that sends it. */

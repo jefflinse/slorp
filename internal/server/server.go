@@ -268,6 +268,12 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		}{h.State(), here, m.Status(r.Context()), capabilities})
 	})
 
+	mux.HandleFunc("GET /api/actions", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, struct {
+			Actions []hub.Action `json:"actions"`
+		}{h.Actions()})
+	})
+
 	mux.HandleFunc("GET /api/events", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-store")

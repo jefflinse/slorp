@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -136,10 +137,10 @@ func (e *Enricher) Run(ctx context.Context) {
 }
 
 // step does one piece of work if there is one, and tells the hub which model
-// is there to do it and what it is on while it works: before each piece,
-// every idleCheck while there is none, and at once when the user's settings
-// change which to use. With a model and nothing to do, it has the journal ask
-// for a day it is missing.
+// is there to do it, what it is on while it works, and what came of it:
+// before each piece, every idleCheck while there is none, and at once when
+// the user's settings change which to use. With a model and nothing to do, it
+// has the journal ask for a day it is missing.
 func (e *Enricher) step(ctx context.Context) {
 	if e.Resolve != nil {
 		if cfg := e.Resolve(e.Hub.Settings().Model); cfg != e.cfg || e.checked.IsZero() {
@@ -155,8 +156,8 @@ func (e *Enricher) step(ctx context.Context) {
 		e.Hub.SetSummarizer(said)
 		return
 	}
-	key, what, job := e.next()
-	if job == nil && time.Since(e.checked) < idleCheck {
+	key, what, work := e.next()
+	if work == nil && time.Since(e.checked) < idleCheck {
 		return
 	}
 	model, err := e.model(ctx)
@@ -167,7 +168,7 @@ func (e *Enricher) step(ctx context.Context) {
 		return
 	}
 	said.Model = model
-	if job == nil {
+	if work == nil {
 		e.Hub.SetSummarizer(said)
 		if time.Since(e.missed) >= missedCheck {
 			e.missed = time.Now()
@@ -177,13 +178,39 @@ func (e *Enricher) step(ctx context.Context) {
 	}
 	said.Doing = what
 	e.Hub.SetSummarizer(said)
-	err = job(ctx, model)
+	did := work.about
+	did.At, did.Model = time.Now(), model
+	err = work.do(ctx, model, &did)
+	did.Millis = time.Since(did.At).Milliseconds()
 	said.Doing = ""
 	e.Hub.SetSummarizer(said)
-	if err != nil && ctx.Err() == nil {
+	if err != nil {
+		// Work cut short because Slorp is stopping is not the model's doing.
+		if ctx.Err() != nil {
+			return
+		}
 		log.Printf("enrich: %s: %v", what, err)
 		e.failed[key] = time.Now()
+		did.Outcome, did.Error = "", err.Error()
 	}
+	e.Hub.Acted(did)
+}
+
+// job is one piece of work for the model. about says what kind it is and
+// what it is about, and do does it, adding to did what came of it and
+// anything more that turned out to be about.
+type job struct {
+	about hub.Action
+	do    func(ctx context.Context, model string, did *hub.Action) error
+}
+
+// of names sessions as an action is about them.
+func of(sessions ...hub.Session) []hub.Named {
+	var out []hub.Named
+	for _, s := range sessions {
+		out = append(out, hub.Named{ID: s.ID, Name: s.Label})
+	}
+	return out
 }
 
 // next picks one piece of work: what the user asked for comes first, a day
@@ -191,89 +218,124 @@ func (e *Enricher) step(ctx context.Context) {
 // request they are looking at; then describing a session, filing it under
 // an effort, guessing its role, rewriting an effort's note, and briefing
 // the other pull requests.
-func (e *Enricher) next() (key, what string, job func(context.Context, string) error) {
+func (e *Enricher) next() (key, what string, work *job) {
 	ready := func(key string) bool { return time.Since(e.failed[key]) > retryAfter }
 	briefs := e.Hub.Unbriefed()
-	briefing := func(wanted bool) (key, what string, job func(context.Context, string) error) {
+	briefing := func(wanted bool) (key, what string, work *job) {
 		for _, w := range briefs {
 			name := w.Ref.Repo + "#" + strconv.Itoa(w.Ref.Number)
 			if k := "brief:" + w.Ref.Source + ":" + name + ":" + w.Ref.Key; w.Wanted == wanted && ready(k) {
-				return k, "brief " + name, func(ctx context.Context, model string) error {
+				about := hub.Action{Kind: hub.ActBrief, Pulls: []hub.WrapupPull{{Key: name, Title: w.Pull.Title, URL: w.Pull.URL}}}
+				return k, "brief " + name, &job{about, func(ctx context.Context, model string, did *hub.Action) error {
 					b, sorts, err := e.brief(ctx, model, w)
 					if err == nil {
 						e.Hub.SetBrief(w.Ref, b, sorts)
 					}
+					did.Outcome = cmp.Or(b.Next, b.Stands)
 					return err
-				}
+				}}
 			}
 		}
 		return "", "", nil
 	}
 	for _, w := range e.Hub.Unwrapped() {
-		return "wrapup:" + w.Key, "wrap up " + w.Day.Format("2 January"), func(ctx context.Context, model string) error {
+		about := hub.Action{Kind: hub.ActWrapup, Day: w.Day.Format(time.DateOnly)}
+		for _, ef := range w.Efforts {
+			// By ID alone, which leaves out the one that sessions filed
+			// nowhere come under.
+			about.Efforts = append(about.Efforts, hub.Named{ID: ef.ID})
+			for _, s := range ef.Sessions {
+				about.Sessions = append(about.Sessions, hub.Named{ID: s.ID, Name: s.Label})
+				if p := s.Pull; p != nil && !slices.Contains(about.Pulls, *p) {
+					about.Pulls = append(about.Pulls, *p)
+				}
+			}
+		}
+		return "wrapup:" + w.Key, "wrap up " + w.Day.Format("2 January"), &job{about, func(ctx context.Context, model string, did *hub.Action) error {
 			headline, efforts, tags, err := e.wrapup(ctx, model, w)
 			failure := ""
 			if err != nil {
 				failure = "The local model could not write it: " + err.Error()
 			}
 			e.Hub.SetWrapup(w, headline, efforts, tags, failure)
+			did.Outcome = headline
 			return err
-		}
+		}}
 	}
 	for _, u := range e.Hub.Unfilled() {
-		return "backfill:" + u.SessionID, "fill in " + u.Label, func(ctx context.Context, model string) error {
+		about := hub.Action{Kind: hub.ActBackfill, Sessions: []hub.Named{{ID: u.SessionID, Name: u.Label}}}
+		return "backfill:" + u.SessionID, "fill in " + u.Label, &job{about, func(ctx context.Context, model string, did *hub.Action) error {
 			lines, err := e.backfill(ctx, model, u)
 			// Exchanges the model could not be asked about are left as they
 			// are, for the user to ask again.
 			e.Hub.SetFilled(u, lines)
+			did.Outcome = fmt.Sprintf("Said how %d of %d earlier exchanges came out", len(lines), len(u.Exchanges))
 			return err
-		}
+		}}
 	}
-	if key, what, job := briefing(true); job != nil {
-		return key, what, job
+	if key, what, work := briefing(true); work != nil {
+		return key, what, work
 	}
 	for _, w := range e.Hub.Undescribed() {
 		if ready(w.Key) {
-			return w.Key, "describe " + w.Session.Name, func(ctx context.Context, model string) error {
+			about := hub.Action{Kind: hub.ActDescribe, Sessions: of(w.Session)}
+			return w.Key, "describe " + w.Session.Name, &job{about, func(ctx context.Context, model string, did *hub.Action) error {
 				in, err := e.describe(ctx, model, w)
 				if err == nil {
 					e.Hub.SetInsight(w.Session.ID, w.Key, in)
 				}
+				did.Outcome, did.Lookups = in.Title, in.Lookups
 				return err
-			}
+			}}
 		}
 	}
 	for _, w := range e.Hub.Unrouted() {
 		if k := "route:" + w.Session.ID + w.Key; ready(k) {
-			return k, "file " + w.Session.Name, func(ctx context.Context, model string) error {
+			about := hub.Action{Kind: hub.ActFile, Sessions: of(w.Session)}
+			return k, "file " + w.Session.Name, &job{about, func(ctx context.Context, model string, did *hub.Action) error {
 				id, err := e.route(ctx, model, w)
 				if err == nil {
 					e.Hub.SetGuess(w.Session.ID, w.Key, id)
 				}
+				did.Outcome = "Left it unsorted"
+				for _, ef := range w.Efforts {
+					if ef.ID == id {
+						did.Outcome, did.Efforts = "Filed it under "+ef.Name, []hub.Named{{ID: ef.ID, Name: ef.Name}}
+					}
+				}
 				return err
-			}
+			}}
 		}
 	}
 	for _, w := range e.Hub.Unroled() {
 		if k := "role:" + w.Session.ID + w.Key; ready(k) {
-			return k, "role " + w.Session.Name, func(ctx context.Context, model string) error {
+			about := hub.Action{Kind: hub.ActRole, Sessions: of(w.Session)}
+			return k, "role " + w.Session.Name, &job{about, func(ctx context.Context, model string, did *hub.Action) error {
 				id, err := e.role(ctx, model, w)
 				if err == nil {
 					e.Hub.SetRoleGuess(w.Session.ID, w.Key, id)
 				}
+				did.Outcome = "Guessed no role"
+				for _, r := range w.Roles {
+					if r.ID == id {
+						did.Outcome = "Guessed the role " + r.Name
+					}
+				}
 				return err
-			}
+			}}
 		}
 	}
 	for _, w := range e.Hub.Unnoted() {
 		if k := "note:" + w.Key; ready(k) {
-			return k, "note " + w.Effort.Name, func(ctx context.Context, model string) error {
+			about := hub.Action{Kind: hub.ActNote, Efforts: []hub.Named{{ID: w.Effort.ID, Name: w.Effort.Name}}, Sessions: of(w.Members...)}
+			return k, "note " + w.Effort.Name, &job{about, func(ctx context.Context, model string, did *hub.Action) error {
 				n, err := e.note(ctx, model, w)
 				if err == nil {
 					e.Hub.SetNote(w.Effort.ID, w.Key, n)
 				}
+				did.Outcome = n.Line
 				return err
-			}
+			}}
 		}
 	}
 	return briefing(false)

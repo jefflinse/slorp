@@ -719,6 +719,51 @@ func TestBriefsWaitTheirTurn(t *testing.T) {
 	}
 }
 
+func TestStepRecordsWhatTheModelDid(t *testing.T) {
+	st := testdb.Open(t)
+	k := testdb.KB(t, st)
+	h := hub.New(k, st)
+	effort, err := k.Create("Widgets", "")
+	if err != nil || k.AddDir(effort.ID, "/work/widgets") != nil {
+		t.Fatal(err)
+	}
+	h.SetRoster("claude", []hub.Session{{ID: "s", Agent: "claude", Title: "Retry the upload", Status: hub.Idle, Cwd: "/work/widgets"}})
+	h.SetInsight("s", "k", hub.Insight{Title: "Done"})
+	models := `{"data":[{"id":"m","type":"llm","state":"loaded"}]}`
+
+	failing := &fakeLLM{status: 500, models: models}
+	e := failing.enricher(t)
+	e.Hub = h
+	e.step(ctx)
+	got := h.Actions()
+	if len(got) != 1 || got[0].Kind != hub.ActNote || !strings.Contains(got[0].Error, "500") || got[0].Outcome != "" {
+		t.Fatalf("after work that failed: %+v; want one action saying why it failed", got)
+	}
+
+	llm := &fakeLLM{content: `{"line":"Moving.","stands":"It stands."}`, models: models}
+	e = llm.enricher(t)
+	e.Hub = h
+	e.step(ctx)
+	got = h.Actions()
+	if len(got) != 2 {
+		t.Fatalf("%d actions after a second piece of work, want two", len(got))
+	}
+	a := got[0]
+	if a.Kind != hub.ActNote || a.Model != "m" || a.Outcome != "Moving" || a.Error != "" || a.At.IsZero() {
+		t.Errorf("action = %+v; want the note, the model that wrote it and the line it wrote", a)
+	}
+	if len(a.Efforts) != 1 || a.Efforts[0] != (hub.Named{ID: effort.ID, Name: "Widgets"}) {
+		t.Errorf("efforts = %+v; want the effort the note is on", a.Efforts)
+	}
+	if len(a.Sessions) != 1 || a.Sessions[0] != (hub.Named{ID: "s", Name: "Retry the upload"}) {
+		t.Errorf("sessions = %+v; want the session the note was written from", a.Sessions)
+	}
+	e.step(ctx)
+	if got := h.Actions(); len(got) != 2 {
+		t.Errorf("%d actions after a step with nothing to do, want still two", len(got))
+	}
+}
+
 func TestSaysWhatTheModelIsOnWhileItWorks(t *testing.T) {
 	st := testdb.Open(t)
 	k := testdb.KB(t, st)

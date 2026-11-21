@@ -756,6 +756,8 @@ type Hub struct {
 	plugins map[string]Plugin
 	// release is the release of Slorp running, as last reported.
 	release Release
+	// actions is what the local model has done, the oldest first.
+	actions []Action
 	// origins holds, for each session something is known of, the session
 	// it continues, empty for one that continues none.
 	origins map[string]string
@@ -777,6 +779,7 @@ func New(k *kb.Store, c Cache) *Hub {
 		discussed: map[string]*pullDoc{}, discussFailed: map[string]time.Time{}}
 	h.loadSubagents()
 	h.loadLifecycle()
+	h.loadActions()
 	h.warn(c.Each("pull", func(id string, body []byte) {
 		var d pullDoc
 		if json.Unmarshal(body, &d) == nil {
@@ -1539,6 +1542,8 @@ type State struct {
 	Knowledge  kb.Knowledge `json:"knowledge"`
 	// Lookups are the most recent ones, newest last.
 	Lookups []Lookup `json:"lookups"`
+	// Actions are the last few things the local model did, the latest first.
+	Actions []Action `json:"actions"`
 	// Feeds says how each integration's last collection went, by integration.
 	Feeds map[string]FeedStatus `json:"feeds"`
 	// PullRequests are the open ones the integrations listed.
@@ -1568,7 +1573,7 @@ func (h *Hub) State() State {
 		feeds[id] = f.FeedStatus
 	}
 	return State{Sessions: sessions, Items: append(items(sessions), h.fed()...), Efforts: h.efforts(sessions), Summarizer: h.summ,
-		Settings: h.settings, Knowledge: h.kb.Knowledge(), Lookups: append([]Lookup{}, h.lookups...), Feeds: feeds, PullRequests: h.pulls(), Limits: h.limited(), ProviderLimits: h.providerLimited(time.Now()), Journal: h.journal(), Archive: h.archives(), Plugins: maps.Clone(h.plugins), Release: h.release}
+		Settings: h.settings, Knowledge: h.kb.Knowledge(), Lookups: append([]Lookup{}, h.lookups...), Actions: h.acted(recentActions), Feeds: feeds, PullRequests: h.pulls(), Limits: h.limited(), ProviderLimits: h.providerLimited(time.Now()), Journal: h.journal(), Archive: h.archives(), Plugins: maps.Clone(h.plugins), Release: h.release}
 }
 
 func (h *Hub) efforts(sessions []Session) []Effort {
