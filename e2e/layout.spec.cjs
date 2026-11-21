@@ -19,14 +19,14 @@ async function world(t, hash, extra = {}, replies = {}) {
     items: [{ id: 'item', sessionId: 'asks', kind: 'question', title: 'Which retry policy?', ask: 'Pick one.', urgency: 'awaiting', at: ago(2), replies: [] }],
     summarizer: { model: 'fixture' }, capabilities: {}, ...extra,
   }
-  const posts = []
+  const posts = [], reads = []
   /* Profiles are kept as the service keeps them, so that a change made in Settings is there to be read back. */
   const profiled = (method, id, sent) => {
     const list = (data.knowledge ||= { watch: [], questions: [], context: [], routing: [], roles: [], workspaces: [] }).profiles ||= []
     const at = list.findIndex(p => p.id === id), kept = { ...sent, id: id || `p${list.length + 1}` }
     if (method === 'DELETE') { list.splice(at, 1); return {} }
     if (kept.default) list.forEach(p => { p.default = false })
-    if (id) list[at] = kept; else list.push(kept)
+    if (id) list[at] = { ...list[at], ...kept }; else list.push(kept)
     return id ? {} : { id: kept.id }
   }
   const server = createServer((req, res) => {
@@ -41,6 +41,9 @@ async function world(t, hash, extra = {}, replies = {}) {
       })
     } else if (req.url === '/api/sessions') {
       res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(data))
+    } else if (replies[req.url.split('?')[0]]) {
+      reads.push(decodeURIComponent(req.url))
+      res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(replies[req.url.split('?')[0]]))
     } else {
       res.setHeader('content-type', 'text/html'); res.end(readFileSync(join(__dirname, '..', 'index.html')))
     }
@@ -55,6 +58,7 @@ async function world(t, hash, extra = {}, replies = {}) {
   t.after(() => assert.deepEqual(errors, []))
   await page.goto(`http://127.0.0.1:${server.address().port}/#${hash}`)
   page.posts = posts
+  page.reads = reads
   return page
 }
 
@@ -211,7 +215,7 @@ test('a profile is made and edited in Settings, with only one of them the defaul
   await page.getByRole('group', { name: 'Default profile' }).getByRole('button', { name: 'On' }).click()
   await cards.locator('.tag', { hasText: 'Default' }).waitFor()
   assert.equal(changes(), 5)
-  assert.deepEqual(page.posts.at(-1), ['/api/profiles/p1', { name: 'Reviews', engine: 'claude', thinking: true, dir: '/work/elsewhere', effort: 'pair', model: 'opus', effortLevel: 'high', default: true }])
+  assert.deepEqual(page.posts.slice(1), [['/api/profiles/p1', { dir: '/work/elsewhere' }], ['/api/profiles/p1', { effort: 'pair' }], ['/api/profiles/p1', { model: 'opus' }], ['/api/profiles/p1', { effortLevel: 'high' }], ['/api/profiles/p1', { default: true }]])
   assert.equal(await cards.locator('.why').innerText(), 'Claude Code · Opus · high effort')
   assert.deepEqual(await cards.locator('.meta span:not(.mono)').allInnerTexts(), ['/work/elsewhere', 'filed under pair'])
 
@@ -289,6 +293,54 @@ test('the New Session dialog opens with the default profile, and takes on anothe
   await page.getByRole('button', { name: /^Session profiles/ }).click()
   await page.locator('.card.profile', { hasText: 'Solo' }).getByRole('button', { name: 'New Session' }).click()
   assert.deepEqual([...await shown(), await field('effortLevel').inputValue()], ['p3', '/work/solo', 'solo', '', 'high'])
+})
+
+test('an OpenCode profile chooses its agent, model and variant from what OpenCode offers where it starts', async t => {
+  const offers = { agents: [{ name: 'build', description: 'Writes code' }, { name: 'review' }],
+    models: [{ id: 'openai/gpt-5', name: 'GPT-5', provider: 'OpenAI', variants: ['high', 'low'] }, { id: 'zen/big-pickle', name: 'Big Pickle', provider: 'Zen', variants: [] }],
+    defaults: { agentName: 'build', model: 'zen/big-pickle', variant: '' } }
+  const page = await world(t, 'settings', { ...kept([profile('p1', 'Critical review', { engine: 'opencode', opencodeAgent: 'gone' }), profile('p2', 'Plain')]),
+    capabilities: { opencode: { start: true, launchOptions: true } } }, { '/api/agents/opencode/launch-options': offers })
+  await page.getByRole('button', { name: /^Session profiles/ }).click()
+  const card = page.locator('.card.profile').first(), pick = name => page.getByLabel(`Profile OpenCode ${name}`)
+  await card.getByRole('button', { name: 'Edit' }).click()
+  await page.locator('.pedit [role=status]', { hasText: 'your home directory' }).waitFor()
+  assert.deepEqual(page.reads, ['/api/agents/opencode/launch-options?dir=~'])
+  assert.deepEqual(await pick('agent').locator('option').allInnerTexts(), ['Native default (build)', 'build — Writes code', 'review', 'gone (unavailable)'])
+  assert.deepEqual(await pick('model').locator('option').allInnerTexts(), ['Native default (zen/big-pickle)', 'GPT-5 · openai/gpt-5', 'Big Pickle · zen/big-pickle'])
+  assert.deepEqual(await pick('variant').locator('option').allInnerTexts(), ['Native default'])
+  await pick('agent').selectOption('review')
+  await pick('model').selectOption('openai/gpt-5')
+  await page.waitForFunction(() => document.querySelectorAll('[aria-label="Profile OpenCode variant"] option').length === 3)
+  await pick('variant').selectOption('high')
+  await page.waitForFunction(() => document.querySelector('.card.profile .why')?.textContent === 'OpenCode · review · openai/gpt-5 · high')
+  assert.deepEqual(page.posts.map(([, sent]) => sent), [{ opencodeAgent: 'review' }, { opencodeModel: 'openai/gpt-5', opencodeVariant: '' }, { opencodeVariant: 'high' }])
+  await pick('model').selectOption('zen/big-pickle')
+  await page.waitForFunction(() => document.querySelector('.card.profile .why')?.textContent === 'OpenCode · review · zen/big-pickle')
+  assert.deepEqual(page.posts.at(-1)[1], { opencodeModel: 'zen/big-pickle', opencodeVariant: '' })
+  await pick('model').selectOption('openai/gpt-5')
+  await page.waitForFunction(() => document.querySelectorAll('[aria-label="Profile OpenCode variant"] option').length === 3)
+  await pick('variant').selectOption('low')
+
+  await page.getByLabel('Profile directory').fill('/work/pair')
+  await page.getByLabel('Profile directory').press('Tab')
+  await page.locator('.pedit [role=status]', { hasText: '/work/pair' }).waitFor()
+  assert.deepEqual(page.reads, ['/api/agents/opencode/launch-options?dir=~', '/api/agents/opencode/launch-options?dir=/work/pair'])
+  await page.waitForFunction(() => document.querySelector('.card.profile .meta')?.textContent.includes('/work/pair'))
+  await card.getByRole('button', { name: 'New Session' }).click()
+  const dialog = page.getByRole('dialog', { name: 'New Session' }), field = name => dialog.locator(`[name="${name}"]`)
+  await page.waitForFunction(() => document.querySelector('.modal.start [name=variant]')?.value === 'low')
+  assert.deepEqual([await field('profile').inputValue(), await field('agentName').inputValue(), await field('model').inputValue(), await field('dir').inputValue()], ['p1', 'review', 'openai/gpt-5', '/work/pair'])
+  await field('prompt').fill('Review it')
+  await page.waitForFunction(() => !document.querySelector('.modal.start button.go').disabled)
+  await field('profile').selectOption('p2')
+  assert.equal(await field('agentName').count(), 0)
+  await field('profile').selectOption('p1')
+  await page.waitForFunction(() => document.querySelector('.modal.start [name=variant]')?.value === 'low' && !document.querySelector('.modal.start button.go').disabled)
+  await dialog.getByRole('button', { name: 'Start session' }).click()
+  await page.waitForFunction(() => !document.querySelector('.modal.start'))
+  const [, body] = page.posts.find(([url]) => url === '/api/sessions')
+  assert.deepEqual([body.agent, body.agentName, body.model, body.variant, body.dir], ['opencode', 'review', 'openai/gpt-5', 'low', '/work/pair'])
 })
 
 test('with no default profile the New Session dialog opens with none, and without profiles it does not ask for one', async t => {

@@ -1609,6 +1609,16 @@ function captureStart() {
   const opts = startDraft[form.dataset.engine] ||= {};
   for (const key of ['model', 'effortLevel', 'temperature', 'agentName', 'variant']) if (key in f) opts[key] = f[key];
 }
+/* What OpenCode offers a session started in a directory: its agents, its models with their variants, and
+   which of them it takes when none is chosen. */
+async function launchOptions(dir) {
+  const res = await fetch(`/api/agents/opencode/launch-options?dir=${encodeURIComponent(dir)}`);
+  if (!res.ok) throw new Error(`Launch options (${res.status}): ${(await res.text()).trim() || res.statusText}`);
+  const data = await res.json();
+  if (!Array.isArray(data.agents) || !Array.isArray(data.models) || !data.defaults) throw new Error('Invalid launch options response');
+  return data;
+}
+const launchOptionsError = err => err instanceof TypeError ? 'Could not load launch options. Check the Slorp service.' : err.message;
 function loadStartCatalog(retry = false) {
   if (startWith !== 'opencode' || !lifecycleCap('opencode', 'launchOptions')) return;
   const dir = startDraft.dir.trim();
@@ -1619,15 +1629,12 @@ function loadStartCatalog(retry = false) {
   if (!dir) return;
   catalogTimer = setTimeout(async () => {
     try {
-      const res = await fetch(`/api/agents/opencode/launch-options?dir=${encodeURIComponent(dir)}`);
-      if (!res.ok) throw new Error(`Launch options (${res.status}): ${(await res.text()).trim() || res.statusText}`);
-      const data = await res.json();
-      if (!Array.isArray(data.agents) || !Array.isArray(data.models) || !data.defaults) throw new Error('Invalid launch options response');
+      const data = await launchOptions(dir);
       if (version !== catalogVersion) return;
       startCatalog = { dir, data };
     } catch (err) {
       if (version !== catalogVersion) return;
-      startCatalog = { dir, error: err instanceof TypeError ? 'Could not load launch options. Check the Slorp service.' : err.message };
+      startCatalog = { dir, error: launchOptionsError(err) };
     }
     render();
   }, retry ? 0 : 250);
@@ -1660,12 +1667,12 @@ function syncStartSubmit() {
   const status = $('#start-status');
   if (status) status.textContent = problem;
 }
-function openCodeOptions() {
-  const data = startCatalog.data, opts = startDraft.opencode;
+/* The options of the lists an OpenCode session's agent, model and variant are chosen from, by the name each
+   is sent under: what a directory offers, and what is chosen even where it is not offered. */
+function openCodeChoices(data, opts) {
   const options = (rows, value, fallback) => [[ '', `Native default${fallback ? ` (${fallback})` : ''}` ], ...rows,
-    ...(value && !rows.some(([id]) => id === value) ? [[value, `${value} (unavailable)`]] : [])]
+    ...(value && !rows.some(([id]) => id === value) ? [[value, data ? `${value} (unavailable)` : value]] : [])]
     .map(([id, name]) => `<option value="${esc(id)}" ${id === value ? 'selected' : ''}>${esc(name)}</option>`).join('');
-  const pick = (name, label, choices) => `<label><span>${label}</span><select class="btn" name="${name}" data-keep="start-opencode-${name}">${choices}</select></label>`;
   let models = options([], opts.model, data?.defaults.model);
   if (data) {
     models = options([], '', data.defaults.model);
@@ -1674,9 +1681,14 @@ function openCodeOptions() {
     }
     if (opts.model && !data.models.some(m => m.id === opts.model)) models += `<option value="${esc(opts.model)}" selected>${esc(opts.model)} (unavailable)</option>`;
   }
-  return pick('agentName', 'OpenCode agent', options((data?.agents || []).map(a => [a.name, a.description ? `${a.name} — ${a.description}` : a.name]), opts.agentName, data?.defaults.agentName))
-    + pick('model', 'OpenCode model', models)
-    + pick('variant', 'OpenCode variant', options(startVariants().map(v => [v, v]), opts.variant, !opts.model || opts.model === data?.defaults.model ? data?.defaults.variant : ''))
+  const variants = data?.models.find(m => m.id === (opts.model || data.defaults.model))?.variants || [];
+  return { agentName: options((data?.agents || []).map(a => [a.name, a.description ? `${a.name} — ${a.description}` : a.name]), opts.agentName, data?.defaults.agentName), model: models,
+    variant: options(variants.map(v => [v, v]), opts.variant, !opts.model || opts.model === data?.defaults.model ? data?.defaults.variant : '') };
+}
+function openCodeOptions() {
+  const choices = openCodeChoices(startCatalog.data, startDraft.opencode);
+  const pick = (name, label) => `<label><span>${label}</span><select class="btn" name="${name}" data-keep="start-opencode-${name}">${choices[name]}</select></label>`;
+  return pick('agentName', 'OpenCode agent') + pick('model', 'OpenCode model') + pick('variant', 'OpenCode variant')
     + `<div class="none wide" role="status"><span id="start-status">${esc(startProblem())}</span>${startCatalog.error ? ' <button type="button" class="btn" data-act="startCatalogRetry">Retry launch options</button>' : ''}</div>`;
 }
 const START_ENGINES = ['claude', 'opencode', 'local'];
@@ -1702,7 +1714,7 @@ function draftStart(effort, profile) {
   startDraft = { profile: d.id || '', dir: (effort ? startDirs()[0] || dir : dir || (starting && startDirs()[0])) || '', name: '', prompt: '',
     role: knowledge.roles.some(r => r.id === d.role) ? d.role : '', terminal: !!d.terminal, typing: false,
     claude: { model: d.model || '', effortLevel: d.effortLevel || '' }, local: { temperature: d.temperature ?? '' },
-    opencode: { agentName: '', model: '', variant: '' } };
+    opencode: { agentName: d.opencodeAgent || '', model: d.opencodeModel || '', variant: d.opencodeVariant || '' } };
   startCatalog = {}; ++catalogVersion; clearTimeout(catalogTimer);
   loadStartCatalog();
   startThinking = d.thinking !== false;
@@ -2312,11 +2324,19 @@ const pullsOff = () => !!live && !integrations.find(i => i.id === 'github')?.ena
 /* The item a session has on Home, while the user has yet to deal with it. */
 const itemOf = s => liveItems.find(i => i.session && i.session.id === s.id && isActive(i));
 
+/* A read of the service asked for before a later one was drawn, or before the service had taken a change that
+   was made here at once, would draw the page as it was. Such a read is passed over; written says when a change
+   of that kind goes to the service and when it has been taken, after which the page is to be read again. */
+let reads = 0, staleReads = 0, writing = 0;
+const written = on => { writing += on ? 1 : -1; staleReads = reads; };
 async function refresh(force) {
+  const read = ++reads;
   try {
     const res = await fetch('/api/sessions');
     if (!res.ok) throw new Error(res.status);
     const data = await res.json();
+    if (read <= staleReads || writing) return;
+    staleReads = read;
     live = data.sessions;
     liveEfforts = (data.efforts || []).map(e => ({ ...e, raw: e.dirs.length ? e.dirs.map(tilde).join(', ') : `effort ${e.id}` }));
     liveItems = toItems(data);
@@ -3675,17 +3695,19 @@ let profileDirTyping = false, adopting = false;
 const profileById = id => knowledge.profiles.find(p => p.id === id);
 const defaultProfile = () => knowledge.profiles.find(p => p.default);
 const serviceSaid = err => toast(err instanceof TypeError ? 'Could not reach the Slorp service' : `That did not work: ${err.message}`);
-/* Changes a profile, here at once and then in the service, and says why when the service would not have it.
-   What was typed for the profile is then drawn again from what the service kept. */
+/* Changes a profile, here at once and then in the service, which is told only what changed, and says why when
+   the service would not have it. What was typed for the profile is then drawn again from what the service kept. */
 function setProfile(p, changes) {
   Object.assign(p, changes);
   if (changes.default) for (const o of knowledge.profiles) o.default = o === p;
-  const { id, ...body } = p;
-  fetch(`/api/profiles/${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  const id = p.id;
+  written(true);
+  fetch(`/api/profiles/${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) })
     .then(async res => { if (!res.ok) throw new Error((await res.text()).trim() || res.status); })
     .catch(serviceSaid)
     .finally(() => {
-      for (const el of document.querySelectorAll(`[data-keep^="profile-${id}-"]`)) if (el !== document.activeElement) el.removeAttribute('data-keep');
+      written(false);
+      for (const el of document.querySelectorAll(`[data-keep^="profile-${id}-"]`)) unkept.add(el.dataset.keep);
       refresh(true);
     });
 }
@@ -3721,7 +3743,7 @@ function profileSays(p) {
   const named = (list, v) => v && list.find(([id]) => id === v)?.[1];
   const e = openEfforts().find(x => x.id === p.effort), r = knowledge.roles.find(x => x.id === p.role), w = p.dir && workspaceAt(p.dir);
   const runs = p.engine === 'local' ? [localName() || 'Local model', p.thinking ? 'thinking' : 'no thinking', p.temperature != null && `temperature ${p.temperature}`]
-    : p.engine === 'opencode' ? ['OpenCode'] : ['Claude Code', named(START_MODELS, p.model), named(START_EFFORTS, p.effortLevel) && `${named(START_EFFORTS, p.effortLevel).toLowerCase()} effort`];
+    : p.engine === 'opencode' ? ['OpenCode', p.opencodeAgent, p.opencodeModel, p.opencodeVariant] : ['Claude Code', named(START_MODELS, p.model), named(START_EFFORTS, p.effortLevel) && `${named(START_EFFORTS, p.effortLevel).toLowerCase()} effort`];
   const rest = [p.dir && (w ? `${esc(w.name)} — <span class="mono">${esc(tilde(w.dir))}</span>` : `<span class="mono">${esc(tilde(p.dir))}</span>`), e && `filed under ${esc(e.name)}`, r && `as ${esc(r.name)}`,
     p.terminal && terminalApp() && `opened in ${esc(terminalApp().name)}`];
   return `<div class="why">${esc(runs.filter(Boolean).join(' · '))}</div>${rest.some(Boolean) ? `<div class="meta">${rest.filter(Boolean).map(x => `<span>${x}</span>`).join('')}</div>` : ''}`;
@@ -3747,8 +3769,31 @@ function profileEdit(p) {
         + setting('Effort level', 'How hard it thinks. Default leaves it to Claude Code.', pick('effortLevel', 'Profile effort level', START_EFFORTS))
       : p.engine === 'local' ? setting('Thinking', 'Whether the local model thinks before it answers.', onOff('thinking', 'Thinking'))
         + setting('Temperature', 'From 0 to 2. Left empty, it is the model\'s own.', `<input type="number" min="0" max="2" step="0.05" data-change="profileSet" ${at} data-key="temperature" data-keep="profile-${p.id}-temperature" value="${esc(p.temperature ?? '')}" placeholder="The model's own" aria-label="Profile temperature">`)
-      : '<div class="none">OpenCode\'s agent, model and variant are chosen when the session is started, from what its directory offers.</div>'}
+      : profileOpenCode(p, at)}
   </div>`;
+}
+/* What OpenCode offers the profile being edited, in its directory or, where that is left open, in the home
+   directory. */
+let profileCatalog = {};
+function loadProfileCatalog(dir, retry = false) {
+  if (!retry && profileCatalog.dir === dir) return;
+  const asked = profileCatalog = { dir, loading: true };
+  launchOptions(dir).then(data => { if (profileCatalog === asked) profileCatalog = { dir, data }; })
+    .catch(err => { if (profileCatalog === asked) profileCatalog = { dir, error: launchOptionsError(err) }; })
+    .finally(render);
+}
+/* The boxes an OpenCode profile's agent, model and variant are chosen in. */
+function profileOpenCode(p, at) {
+  if (!lifecycleCap('opencode', 'launchOptions')) return '<div class="none">This service cannot say what OpenCode offers, so its agent, model and variant are chosen when the session is started.</div>';
+  const dir = p.dir ? tilde(p.dir) : '~';
+  loadProfileCatalog(dir);
+  const c = profileCatalog, choices = openCodeChoices(c.data, { agentName: p.opencodeAgent || '', model: p.opencodeModel || '', variant: p.opencodeVariant || '' });
+  const pick = (key, from, name, about) => setting(name, about, `<select class="btn" data-change="profileSet" ${at} data-key="${key}" aria-label="Profile ${name}">${choices[from]}</select>`);
+  return pick('opencodeAgent', 'agentName', 'OpenCode agent', 'The agent the session runs as. Native default leaves it to OpenCode.')
+    + pick('opencodeModel', 'model', 'OpenCode model', 'The model the session runs on. Native default leaves it to OpenCode.')
+    + pick('opencodeVariant', 'variant', 'OpenCode variant', 'The variant of that model, where it has any.')
+    + `<div class="none" role="status">${c.loading ? 'Loading what OpenCode offers…' : c.error ? `${esc(c.error)} <button type="button" class="btn" data-act="profileCatalogRetry" data-dir="${esc(dir)}">Retry launch options</button>`
+      : `These are what OpenCode offers in ${p.dir ? `<span class="mono">${esc(dir)}</span>` : 'your home directory'}. A session started elsewhere may be offered others.`}</div>`;
 }
 function profilesBody() {
   if (!profileById(state.profileSel)) state.profileSel = null;
@@ -3929,6 +3974,8 @@ const RENDER = { home: viewHome, attention: viewAttention, efforts: viewEfforts,
 /* Draws the page. Taking a box that is being typed in off the page makes the browser say the box has lost the
    user, which can ask for the page to be drawn while it is being drawn: it is then drawn once more afterwards. */
 let drawing = false, drawAgain = false;
+/* The boxes that are to be drawn afresh, without what was typed in them, unless the user is in one. */
+const unkept = new Set();
 function render() {
   if (drawing) { drawAgain = true; return; }
   drawing = true;
@@ -3946,7 +3993,8 @@ function draw() {
   const scrolls = {};
   document.querySelectorAll('[data-scroll]').forEach(el => { scrolls[el.dataset.scroll] = el.scrollTop; });
   const drafts = {};
-  document.querySelectorAll('[data-keep]').forEach(el => { drafts[el.dataset.keep] = el.value; });
+  document.querySelectorAll('[data-keep]').forEach(el => { if (!unkept.has(el.dataset.keep) || el === document.activeElement) drafts[el.dataset.keep] = el.value; });
+  unkept.clear();
   const focused = document.activeElement?.dataset?.keep, caret = focused && [document.activeElement.selectionStart, document.activeElement.selectionEnd];
   const menuOpen = $('#menu')?.open;
   const acts = $('#acts');
@@ -4042,8 +4090,9 @@ const actions = {
   fluent: d => { state.fluent = d.on === '1'; },
   themeTo: d => { state.theme = d.to; },
   attentionTo: d => { state.legacyAttention = d.to === 'on'; },
-  profileSel: d => { state.profileSel = state.profileSel === d.id ? null : d.id; profileDirTyping = false; },
+  profileSel: d => { state.profileSel = state.profileSel === d.id ? null : d.id; profileDirTyping = false; profileCatalog = {}; },
   profileTo: d => { const p = profileById(d.id); if (p) setProfile(p, { [d.key]: d.key === 'engine' ? d.to : d.to === 'on' }); },
+  profileCatalogRetry: d => { loadProfileCatalog(d.dir, true); },
   profileRemove: d => { api('DELETE', `/api/profiles/${d.id}`, null, () => toast('Removed')); return false; },
   lookTo: d => { state.look = d.to; },
   setSel: d => { state.setSel = d.s; },
@@ -4334,7 +4383,7 @@ const changes = {
     if (!p) return false;
     if (!el.checkValidity() || (d.key === 'name' && !v)) { el.removeAttribute('data-keep'); return; }
     if (d.key === 'dir') profileDirTyping = false;
-    setProfile(p, { [d.key]: d.key === 'temperature' ? (v === '' ? null : +v) : v });
+    setProfile(p, { [d.key]: d.key === 'temperature' ? (v === '' ? null : +v) : v, ...(d.key === 'opencodeModel' ? { opencodeVariant: '' } : {}) });
   },
   profileSpace: (d, el) => {
     const p = profileById(d.id), w = knowledge.workspaces.find(x => x.id === el.value);
@@ -4421,15 +4470,15 @@ document.addEventListener('change', e => {
     render(); return;
   }
   const el = e.target.closest('[data-change]');
-  if (el && !(drawing && el.dataset.keep)) changed(el);
+  if (el && !el.matches(KEPT_BOX)) changed(el);
 });
-/* A box that keeps what is typed in it across a drawing of the page is not changed by being drawn again, and
-   afterwards the browser no longer says so when it is left. It is then taken as changed here, when it is left
-   holding something other than it was drawn with. */
-document.addEventListener('focusout', e => {
-  const el = e.target;
-  if (!drawing && el.matches?.('input[data-change][data-keep]') && el.value !== el.defaultValue) changed(el);
-});
+/* A box that keeps what is typed in it while the page is drawn again under it cannot go by what the browser
+   says of it: taken off the page it is said to have changed, and put back it is no longer said to when it does.
+   It is taken as changed when Enter is pressed in it or it is left, holding other than it was drawn with. */
+const KEPT_BOX = 'input[data-change][data-keep]';
+const boxChanged = el => { if (!drawing && el.matches?.(KEPT_BOX) && el.value !== el.defaultValue) changed(el); };
+document.addEventListener('focusout', e => boxChanged(e.target));
+document.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) boxChanged(e.target); });
 document.addEventListener('submit', e => {
   const form = e.target.closest('[data-form]');
   if (!form) return;

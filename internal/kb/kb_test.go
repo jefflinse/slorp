@@ -1,6 +1,7 @@
 package kb_test
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 
@@ -795,17 +796,20 @@ func TestProfiles(t *testing.T) {
 
 	first, err := k.AddProfile(kb.Profile{ID: "mine", Name: " Review ", Default: true, Dir: "/work/docs/", Effort: effort.ID, Role: role, Terminal: true, Model: " opus ", EffortLevel: "high"})
 	must(t, err)
-	second, err := k.AddProfile(kb.Profile{Name: "Local", Engine: kb.EngineLocal, Thinking: true, Temperature: &warm})
+	second, err := k.AddProfile(kb.Profile{Name: "Local", Engine: kb.EngineLocal, Thinking: true, Temperature: &warm, OpenCodeAgent: " build ", OpenCodeModel: " openai/gpt-5 ", OpenCodeVariant: " high "})
 	must(t, err)
 	got := k.Knowledge().Profiles
 	want := []kb.Profile{
 		{ID: first, Name: "Review", Default: true, Engine: kb.EngineClaude, Dir: "/work/docs", Effort: effort.ID, Role: role, Terminal: true, Model: "opus", EffortLevel: "high"},
-		{ID: second, Name: "Local", Engine: kb.EngineLocal, Thinking: true, Temperature: &warm},
+		{ID: second, Name: "Local", Engine: kb.EngineLocal, Thinking: true, Temperature: &warm, OpenCodeAgent: "build", OpenCodeModel: "openai/gpt-5", OpenCodeVariant: "high"},
 	}
 	if first == "" || first == "mine" || first == second || !reflect.DeepEqual(got, want) {
 		t.Fatalf("Profiles = %+v, want %+v", got, want)
 	}
 
+	set := func(p kb.Profile) error {
+		return k.EditProfile(p.ID, func(q *kb.Profile) error { *q = p; return nil })
+	}
 	hot, cold := 2.5, -0.1
 	bad := map[string]kb.Profile{
 		"no name":                       {},
@@ -824,24 +828,27 @@ func TestProfiles(t *testing.T) {
 		}
 		p.ID = second
 		if name != "a name another has" {
-			if err := k.SetProfile(p); err == nil {
+			if err := set(p); err == nil {
 				t.Errorf("a profile changed to have %s was accepted", name)
 			}
 		}
 	}
-	if err := k.SetProfile(kb.Profile{ID: second, Name: "REVIEW"}); err == nil {
+	if err := set(kb.Profile{ID: second, Name: "REVIEW"}); err == nil {
 		t.Error("a profile renamed to another's name was accepted")
 	}
-	if err := k.SetProfile(kb.Profile{ID: "nope", Name: "X"}); err == nil {
+	if err := set(kb.Profile{ID: "nope", Name: "X"}); err == nil {
 		t.Error("changing a profile that does not exist was accepted")
+	}
+	if err := k.EditProfile(second, func(p *kb.Profile) error { p.Name = "Changed"; return errors.New("no") }); err == nil {
+		t.Error("an edit that failed was accepted")
 	}
 	if after := k.Knowledge().Profiles; !reflect.DeepEqual(after, want) {
 		t.Errorf("after the rejected ones: %+v, want %+v", after, want)
 	}
 
-	must(t, k.SetProfile(kb.Profile{ID: second, Name: "local", Default: true, Engine: kb.EngineOpenCode, Effort: other.ID}))
-	must(t, k.SetProfile(kb.Profile{ID: first, Name: "Review", Effort: effort.ID, Role: role}))
-	must(t, k.SetProfile(kb.Profile{ID: second, Name: "local", Default: true, Engine: kb.EngineOpenCode, Effort: other.ID}))
+	must(t, set(kb.Profile{ID: second, Name: "local", Default: true, Engine: kb.EngineOpenCode, Effort: other.ID}))
+	must(t, set(kb.Profile{ID: first, Name: "Review", Effort: effort.ID, Role: role}))
+	must(t, k.EditProfile(second, func(p *kb.Profile) error { p.ID, p.Default = "other", true; return nil }))
 	want = []kb.Profile{
 		{ID: first, Name: "Review", Engine: kb.EngineClaude, Effort: effort.ID, Role: role},
 		{ID: second, Name: "local", Default: true, Engine: kb.EngineOpenCode, Effort: other.ID},

@@ -1658,8 +1658,17 @@ func TestProfilesOverHTTP(t *testing.T) {
 		t.Fatalf("change a profile = %d", code)
 	}
 	got = f.state().Knowledge.Profiles
-	if len(got) != 1 || got[0].ID != made.ID || got[0].Name != "Reviews" || got[0].Engine != "local" || got[0].Dir != "" || got[0].Default || got[0].Temperature != nil {
-		t.Errorf("profiles = %+v, want the one there was, replaced whole", got)
+	if len(got) != 1 || got[0].ID != made.ID || got[0].Name != "Reviews" || got[0].Engine != "local" || got[0].Temperature != nil ||
+		got[0].Dir != filepath.Join(home, "not/there/yet") || !got[0].Default || got[0].Model != "opus" || !got[0].Thinking {
+		t.Errorf("profiles = %+v, want the one there was, changed only in what was said of it", got)
+	}
+	if code := f.post("/api/profiles/"+made.ID, `{"dir":"","default":false}`); code != 204 || f.state().Knowledge.Profiles[0].Dir != "" || f.state().Knowledge.Profiles[0].Default {
+		t.Errorf("leave a profile's directory open = %d, leaving %+v", code, f.state().Knowledge.Profiles)
+	}
+	for name, body := range map[string]string{"a relative directory": `{"dir":"work"}`, "no name": `{"name":" "}`, "what is not JSON": `{`} {
+		if code := f.post("/api/profiles/"+made.ID, body); code != 400 {
+			t.Errorf("a profile changed to have %s = %d, want 400", name, code)
+		}
 	}
 	if code := f.post("/api/profiles/nope", `{"name":"X"}`); code != 400 {
 		t.Errorf("change a profile that does not exist = %d, want 400", code)

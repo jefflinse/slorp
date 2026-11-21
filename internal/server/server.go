@@ -681,29 +681,31 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		edited(w, k.Remove(r.PathValue("section"), r.PathValue("id")))
 	})
 
-	// profile reads the profile a request carries, with its directory, which
-	// need not be there yet, made absolute.
-	profile := func(w http.ResponseWriter, r *http.Request) (p kb.Profile, ok bool) {
-		if !readJSON(w, r, &p) {
-			return p, false
+	// profile lays what a request said of a profile over p, and makes its
+	// directory, which need not be there yet, absolute.
+	profile := func(said json.RawMessage, p *kb.Profile) error {
+		if err := json.Unmarshal(said, p); err != nil {
+			return errors.New("bad request body")
 		}
-		if strings.TrimSpace(p.Dir) != "" {
-			dir, err := absolute(p.Dir)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return p, false
-			}
-			p.Dir = dir
+		if p.Dir = strings.TrimSpace(p.Dir); p.Dir == "" {
+			return nil
 		}
-		return p, true
+		dir, err := absolute(p.Dir)
+		p.Dir = dir
+		return err
 	}
 
 	mux.HandleFunc("POST /api/profiles", func(w http.ResponseWriter, r *http.Request) {
-		p, ok := profile(w, r)
-		if !ok {
+		var said json.RawMessage
+		if !readJSON(w, r, &said) {
 			return
 		}
-		id, err := k.AddProfile(p)
+		var p kb.Profile
+		err := profile(said, &p)
+		var id string
+		if err == nil {
+			id, err = k.AddProfile(p)
+		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -712,13 +714,13 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		writeJSON(w, http.StatusOK, map[string]string{"id": id})
 	})
 
+	// A change to a profile says only what is changed.
 	mux.HandleFunc("POST /api/profiles/{id}", func(w http.ResponseWriter, r *http.Request) {
-		p, ok := profile(w, r)
-		if !ok {
+		var said json.RawMessage
+		if !readJSON(w, r, &said) {
 			return
 		}
-		p.ID = r.PathValue("id")
-		edited(w, k.SetProfile(p))
+		edited(w, k.EditProfile(r.PathValue("id"), func(p *kb.Profile) error { return profile(said, p) }))
 	})
 
 	mux.HandleFunc("DELETE /api/profiles/{id}", func(w http.ResponseWriter, r *http.Request) {
