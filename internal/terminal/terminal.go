@@ -79,10 +79,6 @@ var presets = map[string][]preset{
 			`end tell`)},
 		{App{"ghostty", "Ghostty"}, "Ghostty", termProgram("ghostty"), launched("-e")},
 		{App{"kitty", "kitty"}, "kitty", set("KITTY_WINDOW_ID"), launched()},
-		{App{"wezterm", "WezTerm"}, "WezTerm", set("WEZTERM_PANE"), func(app, shell, command string) []string {
-			return append([]string{filepath.Join(app, "Contents", "MacOS", "wezterm"), "start", "--"}, inShell(shell, command)...)
-		}},
-		{App{"alacritty", "Alacritty"}, "Alacritty", set("ALACRITTY_WINDOW_ID"), launched("-e")},
 		{App{"terminal", "Terminal"}, "Terminal", termProgram("Apple_Terminal"), script(
 			`tell application "Terminal"`,
 			`do script (item 1 of argv)`,

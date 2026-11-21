@@ -54,14 +54,12 @@ func TestAppsAreThoseInstalled(t *testing.T) {
 }
 
 func TestDefaultIsTheTerminalSlorpWasStartedFrom(t *testing.T) {
-	all := []string{"/Applications/iTerm.app", "/Applications/Ghostty.app", "/Applications/kitty.app", "/Applications/WezTerm.app", "/Applications/Alacritty.app", "/System/Applications/Utilities/Terminal.app"}
+	all := []string{"/Applications/iTerm.app", "/Applications/Ghostty.app", "/Applications/kitty.app", "/System/Applications/Utilities/Terminal.app"}
 	for want, env := range map[string]map[string]string{
-		"iterm":     {"TERM_PROGRAM": "iTerm.app"},
-		"ghostty":   {"TERM_PROGRAM": "ghostty"},
-		"kitty":     {"KITTY_WINDOW_ID": "1"},
-		"wezterm":   {"WEZTERM_PANE": "0"},
-		"alacritty": {"ALACRITTY_WINDOW_ID": "7"},
-		"terminal":  {"TERM_PROGRAM": "Apple_Terminal"},
+		"iterm":    {"TERM_PROGRAM": "iTerm.app"},
+		"ghostty":  {"TERM_PROGRAM": "ghostty"},
+		"kitty":    {"KITTY_WINDOW_ID": "1"},
+		"terminal": {"TERM_PROGRAM": "Apple_Terminal"},
 	} {
 		o, _ := machine(env, all...)
 		if got := o.Default(); got != want {
@@ -80,14 +78,12 @@ func TestOpenRunsTheCommandInANewWindow(t *testing.T) {
 	tests := map[string][]string{
 		"iterm": {"osascript", "-e", "on run argv", "-e", `tell application "iTerm"`, "-e", "set w to (create window with default profile)",
 			"-e", "tell current session of w to write text (item 1 of argv)", "-e", "activate", "-e", "end tell", "-e", "end run", command},
-		"terminal":  {"osascript", "-e", "on run argv", "-e", `tell application "Terminal"`, "-e", "do script (item 1 of argv)", "-e", "activate", "-e", "end tell", "-e", "end run", command},
-		"ghostty":   {"open", "-na", "/Applications/Ghostty.app", "--args", "-e", "/bin/fish", "-lic", kept},
-		"kitty":     {"open", "-na", "/Applications/kitty.app", "--args", "/bin/fish", "-lic", kept},
-		"wezterm":   {"/Applications/WezTerm.app/Contents/MacOS/wezterm", "start", "--", "/bin/fish", "-lic", kept},
-		"alacritty": {"open", "-na", "/Applications/Alacritty.app", "--args", "-e", "/bin/fish", "-lic", kept},
+		"terminal": {"osascript", "-e", "on run argv", "-e", `tell application "Terminal"`, "-e", "do script (item 1 of argv)", "-e", "activate", "-e", "end tell", "-e", "end run", command},
+		"ghostty":  {"open", "-na", "/Applications/Ghostty.app", "--args", "-e", "/bin/fish", "-lic", kept},
+		"kitty":    {"open", "-na", "/Applications/kitty.app", "--args", "/bin/fish", "-lic", kept},
 	}
 	for app, want := range tests {
-		o, ran := machine(map[string]string{"SHELL": "/bin/fish"}, "/Applications/iTerm.app", "/Applications/Ghostty.app", "/Applications/kitty.app", "/Applications/WezTerm.app", "/Applications/Alacritty.app", "/Applications/Terminal.app")
+		o, ran := machine(map[string]string{"SHELL": "/bin/fish"}, "/Applications/iTerm.app", "/Applications/Ghostty.app", "/Applications/kitty.app", "/Applications/Terminal.app")
 		if err := o.Open(context.Background(), app, command); err != nil {
 			t.Errorf("Open %s: %v", app, err)
 		}
