@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -25,6 +26,7 @@ import (
 	"github.com/jefflinse/slorp/internal/integrations"
 	"github.com/jefflinse/slorp/internal/kb"
 	"github.com/jefflinse/slorp/internal/opencode"
+	"github.com/jefflinse/slorp/internal/terminal"
 )
 
 // modelName is what an agent's name for one of its models looks like.
@@ -102,6 +104,27 @@ type Launcher interface {
 	// Stop ends a session by the id its agent's commands take, keeping its
 	// conversation.
 	Stop(ctx context.Context, job string) error
+}
+
+// Terminals opens windows of the terminal emulators on this machine.
+type Terminals interface {
+	// Apps lists those installed, and Default names the one to use when
+	// the user has chosen none, empty when there are none.
+	Apps() []terminal.App
+	Default() string
+	// Open opens a new window of one of Apps and runs a shell command in it.
+	Open(ctx context.Context, app, command string) error
+}
+
+// machine is what the page is told of where Slorp runs: the system, the
+// terminal emulators it can open a session in, and the one it opens them in
+// until the user chooses another.
+type machine struct {
+	Platform string `json:"platform"`
+	Terminal struct {
+		Apps    []terminal.App `json:"apps"`
+		Default string         `json:"default"`
+	} `json:"terminal"`
 }
 
 // PluginManager installs and maintains an agent's bridge independently of launching sessions.
@@ -186,8 +209,13 @@ func Page(built []byte, path string) http.Handler {
 // agent; an agent with no history keeps no record Slorp can read, one with
 // no launcher has sessions Slorp can only watch, and one with no delegates
 // has subagents Slorp knows nothing of.
-func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history map[string]History, launchers map[string]Launcher, plugins map[string]PluginManager, delegates map[string]Delegates, prober Prober, page http.Handler) http.Handler {
+func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history map[string]History, launchers map[string]Launcher, plugins map[string]PluginManager, delegates map[string]Delegates, prober Prober, terminals Terminals, page http.Handler) http.Handler {
 	mux := http.NewServeMux()
+	here := machine{Platform: runtime.GOOS}
+	here.Terminal.Apps = []terminal.App{}
+	if terminals != nil {
+		here.Terminal.Apps, here.Terminal.Default = terminals.Apps(), terminals.Default()
+	}
 	epoch := strconv.FormatInt(time.Now().UnixNano(), 36)
 	capabilities := map[string]agentCapabilities{}
 	for agent, read := range history {
@@ -201,7 +229,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		c.ResumeCommand = c.ResumeCommand || agent == claude.Agent && launcher != nil
 		capabilities[agent] = c
 	}
-	lifecycleRoutes(mux, h, launchers)
+	lifecycleRoutes(mux, h, launchers, terminals)
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -211,9 +239,10 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 	mux.HandleFunc("GET /api/sessions", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, struct {
 			hub.State
+			machine
 			Integrations []integrations.Status        `json:"integrations"`
 			Capabilities map[string]agentCapabilities `json:"capabilities"`
-		}{h.State(), m.Status(r.Context()), capabilities})
+		}{h.State(), here, m.Status(r.Context()), capabilities})
 	})
 
 	mux.HandleFunc("GET /api/events", func(w http.ResponseWriter, r *http.Request) {
@@ -1136,6 +1165,10 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			return
 		}
 		in.Model.Name = strings.TrimSpace(in.Model.Name)
+		if in.Terminal != "" && !slices.ContainsFunc(here.Terminal.Apps, func(a terminal.App) bool { return a.ID == in.Terminal }) {
+			http.Error(w, "no such terminal emulator is installed", http.StatusBadRequest)
+			return
+		}
 		h.SetSettings(in)
 		w.WriteHeader(http.StatusNoContent)
 	})

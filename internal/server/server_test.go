@@ -19,6 +19,7 @@ import (
 	"github.com/jefflinse/slorp/internal/hub"
 	"github.com/jefflinse/slorp/internal/integrations"
 	"github.com/jefflinse/slorp/internal/kb"
+	"github.com/jefflinse/slorp/internal/terminal"
 	"github.com/jefflinse/slorp/internal/testdb"
 )
 
@@ -37,6 +38,8 @@ type fixture struct {
 	launcher *launcher
 	// prober is what the server asked to have tried of the local model.
 	prober *prober
+	// terminals is what the server asked to have opened in a terminal.
+	terminals *terminals
 }
 
 // launcher records what it was asked to start, reopen, stop and install.
@@ -115,7 +118,7 @@ func fixtureWithHistory(t *testing.T, histories map[string]History, extraPlugins
 		Scope: func(string) (string, bool) { return "", true },
 		Tools: []integrations.Tool{{Name: "fake_lookup", Description: "Look something up."}},
 	})
-	rec, launch, probe := &record{}, &launcher{}, &prober{}
+	rec, launch, probe, terms := &record{}, &launcher{}, &prober{}, &terminals{}
 	plugins := map[string]PluginManager{"claude": launch}
 	for _, extra := range extraPlugins {
 		for agent, plugin := range extra {
@@ -126,9 +129,27 @@ func fixtureWithHistory(t *testing.T, histories map[string]History, extraPlugins
 	for agent, reader := range histories {
 		readers[agent] = reader
 	}
-	srv := httptest.NewServer(New(h, k, tools, feeds, readers, map[string]Launcher{"claude": launch}, plugins, map[string]Delegates{"claude": rec}, probe, Page([]byte("<title>slorp</title>"), "")))
+	srv := httptest.NewServer(New(h, k, tools, feeds, readers, map[string]Launcher{"claude": launch}, plugins, map[string]Delegates{"claude": rec}, probe, terms, Page([]byte("<title>slorp</title>"), "")))
 	t.Cleanup(srv.Close)
-	return &fixture{t, srv, h, k, feeds, probes, rec, launch, probe}
+	return &fixture{t, srv, h, k, feeds, probes, rec, launch, probe, terms}
+}
+
+// terminals stands in for the terminal emulators on a machine: two of them,
+// the second the one Slorp was started from.
+type terminals struct {
+	opened [][2]string
+	err    error
+}
+
+func (t *terminals) Apps() []terminal.App {
+	return []terminal.App{{ID: "one", Name: "One"}, {ID: "two", Name: "Two"}}
+}
+
+func (t *terminals) Default() string { return "two" }
+
+func (t *terminals) Open(_ context.Context, app, command string) error {
+	t.opened = append(t.opened, [2]string{app, command})
+	return t.err
 }
 
 type record struct {

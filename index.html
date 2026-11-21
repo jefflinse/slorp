@@ -595,6 +595,9 @@ button.ecard.new:hover { border-color: var(--ink3); color: var(--ink); }
 .modal.start select.btn { padding-right: 26px; }
 .modal.start textarea { display: block; min-height: 110px; resize: vertical; line-height: 1.45; }
 .modal.start .seg { justify-self: start; }
+.modal.start label.tick { display: flex; align-items: center; gap: 8px; }
+.modal.start label.tick input { width: 16px; height: 16px; padding: 0; accent-color: var(--accent); flex: none; }
+.modal.start label.tick > span { font-size: 13.5px; font-weight: 400; color: var(--ink); }
 .modal.start .seg button { padding: 6px 14px; font-size: 13px; }
 .modal.start .seg button:disabled { color: var(--ink3); opacity: 0.6; cursor: not-allowed; }
 .modal.start .mfoot { margin-top: 6px; }
@@ -1596,6 +1599,7 @@ function captureStart() {
   if (!form) return;
   const f = Object.fromEntries(new FormData(form));
   for (const key of ['dir', 'name', 'role', 'prompt']) if (key in f) startDraft[key] = f[key];
+  if (form.elements.terminal) startDraft.terminal = form.elements.terminal.checked;
   const opts = startDraft[form.dataset.engine] ||= {};
   for (const key of ['model', 'effortLevel', 'temperature', 'agentName', 'variant']) if (key in f) opts[key] = f[key];
 }
@@ -1686,7 +1690,7 @@ function draftStart(effort) {
   launching = false;
   startWith = START_ENGINES.includes(d.engine) ? d.engine : 'claude';
   startDraft = { dir: (effort ? startDirs()[0] || d.dir : d.dir || (starting && startDirs()[0])) || '', name: '', prompt: '',
-    role: knowledge.roles.some(r => r.id === d.role) ? d.role : '',
+    role: knowledge.roles.some(r => r.id === d.role) ? d.role : '', terminal: !!d.terminal,
     claude: { model: d.model || '', effortLevel: d.effortLevel || '' }, local: { temperature: d.temperature ?? '' },
     opencode: { agentName: '', model: '', variant: '' } };
   startCatalog = {}; ++catalogVersion; clearTimeout(catalogTimer);
@@ -1771,6 +1775,7 @@ function startModal() {
       ${on === 'claude' ? pick('model', 'Model', START_MODELS, last.model) + pick('effortLevel', 'Effort level', START_EFFORTS, last.effortLevel)
         : on === 'opencode' ? openCodeOptions() : `<div class="field"><span>Thinking</span><div class="seg" role="group" aria-label="Thinking"><button type="button" class="${startThinking ? 'on' : ''}" data-act="startThinking" data-to="1" aria-pressed="${startThinking}">On</button><button type="button" class="${startThinking ? '' : 'on'}" data-act="startThinking" data-to="" aria-pressed="${!startThinking}">Off</button></div></div>
           <label><span>Temperature <i>optional</i></span><input name="temperature" type="number" min="0" max="2" step="0.05" data-keep="start-temperature" value="${esc(last.temperature ?? '')}" placeholder="The model's own"></label>`}
+      ${terminalApp() && on !== 'opencode' ? `<label class="wide tick"><input type="checkbox" name="terminal" ${startDraft.terminal ? 'checked' : ''}><span>Open it in ${esc(terminalApp().name)} once it has started</span></label>` : ''}
       ${on === 'opencode' && startAttempt && !launching ? '<div class="none wide">Retrying unchanged options reuses the same request ID. <button type="button" class="btn" data-act="startReset">Prepare a new session</button> to intentionally create a separate conversation.</div>' : ''}
       <div class="mfoot wide"><span>${on === 'local' ? `Starts a Claude Code session in the background that runs on ${esc(local)}` : `Starts a ${on === 'opencode' ? 'OpenCode' : 'Claude Code'} session in the background`}${real ? `, filed under ${esc(e.name)}` : ''}.</span>
         <span class="bar"><button type="button" class="btn" data-act="modalClose">Cancel</button><button class="btn go" ${launching || startProblem() ? 'disabled' : ''} title="${esc(startProblem())}">${launching ? 'Starting…' : 'Start session'}</button></span></div>
@@ -2256,6 +2261,9 @@ function mockSessions() {
 
 let live = null, liveItems = [], liveEfforts = [], summarizer = {}, settings = {}, isOffline = false;
 let capabilities = {};
+/* The machine Slorp runs on: its system, as Go names it, and the terminal emulators Slorp can open a session in. */
+let platform = '', terminal = { apps: [], default: '' };
+const onMac = () => platform ? platform === 'darwin' : /Mac/.test(navigator.platform);
 const historyReading = new Set();
 let knowledge = { watch: [], questions: [], context: [], routing: [], roles: [] }, integrations = [], lookups = [], feeds = {}, pulls = [], limits = [], archive = [], plugins = {}, archiveDocs = {};
 let providerLimits = [];
@@ -2293,6 +2301,8 @@ async function refresh(force) {
     if (summarizer.model) delete state.modelNoticeOff;
     settings = data.settings || {};
     capabilities = data.capabilities || {};
+    platform = data.platform || '';
+    terminal = { apps: [], default: '', ...data.terminal };
     knowledge = { roles: [], ...(data.knowledge || knowledge) };
     integrations = data.integrations || [];
     lookups = data.lookups || [];
@@ -2305,6 +2315,7 @@ async function refresh(force) {
     if (journalFound && JSON.stringify(journal) !== listed) runJournalSearch();
     archive = data.archive || [];
     observeResumeAttempts();
+    openWhenUp();
     plugins = data.plugins || {};
     isOffline = false;
     announce(liveItems);
@@ -2430,6 +2441,7 @@ function sessionMenu(s, it) {
   const rows = `${menuPart('move', 'Move to', menuTo('liveMoveTo', s.id, effortsBut(s.effort || 'unsorted')))}
     ${menuPart('role', s.role && s.roleVia === 'you' ? 'Change role' : 'Role', menuTo('liveRoleTo', s.id, roles))}
     ${s.agent === 'claude' && s.job ? `<button data-act="copyText" data-text="${esc(attachCommand(s))}" title="Copies the command that opens this background session in Claude Code, in a terminal. It keeps running when you leave it.">Copy attach command</button>` : ''}
+    ${terminalButton(s)}
     ${lifecycleCap(s.agent, 'resumeCommand') ? `<button data-act="copyResume" data-id="${esc(s.id)}" ${commandReading.has(s.id) ? 'disabled' : ''}>${commandReading.has(s.id) ? 'Fetching command…' : 'Copy resume command'}</button>` : ''}
     ${canStop(s) ? `<button data-act="stop" data-id="${esc(s.id)}" title="Stops this background session. Its conversation is kept, and it can be reopened from the closed sessions under Sessions.">Stop session</button>` : ''}`;
   return it ? itemMenu(it, `${s.pending ? '' : `<button data-act="livePark" data-id="${it.id}">Park as open question</button>`}${rows}`)
@@ -2754,7 +2766,7 @@ function sessionPage(s, it, stands) {
     <div class="titled">${renaming === s.id
       ? `<form class="rename" data-form="name" data-id="${s.id}"><input name="name" data-keep="name-${s.id}" value="${esc(s.label)}" maxlength="80" placeholder="Leave empty to go back to its own title" aria-label="Name for this session">
           <button class="btn go">Save</button><button type="button" class="btn" data-act="renameCancel">Cancel</button></form>`
-      : `<h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? s.label : rawOf(s))}${state.fluent ? `<button class="pen" data-act="rename" data-id="${s.id}" title="${s.labelVia === 'you' ? 'You named this session. Rename it' : 'Give this session a name of your own'}" aria-label="Rename this session">✎</button>` : ''}</h1>`}${sessionMenu(s, it)}</div>
+      : `<h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? s.label : rawOf(s))}${state.fluent ? `<button class="pen" data-act="rename" data-id="${s.id}" title="${s.labelVia === 'you' ? 'You named this session. Rename it' : 'Give this session a name of your own'}" aria-label="Rename this session">✎</button>` : ''}</h1>`}${terminalButton(s, 'btn')}${sessionMenu(s, it)}</div>
     ${subtitle && state.fluent ? `<p class="subt">${spark}${esc(subtitle)}</p>` : ''}
     ${it ? '' : roleNote(s)}
     <div class="sec going"><div class="label"><span>${summary ? spark : ''}Recap</span></div>${goingOn(s, summary, !it && s.status === 'working')}</div>
@@ -2886,6 +2898,37 @@ const shellWord = s => /^[\w./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'
 const attachCommand = s => `claude attach ${shellWord(s.job)}`;
 const resumeCommand = a => a.agent === 'claude' && a.cwd ? `cd ${shellWord(a.cwd)} && claude --resume ${shellWord(a.id)}` : '';
 const commandReading = new Set(), reopening = new Set();
+/* The terminal emulator sessions are opened in: the one chosen in Settings, or else the one Slorp was started
+   from. There is none where Slorp knows of no terminal emulator. */
+const terminalApp = () => terminal.apps.find(a => a.id === settings.terminal) || terminal.apps.find(a => a.id === terminal.default);
+/* Whether a session can be opened in a terminal: an open one when it is Claude Code's and runs in the
+   background, and a closed one when its agent has a command that resumes it. */
+const opensInTerminal = s => !!terminalApp() && (live.some(x => x.id === s.id) ? s.agent === 'claude' && !!s.job : lifecycleCap(s.agent, 'resumeCommand'));
+const terminalOpening = new Set();
+async function openTerminal(id) {
+  if (terminalOpening.has(id)) return;
+  terminalOpening.add(id); render();
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(id)}/terminal`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
+    toast(`Opened in ${terminalApp()?.name || 'a terminal'}`);
+  } catch (err) { toast(`Could not open it in a terminal: ${err instanceof TypeError ? 'the Slorp service did not answer' : err.message}`); }
+  finally { terminalOpening.delete(id); render(); }
+}
+/* The button that opens a session in a terminal, for a session that can be. */
+function terminalButton(s, cls = '') {
+  if (!opensInTerminal(s)) return '';
+  const name = esc(terminalApp().name), open = live.some(x => x.id === s.id);
+  return `<button class="${cls}" data-act="terminal" data-id="${esc(s.id)}" ${terminalOpening.has(s.id) ? 'disabled' : ''} title="Opens this session in a new ${name} window${open ? '. It keeps running when you close the window.' : ', where it picks up from where it stopped.'}">Open in ${name}</button>`;
+}
+/* The sessions to open in a terminal once they are listed as running in the background, by when each was asked for. */
+const terminalWhenUp = new Map();
+function openWhenUp() {
+  for (const [id, at] of terminalWhenUp) {
+    if (live.some(s => s.id === id && s.job)) { terminalWhenUp.delete(id); openTerminal(id); }
+    else if (Date.now() - at > 60000) { terminalWhenUp.delete(id); toast('The new session was not listed in time to open it in a terminal. Open it from its page.'); }
+  }
+}
 async function copyResume(id) {
   const s = live.find(s => s.id === id) || archive.find(s => s.id === id);
   if (!s || !lifecycleCap(s.agent, 'resumeCommand') || commandReading.has(id)) return;
@@ -2918,7 +2961,7 @@ async function launchSession(path, body, done) {
     throw err;
   }
   const result = text ? JSON.parse(text) : {};
-  done();
+  done(result);
   await refresh(true);
   if (result.sessionId) { state.actSel = result.sessionId; go('sessions'); save(); render(); }
 }
@@ -2954,7 +2997,7 @@ function closedPage(a) {
     <h1>${esc(a.label)}</h1>
     ${a.title && state.fluent ? `<p class="subt">${spark}${esc(a.title)}</p>` : ''}
     ${lifecycleCap(a.agent, 'resume') || lifecycleCap(a.agent, 'resumeCommand') ? `<div class="need"><div class="label">Pick it back up</div>
-      ${lifecycleCap(a.agent, 'resumeCommand') ? `<div class="cmd">${cmd ? `<span class="mono">${esc(cmd)}</span>` : ''}<button class="btn" data-act="copyResume" data-id="${esc(a.id)}" ${commandReading.has(a.id) ? 'disabled' : ''}>${commandReading.has(a.id) ? 'Fetching command…' : 'Copy resume command'}</button></div>` : ''}
+      ${lifecycleCap(a.agent, 'resumeCommand') ? `<div class="cmd">${cmd ? `<span class="mono">${esc(cmd)}</span>` : ''}${terminalButton(a, 'btn')}<button class="btn" data-act="copyResume" data-id="${esc(a.id)}" ${commandReading.has(a.id) ? 'disabled' : ''}>${commandReading.has(a.id) ? 'Fetching command…' : 'Copy resume command'}</button></div>` : ''}
       ${lifecycleCap(a.agent, 'resume') ? `<label><span>Prompt <i>optional</i></span><textarea data-keep="resume-${esc(a.id)}" placeholder="What should it do next?" aria-label="Reopen prompt">${esc(resumeAttempts.get(a.id)?.body.prompt || '')}</textarea></label>
       <div class="replies"><button class="btn go" data-act="reopen" data-id="${esc(a.id)}" ${reopening.has(a.id) ? 'disabled' : ''}>${reopening.has(a.id) ? 'Reopening…' : 'Reopen in the background'}</button>
         <span class="none" style="align-self:center">Its conversation is kept. Without a prompt, it waits for a message.</span></div>` : ''}</div>` : ''}
@@ -3545,6 +3588,8 @@ function generalBody() {
       choice('notifyTo', canNotify() ? 'on' : 'off', [['on', 'On'], ['off', 'Off']], 'Desktop notifications')) : ''}
     ${live ? setting('Permission prompts', 'Where a session\'s permission prompt can be answered. Its terminal always asks; with Slorp or terminal, this page can answer too, and whichever you answer first decides.',
       choice('holdTo', settings.answerPermissions ? 'both' : 'terminal', [['both', 'Slorp or terminal'], ['terminal', 'Terminal only']], 'Where permission prompts can be answered')) : ''}
+    ${live && terminal.apps.length ? setting('Terminal', 'Where a session is opened when you ask for it in a terminal, out of those Slorp found on this machine. The first time, macOS may ask whether Slorp may control it.',
+      `<select class="btn" data-change="terminalApp" aria-label="Terminal">${terminal.apps.map(a => `<option value="${esc(a.id)}" ${a === terminalApp() ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>`) : ''}
     ${setting('Show legacy Attention view', 'Adds the Attention tab beside Home: what needs you, grouped by effort, urgency or source.', choice('attentionTo', state.legacyAttention ? 'on' : 'off', [['on', 'On'], ['off', 'Off']], 'Show legacy Attention view'))}
     ${setting('This page', 'Forgets what this browser keeps for the page: what you dismissed or snoozed, what was selected, and choices such as how lists are grouped.',
       `<button class="btn" data-act="reset">Reset</button>`)}`;
@@ -3561,6 +3606,7 @@ function startBody() {
        <datalist id="default-dirs">${[...new Set(live.map(s => s.cwd).concat(openEfforts().flatMap(e => e.dirs)).filter(Boolean).map(tilde))].map(dir => `<option value="${esc(dir)}"></option>`).join('')}</datalist>`)}
     ${setting('Effort', 'The effort a session is filed under, unless it is started from another.', pick('effort', 'Default effort', [['', 'No effort']].concat(openEfforts().map(e => [e.id, e.name]))))}
     ${knowledge.roles.length ? setting('Slorp role', 'The role a session is given.', pick('role', 'Default role', [['', 'No role']].concat(knowledge.roles.map(r => [r.id, r.name])))) : ''}
+    ${terminalApp() ? setting('Open in terminal', `Whether a new session is also opened in ${esc(terminalApp().name)} once it has started. An OpenCode session is not.`, seg('terminal', d.terminal ? 'on' : 'off', [['on', 'On'], ['off', 'Off']], 'Open in terminal')) : ''}
     <div class="label" style="margin-top:34px">Claude Code</div>
     ${setting('Model', 'The model a Claude Code session runs on. Default leaves it to Claude Code.', pick('model', 'Default model', START_MODELS))}
     ${setting('Effort level', 'How hard it thinks. Default leaves it to Claude Code.', pick('effortLevel', 'Default effort level', START_EFFORTS))}
@@ -3657,14 +3703,14 @@ function modelBody() {
 }
 
 const keys = () => [[`1 – ${nav().length}`, nav().map(v => VIEW_NAMES[v] || cap(v)).join(', ')], [',', 'Settings'], ['j  k', `Next and previous in the ${listOf(['Home', 'Sessions'].concat(pullsOff() ? [] : 'PRs', 'Journal'))} lists`], ['e', 'Dismiss the selected item'], ['s', 'Snooze the selected item for an hour'],
-  ['r', 'Fluent or raw'], ['/  ⌘K', 'Search sessions'], ['n  ⌃N', 'Start a session'], ['w', "Today's page of the journal"], ['⌘↵', 'Send what is in a message box'], ['Esc', 'Close a menu, a dialog, or a rename']];
+  ['r', 'Fluent or raw'], [onMac() ? '/  ⌘K' : '/  Ctrl+K', 'Search sessions'], [onMac() ? 'n  ⌃N' : 'n', 'Start a session'], ['w', "Today's page of the journal"], [onMac() ? '⌘↵' : 'Ctrl+↵', 'Send what is in a message box'], ['Esc', 'Close a menu, a dialog, or a rename']];
 
 const SETTINGS_LEDE = {
   general: 'How this page looks and behaves.',
   start: 'What the New Session dialog opens with. Each can still be changed there before a session is started.',
   integrations: 'What Slorp is connected to: the agents whose sessions it watches, and the tools it reads.',
   model: 'Summaries, suggested replies, automatic filing and wrap-ups are written by a model on a server you choose, usually one running on this machine. What your sessions say is sent to that server and nowhere else.',
-  keys: 'They work anywhere outside a text box; those with ⌘ or ⌃ work inside one too.',
+  keys: 'They work anywhere outside a text box; those with ⌘, ⌃ or Ctrl work inside one too.',
 };
 function settingsBody(sec) {
   if (sec === 'general') return generalBody();
@@ -3762,8 +3808,8 @@ function render() {
     <span class="model" ${modelless() ? `title="${esc(modelWhy(true))}"` : busy ? `title="The local model is at work: ${esc(busy)}"` : ''}><span class="dot ${live && isOffline ? 'error' : modelless() ? 'idle' : busy ? 'running' : 'ready'}"></span>${live ? (isOffline ? 'service offline' : `live · ${summarizer.model ? summarizer.model.split('/').pop() : 'no local model'}${busy ? ` · <span class="busy">${spark}${MODEL_DOING[busy.split(' ')[0]] || 'working'}</span>` : ''}`) : 'qwen3:14b · local · caught up'}</span>${live ? usageTotal() + limitMeters() + `<span id="provider-limits" class="provider-limits" role="group" aria-label="Provider usage limits">${providerLimitMeters()}</span>` : ''}
     <span class="seg" role="group" aria-label="Voice" title="Fluent shows what the model wrote. Raw shows what the sources said. (r)">
       <button class="${state.fluent ? 'on' : ''}" data-act="fluent" data-on="1">Fluent</button><button class="${state.fluent ? '' : 'on'}" data-act="fluent" data-on="0">Raw</button></span>
-    ${live ? `<button class="btn new" data-act="startOpen" data-id="" title="Start a session (n or ⌃N)">${ICONS.plus}New Session</button>
-    <button class="icon" data-act="searchOpen" title="Search sessions (/ or ⌘K)" aria-label="Search sessions">${ICONS.search}</button>` : ''}
+    ${live ? `<button class="btn new" data-act="startOpen" data-id="" title="Start a session (n${onMac() ? ' or ⌃N' : ''})">${ICONS.plus}New Session</button>
+    <button class="icon" data-act="searchOpen" title="Search sessions (/ or ${onMac() ? '⌘K' : 'Ctrl+K'})" aria-label="Search sessions">${ICONS.search}</button>` : ''}
     ${state.look === 'slorp' ? '<button class="icon" data-act="theme" title="Light or dark" aria-label="Toggle theme">◐</button>' : ''}
     <button class="icon ${state.view === 'settings' ? 'on' : ''}" data-act="view" data-view="settings" title="Settings (,)" aria-label="Settings">${ICONS.settings}</button>
     ${live ? '' : `<details class="menu" id="menu" ${menuOpen ? 'open' : ''}><summary class="icon" title="Demo controls" aria-label="Demo controls">⋯</summary>
@@ -3839,7 +3885,7 @@ const actions = {
   fluent: d => { state.fluent = d.on === '1'; },
   themeTo: d => { state.theme = d.to; },
   attentionTo: d => { state.legacyAttention = d.to === 'on'; },
-  startDefaultTo: d => { state.startOpts = { ...state.startOpts, [d.key]: d.key === 'thinking' ? d.to === 'on' : d.to }; },
+  startDefaultTo: d => { state.startOpts = { ...state.startOpts, [d.key]: ['thinking', 'terminal'].includes(d.key) ? d.to === 'on' : d.to }; },
   lookTo: d => { state.look = d.to; },
   setSel: d => { state.setSel = d.s; },
   modelCheck: () => { checkModel(); return false; },
@@ -4039,6 +4085,7 @@ const actions = {
   },
   reopen: d => { reopenSession(d.id); return false; },
   copyResume: d => { copyResume(d.id); return false; },
+  terminal: d => { openTerminal(d.id); return false; },
   effortEdit: d => { editing = d.id; editFocus = true; editColor = effortColor(effortById(d.id)); },
   editColor: d => { editColor = d.c; },
   effortMergeTo: d => { modal = 'effortMerge'; modalId = d.id; modalInto = d.to; },
@@ -4120,6 +4167,7 @@ const changes = {
     api('POST', `/api/sessions/${d.id}/role`, { role }, () => toast(role ? `Marked as ${roleById(role).name}` : 'No role'));
     return false;
   },
+  terminalApp: (d, el) => { api('POST', '/api/settings', { terminal: el.value }); return false; },
   startDefault: (d, el) => { state.startOpts = { ...state.startOpts, [d.key]: el.checkValidity() ? el.value.trim() : '' }; },
   roleAttention: (d, el) => { api('POST', `/api/roles/${d.id}`, { attention: el.value }); return false; },
   move: (d, el) => {
@@ -4232,11 +4280,13 @@ document.addEventListener('submit', e => {
       catch (err) { toast(`Could not prepare a safe launch request: ${err.message}`); return; }
     }
     launching = true;
-    launchSession('/api/sessions', body, () => {
+    const inTerminal = startDraft.terminal && !oc && !!terminalApp();
+    launchSession('/api/sessions', body, started => {
       startAttempt = null;
       if (modal === 'start') modal = null;
       startDraft.prompt = startDraft.name = '';
-      toast('Started. It will show up here in a moment.');
+      if (inTerminal && started.sessionId) terminalWhenUp.set(started.sessionId, Date.now());
+      toast(inTerminal && !started.sessionId ? 'Started. Open it in a terminal from its page once it shows up.' : 'Started. It will show up here in a moment.');
     }).catch(err => {
       if (err.sessionId) {
         partialStart = { sessionId: err.sessionId, message: err.message, outcome: err.outcome };

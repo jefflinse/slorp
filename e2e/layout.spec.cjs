@@ -10,7 +10,7 @@ const session = (id, effort, label, status, mins) => ({ id, agent: 'claude', kin
   startedAt: ago(mins + 60), activeAt: ago(mins), lastPrompt: '', lastReply: '', used: {}, canReply: true, timeline: [{ at: ago(mins), prompt: 'Carry on' }],
   model: 'claude-opus-5-5', contextTokens: 50000, contextWindow: 200000 })
 
-async function world(t, hash, extra = {}) {
+async function world(t, hash, extra = {}, replies = {}) {
   const data = {
     sessions: [{ ...session('quiet', 'solo', 'Tidy the importer', 'idle', 8), lastReply: '**Done.** The importer is tidy.\n\n- Want the tests next?' }, session('asks', 'pair', 'Wire the outbox', 'waiting', 2), session('busy', 'pair', 'Benchmark the loader', 'working', 5),
       ...Array.from({ length: 8 }, (_, i) => session(`w${i}`, 'fleet', `Worker ${i + 1}`, 'idle', 10 + i))],
@@ -25,7 +25,7 @@ async function world(t, hash, extra = {}) {
       res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write(': connected\n\n')
     } else if (req.method === 'POST' || req.method === 'DELETE') {
       let body = ''
-      req.on('data', chunk => { body += chunk }).on('end', () => { posts.push([req.method === 'POST' ? req.url : `${req.method} ${req.url}`, JSON.parse(body || '{}')]); res.setHeader('content-type', 'application/json'); res.end('{}') })
+      req.on('data', chunk => { body += chunk }).on('end', () => { posts.push([req.method === 'POST' ? req.url : `${req.method} ${req.url}`, JSON.parse(body || '{}')]); res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(replies[req.url] || {})) })
     } else if (req.url === '/api/sessions') {
       res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(data))
     } else {
@@ -345,4 +345,65 @@ test("a pull request's page files it on its own, back with its repository, or fi
     ['DELETE /api/pulls/effort', { pull: 'acme/widgets#7' }],
     ['/api/repos/effort', { repo: 'acme/widgets', effort: 'fleet' }],
   ])
+})
+
+const mac = { platform: 'darwin', terminal: { apps: [{ id: 'iterm', name: 'iTerm2' }, { id: 'terminal', name: 'Terminal' }], default: 'iterm' } }
+
+test('a background session and a closed one are opened in the terminal Slorp was started from, or the one chosen', async t => {
+  const page = await world(t, 'sessions', { ...mac,
+    sessions: [{ ...session('bg', 'solo', 'Runs in the background', 'idle', 3), kind: 'background', job: 'j1' }, session('mine', 'solo', 'Runs in my terminal', 'idle', 5)],
+    archive: [{ ...session('shut', 'solo', 'Closed yesterday', 'idle', 900), endedAt: ago(800) }] })
+  const opened = () => page.posts.filter(([url]) => url.endsWith('/terminal'))
+  const button = page.locator('.pane.detail').getByRole('button', { name: 'Open in iTerm2' })
+  await page.locator('.pane.list .row', { hasText: 'Runs in the background' }).click()
+  await button.click()
+  await page.waitForFunction(() => document.querySelector('#toast.show')?.textContent.includes('Opened in iTerm2'))
+  assert.deepEqual(opened(), [['/api/sessions/bg/terminal', {}]])
+  await page.locator('.pane.list .row', { hasText: 'Runs in my terminal' }).click()
+  await page.locator('.pane.detail h1', { hasText: 'Runs in my terminal' }).waitFor()
+  assert.equal(await button.count(), 0)
+  await page.locator('.pane.list .ghead .name', { hasText: 'Closed' }).click()
+  await page.locator('.pane.list .row', { hasText: 'Closed yesterday' }).click()
+  await button.click()
+  await page.waitForFunction(() => document.querySelectorAll('#toast.show').length && window.fetch)
+  assert.deepEqual(opened().map(([url]) => url), ['/api/sessions/bg/terminal', '/api/sessions/shut/terminal'])
+  await page.getByRole('button', { name: 'Settings' }).click()
+  assert.equal(await page.getByLabel('Terminal', { exact: true }).inputValue(), 'iterm')
+  await page.getByLabel('Terminal', { exact: true }).selectOption('terminal')
+  await page.waitForFunction(() => true)
+  assert.deepEqual(page.posts.filter(([url]) => url === '/api/settings'), [['/api/settings', { terminal: 'terminal' }]])
+})
+
+test('nothing offers a terminal where Slorp knows of none', async t => {
+  const page = await world(t, 'sessions', { platform: 'linux', terminal: { apps: [], default: '' },
+    sessions: [{ ...session('bg', 'solo', 'Runs in the background', 'idle', 3), kind: 'background', job: 'j1' }] })
+  await page.locator('.pane.detail h1', { hasText: 'Runs in the background' }).waitFor()
+  assert.equal(await page.getByRole('button', { name: /^Open in / }).count(), 0)
+  assert.equal(await page.getByRole('button', { name: 'New Session', exact: true }).getAttribute('title'), 'Start a session (n)')
+  await page.keyboard.press('n')
+  assert.equal(await page.getByRole('dialog', { name: 'New Session' }).locator('[name=terminal]').count(), 0)
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: 'Settings' }).click()
+  await page.locator('.card.set').first().waitFor()
+  assert.equal(await page.getByLabel('Terminal', { exact: true }).count(), 0)
+})
+
+test('a new session is opened in a terminal once it is running, when the dialog or its defaults ask for that', async t => {
+  const page = await world(t, 'settings', { ...mac, sessions: [{ ...session('bg', 'solo', 'Runs in the background', 'idle', 3), kind: 'background', job: 'j1' }] },
+    { '/api/sessions': { sessionId: 'bg' } })
+  const dialog = page.getByRole('dialog', { name: 'New Session' }), tick = dialog.getByLabel('Open it in iTerm2 once it has started')
+  await page.getByRole('button', { name: 'New Session', exact: true }).waitFor()
+  await page.keyboard.press('n')
+  assert.equal(await tick.isChecked(), false)
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: 'New sessions' }).click()
+  await page.getByRole('group', { name: 'Open in terminal' }).getByRole('button', { name: 'On' }).click()
+  await page.keyboard.press('n')
+  assert.equal(await tick.isChecked(), true)
+  await dialog.locator('[name=dir]').fill('/work/solo')
+  await dialog.locator('[name=prompt]').fill('Carry on')
+  assert.equal(await tick.isChecked(), true)
+  await dialog.getByRole('button', { name: 'Start session' }).click()
+  await page.waitForFunction(() => document.querySelector('#toast.show')?.textContent.includes('Opened in iTerm2'))
+  assert.deepEqual(page.posts.filter(([url]) => url.endsWith('/terminal')), [['/api/sessions/bg/terminal', {}]])
 })

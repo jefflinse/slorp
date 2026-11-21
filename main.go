@@ -25,6 +25,7 @@ import (
 	"github.com/jefflinse/slorp/internal/opencode"
 	"github.com/jefflinse/slorp/internal/server"
 	"github.com/jefflinse/slorp/internal/store"
+	"github.com/jefflinse/slorp/internal/terminal"
 )
 
 //go:embed index.html
@@ -135,7 +136,7 @@ func main() {
 		},
 		opencode.Agent: oc.Exchanges,
 	}
-	srv := &http.Server{Addr: *addr, Handler: server.New(h, k, tools, poller, history, map[string]server.Launcher{claude.Agent: transcripts, opencode.Agent: oc}, map[string]server.PluginManager{claude.Agent: transcripts, opencode.Agent: oc}, map[string]server.Delegates{claude.Agent: transcripts}, summarizer, server.Page(page, *ui))}
+	srv := &http.Server{Addr: *addr, Handler: server.New(h, k, tools, poller, history, map[string]server.Launcher{claude.Agent: transcripts, opencode.Agent: oc}, map[string]server.PluginManager{claude.Agent: transcripts, opencode.Agent: oc}, map[string]server.Delegates{claude.Agent: transcripts}, summarizer, terminal.New(), server.Page(page, *ui))}
 	go func() {
 		<-ctx.Done()
 		srv.Close()

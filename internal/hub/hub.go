@@ -642,6 +642,9 @@ type Settings struct {
 	Integrations map[string]bool `json:"integrations"`
 	// IntegrationsRevision counts changes to Integrations.
 	IntegrationsRevision int `json:"integrationsRevision"`
+	// Terminal names the terminal emulator sessions are opened in, empty
+	// for whichever Slorp was started from.
+	Terminal string `json:"terminal,omitempty"`
 }
 
 // Cache is where the hub keeps what should outlive a restart.

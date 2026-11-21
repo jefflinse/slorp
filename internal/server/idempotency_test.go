@@ -31,7 +31,7 @@ func (l *journalLauncher) Resume(ctx context.Context, id, dir, prompt string) er
 func (l *journalLauncher) Stop(context.Context, string) error { return nil }
 
 func journalHandler(h *hub.Hub, k *kb.Store, l Launcher) http.Handler {
-	return New(h, k, integrations.NewManager(func() map[string]bool { return nil }), &asked{}, nil, map[string]Launcher{"opencode": l}, nil, nil, nil, Page(nil, ""))
+	return New(h, k, integrations.NewManager(func() map[string]bool { return nil }), &asked{}, nil, map[string]Launcher{"opencode": l}, nil, nil, nil, nil, Page(nil, ""))
 }
 
 func journalRequest(ctx context.Context, path, body string) *http.Request {
@@ -236,7 +236,7 @@ func TestClaudeResumeDoesNotUseOpenCodeJournal(t *testing.T) {
 	}
 	calls := 0
 	l := &journalLauncher{resume: func(context.Context, string, string, string) error { calls++; return nil }}
-	handler := New(h, k, integrations.NewManager(func() map[string]bool { return nil }), &asked{}, nil, map[string]Launcher{"claude": l}, nil, nil, nil, Page(nil, ""))
+	handler := New(h, k, integrations.NewManager(func() map[string]bool { return nil }), &asked{}, nil, map[string]Launcher{"claude": l}, nil, nil, nil, nil, Page(nil, ""))
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, journalRequest(context.Background(), "/api/archive/claude-id/resume", `{"requestId":"shared-key"}`))
 	if w.Code != 202 || calls != 1 {
