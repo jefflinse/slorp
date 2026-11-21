@@ -211,7 +211,7 @@ func TestBridgeSubagentStorageFailureAndRestart(t *testing.T) {
 	c := &failingSubagentStore{Cache: st, fail: true}
 	h := hub.New(k, c)
 	serve := func(h *hub.Hub) *fixture {
-		srv := httptest.NewServer(New(h, k, nil, nil, nil, nil, nil, nil, nil, nil, nil))
+		srv := httptest.NewServer(New(h, k, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil))
 		t.Cleanup(srv.Close)
 		return &fixture{t: t, srv: srv, hub: h, kb: k}
 	}
@@ -245,7 +245,7 @@ func TestArchiveMergeRetainedTerminalLifecycle(t *testing.T) {
 			source := hub.Subagent{ID: "child", Type: "Explore", Description: "source", Tools: 7, Used: hub.Tokens{Out: 12}, Status: "running"}
 			rec := &record{subagents: map[string][]hub.Subagent{"root": {source}}}
 			serve := func(h *hub.Hub) *fixture {
-				srv := httptest.NewServer(New(h, k, nil, nil, nil, nil, nil, map[string]Delegates{"claude": rec}, nil, nil, nil))
+				srv := httptest.NewServer(New(h, k, nil, nil, nil, nil, nil, map[string]Delegates{"claude": rec}, nil, nil, nil, nil))
 				t.Cleanup(srv.Close)
 				return &fixture{t: t, srv: srv, hub: h, kb: k}
 			}

@@ -94,7 +94,7 @@ func TestOpeningAnAgentsOwnBackgroundSessionInATerminal(t *testing.T) {
 	h := hub.New(k, st)
 	h.SetRoster("opencode", []hub.Session{{ID: "run", Agent: "opencode", Job: "j9", Cwd: "/work/a"}, {ID: "mine", Agent: "opencode", Cwd: "/work/a"}})
 	l, terms := &attaching{command: "sh '/private/attach'", ok: true}, &terminals{}
-	srv := httptest.NewServer(New(h, k, integrations.NewManager(func() map[string]bool { return nil }), &asked{}, nil, map[string]Launcher{"opencode": l}, nil, nil, nil, terms, Page(nil, "")))
+	srv := httptest.NewServer(New(h, k, integrations.NewManager(func() map[string]bool { return nil }), &asked{}, nil, map[string]Launcher{"opencode": l}, nil, nil, nil, terms, nil, Page(nil, "")))
 	t.Cleanup(srv.Close)
 	open := func(id string) int {
 		res, err := srv.Client().Post(srv.URL+"/api/sessions/"+id+"/terminal", "application/json", strings.NewReader(`{}`))
@@ -142,7 +142,7 @@ func TestNoTerminalToOpenASessionIn(t *testing.T) {
 	k := testdb.KB(t, st)
 	h := hub.New(k, st)
 	h.SetRoster("claude", []hub.Session{{ID: "bg", Agent: "claude", Kind: "background", Job: "3e14f875", Cwd: "/work/a"}})
-	srv := httptest.NewServer(New(h, k, integrations.NewManager(func() map[string]bool { return nil }), &asked{}, nil, map[string]Launcher{"claude": &launcher{}}, nil, nil, nil, nil, Page(nil, "")))
+	srv := httptest.NewServer(New(h, k, integrations.NewManager(func() map[string]bool { return nil }), &asked{}, nil, map[string]Launcher{"claude": &launcher{}}, nil, nil, nil, nil, nil, Page(nil, "")))
 	t.Cleanup(srv.Close)
 	res, err := srv.Client().Post(srv.URL+"/api/sessions/bg/terminal", "application/json", strings.NewReader(`{}`))
 	if err != nil {

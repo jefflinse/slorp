@@ -24,6 +24,8 @@ You need [Go](https://go.dev/dl/) 1.27 or later and [Claude Code](https://claude
 
 To try Slorp without installing it, `go run github.com/jefflinse/slorp@latest` does the same as steps 1 and 2.
 
+Once a day Slorp asks Go whether a newer release is out. When one is, the page says so and offers to install it under **Settings → General**: that runs `go install`, then restarts Slorp, which stops any OpenCode sessions Slorp started. The offer is made to a Slorp that `go install` put in Go's bin directory and that still runs from there; one running from anywhere else is told a release is out and left to be upgraded the way it was installed. `-go ""` keeps Slorp from looking.
+
 Slorp lists Claude Code sessions with or without the plugin. The plugin is what lets you reply to a session and answer its permission prompts from the page. See [its README](integrations/claude-code/README.md) to install it by hand or configure it.
 
 Summaries, suggested replies, automatic filing and the journal are written by a local model. Slorp looks for an OpenAI-compatible LLM server, such as LM Studio, Ollama or llama.cpp, at `http://localhost:1234` and uses the model it has loaded. Settings on the page points it at another server, names the model where a server offers several, turns it off, and checks that it answers. `-llm` and `-model` do the same when Slorp starts, and stand over what Settings holds for as long as it runs. Without a model Slorp still lists your sessions and lets you answer them, and the page marks what is missing. `slorp -h` lists the other options.

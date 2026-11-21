@@ -754,6 +754,8 @@ type Hub struct {
 	rostered map[string]bool
 	// plugins is what each agent last said of its Slorp plugin.
 	plugins map[string]Plugin
+	// release is the release of Slorp running, as last reported.
+	release Release
 	// origins holds, for each session something is known of, the session
 	// it continues, empty for one that continues none.
 	origins map[string]string
@@ -961,6 +963,30 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 	}
 	h.sweep(agent)
 	h.fold(agent)
+	h.changed()
+}
+
+// Release says which release of Slorp is running and whether a newer one
+// is out.
+type Release struct {
+	// Version is the release running, empty for a build that is not one.
+	Version string `json:"version,omitempty"`
+	// Latest is the newest release, when it is newer than Version.
+	Latest string `json:"latest,omitempty"`
+	// Manual says why Slorp cannot install Latest itself, empty when it can.
+	Manual string `json:"manual,omitempty"`
+}
+
+// SetRelease records which release of Slorp is running and whether a newer
+// one is out.
+func (h *Hub) SetRelease(r Release) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.release == r {
+		return
+	}
+	h.release = r
+	h.last = ""
 	h.changed()
 }
 
@@ -1528,6 +1554,9 @@ type State struct {
 	// Plugins says, for each agent that can be asked, whether it has the
 	// Slorp plugin.
 	Plugins map[string]Plugin `json:"plugins"`
+	// Release is the release of Slorp running, and the newer one when
+	// there is one.
+	Release Release `json:"release"`
 }
 
 func (h *Hub) State() State {
@@ -1539,7 +1568,7 @@ func (h *Hub) State() State {
 		feeds[id] = f.FeedStatus
 	}
 	return State{Sessions: sessions, Items: append(items(sessions), h.fed()...), Efforts: h.efforts(sessions), Summarizer: h.summ,
-		Settings: h.settings, Knowledge: h.kb.Knowledge(), Lookups: append([]Lookup{}, h.lookups...), Feeds: feeds, PullRequests: h.pulls(), Limits: h.limited(), ProviderLimits: h.providerLimited(time.Now()), Journal: h.journal(), Archive: h.archives(), Plugins: maps.Clone(h.plugins)}
+		Settings: h.settings, Knowledge: h.kb.Knowledge(), Lookups: append([]Lookup{}, h.lookups...), Feeds: feeds, PullRequests: h.pulls(), Limits: h.limited(), ProviderLimits: h.providerLimited(time.Now()), Journal: h.journal(), Archive: h.archives(), Plugins: maps.Clone(h.plugins), Release: h.release}
 }
 
 func (h *Hub) efforts(sessions []Session) []Effort {

@@ -140,6 +140,14 @@ type PluginManager interface {
 	Uninstall(ctx context.Context) error
 }
 
+// Upgrader replaces the Slorp running with the newest release.
+type Upgrader interface {
+	// Upgrade installs the newest release, which Slorp runs once restarted.
+	Upgrade(ctx context.Context) error
+	// Restart starts Slorp again.
+	Restart()
+}
+
 // Delegates reads from an agent's own record the subagents its sessions
 // started, for sessions that are open and ones that have closed.
 type Delegates interface {
@@ -220,8 +228,9 @@ func Page(built []byte, path string) http.Handler {
 // New serves the page and its API. history, launchers, plugins and delegates are by
 // agent; an agent with no history keeps no record Slorp can read, one with
 // no launcher has sessions Slorp can only watch, and one with no delegates
-// has subagents Slorp knows nothing of.
-func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history map[string]History, launchers map[string]Launcher, plugins map[string]PluginManager, delegates map[string]Delegates, prober Prober, terminals Terminals, page http.Handler) http.Handler {
+// has subagents Slorp knows nothing of. With no upgrader, Slorp cannot
+// upgrade itself.
+func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history map[string]History, launchers map[string]Launcher, plugins map[string]PluginManager, delegates map[string]Delegates, prober Prober, terminals Terminals, upgrader Upgrader, page http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	here := machine{Platform: runtime.GOOS}
 	here.Terminal.Apps = []terminal.App{}
@@ -567,6 +576,21 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("POST /api/upgrade", func(w http.ResponseWriter, r *http.Request) {
+		if upgrader == nil {
+			http.Error(w, "Slorp cannot upgrade itself here", http.StatusNotFound)
+			return
+		}
+		if err := upgrader.Upgrade(r.Context()); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		// The answer goes out before the restart closes the connection.
+		w.WriteHeader(http.StatusNoContent)
+		w.(http.Flusher).Flush()
+		upgrader.Restart()
 	})
 
 	mux.HandleFunc("POST /api/efforts", func(w http.ResponseWriter, r *http.Request) {

@@ -1553,6 +1553,30 @@ func TestSetPlugin(t *testing.T) {
 	}
 }
 
+func TestSetRelease(t *testing.T) {
+	h, _, _ := newHub(t)
+	ticks, stop := h.Subscribe()
+	defer stop()
+	told := func() bool {
+		select {
+		case <-ticks:
+			return true
+		default:
+			return false
+		}
+	}
+
+	want := Release{Version: "v0.2.0", Latest: "v0.3.0"}
+	h.SetRelease(want)
+	if got := h.State().Release; got != want || !told() {
+		t.Errorf("release = %+v, want %+v and subscribers told", got, want)
+	}
+	h.SetRelease(want)
+	if told() {
+		t.Error("subscribers were told of a release that had not changed")
+	}
+}
+
 func TestRetireDropsSessionsWhoseBridgeWentSilent(t *testing.T) {
 	h, _, _ := newHub(t)
 	for _, id := range []string{"silent", "polling"} {

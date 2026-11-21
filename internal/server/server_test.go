@@ -129,7 +129,7 @@ func fixtureWithHistory(t *testing.T, histories map[string]History, extraPlugins
 	for agent, reader := range histories {
 		readers[agent] = reader
 	}
-	srv := httptest.NewServer(New(h, k, tools, feeds, readers, map[string]Launcher{"claude": launch}, plugins, map[string]Delegates{"claude": rec}, probe, terms, Page([]byte("<title>slorp</title>"), "")))
+	srv := httptest.NewServer(New(h, k, tools, feeds, readers, map[string]Launcher{"claude": launch}, plugins, map[string]Delegates{"claude": rec}, probe, terms, nil, Page([]byte("<title>slorp</title>"), "")))
 	t.Cleanup(srv.Close)
 	return &fixture{t, srv, h, k, feeds, probes, rec, launch, probe, terms}
 }

@@ -2361,6 +2361,10 @@ async function refresh(force) {
     observeResumeAttempts();
     openWhenUp();
     plugins = data.plugins || {};
+    release = data.release || {};
+    if (release.version && servedBy && release.version !== servedBy) { location.reload(); return; }
+    servedBy ||= release.version || '';
+    if (isOffline) upgrading = false;
     isOffline = false;
     announce(liveItems);
   } catch (e) { isOffline = live !== null; }
@@ -2408,6 +2412,36 @@ function modNotice() {
     notice = `<div><span>${why}</span><button class="btn go" data-act="opencodePlugin" data-op="${p.updateAvailable ? 'update' : 'install'}" ${opencodeBusy ? 'disabled' : ''}>${opencodeBusy ? 'Working…' : label}</button></div>`;
   }
   return claudeNotice() + notice;
+}
+
+/* The release of Slorp running and the newer one when one is out, and servedBy the release this page came from:
+   once Slorp runs another, the page loads again to be that one's. */
+let release = {}, servedBy = '', upgrading = false;
+const upgradeButton = label => `<button class="btn go" data-act="upgrade" ${upgrading ? 'disabled' : ''}>${upgrading ? 'Upgrading…' : label}</button>`;
+/* Says when a newer release of Slorp is out, and offers to install it where Slorp can. */
+function releaseNotice() {
+  if (!live || !release.latest || (state.releasePassed === release.latest && !upgrading)) return '';
+  return `<div><span>Slorp ${esc(release.latest)} is out. This is ${esc(release.version)}.</span>
+    ${release.manual ? '<button class="btn" data-act="setGo" data-s="general">How to upgrade</button>' : upgradeButton('Upgrade…')}<button class="btn" data-act="releasePass" data-v="${esc(release.latest)}">Dismiss</button></div>`;
+}
+/* Asks before Slorp installs the newer release and restarts. */
+function upgradeModal() {
+  if (!release.latest || release.manual || upgrading) { modal = null; return ''; }
+  return `<div class="veil" data-act="modalClose"><div class="modal" data-act="noop" role="alertdialog" aria-label="Upgrade Slorp">
+    <h2>Upgrade Slorp to ${esc(release.latest)}?</h2>
+    <ul><li>It is installed with <span class="mono">go install</span>, in place of the ${esc(release.version)} that is running.</li>
+      <li>Slorp then restarts, and this page loads again once it is back.</li>
+      <li>Any OpenCode sessions Slorp started are stopped.</li></ul>
+    <div class="mfoot"><button class="btn" data-act="modalClose">Cancel</button>
+      <span class="bar"><button class="btn go" data-act="upgradeYes">Upgrade and restart</button></span></div>
+  </div></div>`;
+}
+function releaseSetting() {
+  if (!release.version) return setting('Slorp', 'This is a development build, which does not look for newer releases.', '');
+  const how = release.manual ? `${esc(release.manual)}, so upgrade it the way it was installed.`
+    : 'Upgrading installs it with <span class="mono">go install</span> and restarts Slorp, which stops any OpenCode sessions Slorp started.';
+  return setting('Slorp', release.latest ? `This is ${esc(release.version)}, and ${esc(release.latest)} is out. ${how}` : `This is ${esc(release.version)}. No newer release has been found.`,
+    release.latest && !release.manual ? upgradeButton('Upgrade…') : '');
 }
 
 function changeOpenCodePlugin(op) {
@@ -3685,6 +3719,7 @@ function generalBody() {
     ${live && terminal.apps.length ? setting('Terminal', 'Where a session is opened when you ask for it in a terminal, out of those Slorp found on this machine. The first time, macOS may ask whether Slorp may control it.',
       `<select class="btn" data-change="terminalApp" aria-label="Terminal">${terminal.apps.map(a => `<option value="${esc(a.id)}" ${a === terminalApp() ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>`) : ''}
     ${setting('Show legacy Attention view', 'Adds the Attention tab beside Home: what needs you, grouped by effort, urgency or source.', choice('attentionTo', state.legacyAttention ? 'on' : 'off', [['on', 'On'], ['off', 'Off']], 'Show legacy Attention view'))}
+    ${live ? releaseSetting() : ''}
     ${setting('This page', 'Forgets what this browser keeps for the page: what you dismissed or snoozed, what was selected, and choices such as how lists are grouped.',
       `<button class="btn" data-act="reset">Reset</button>`)}`;
 }
@@ -4022,11 +4057,11 @@ function draw() {
         <button data-act="simulate">Simulate an incoming item</button>
         <button data-act="reset">Reset the demo</button></div></details>`}`;
   $('#provider-limits')?.scrollTo(limitsScroll, 0);
-  const notices = [modNotice(), modelNotice()].filter(Boolean);
+  const notices = [modNotice(), modelNotice(), releaseNotice()].filter(Boolean);
   document.documentElement.style.setProperty('--notice', `${44 * notices.length}px`);
   $('#notice').innerHTML = notices.join('');
   $('#main').innerHTML = main;
-  $('#modal').innerHTML = modal === 'search' ? searchModal() : modal === 'start' ? startModal() : modal === 'resumeError' ? retainedSessionModal(partialResume) : modal === 'effortDelete' ? deleteModal() : modal === 'effortMerge' ? mergeModal() : '';
+  $('#modal').innerHTML = modal === 'search' ? searchModal() : modal === 'start' ? startModal() : modal === 'resumeError' ? retainedSessionModal(partialResume) : modal === 'effortDelete' ? deleteModal() : modal === 'effortMerge' ? mergeModal() : modal === 'upgrade' ? upgradeModal() : '';
   if (modalFocus) { modalFocus = false; $('#q, #modal [data-first]')?.focus(); }
   // The toggle shows only where there is more of what the user said to see.
   document.querySelectorAll('.said').forEach(el => {
@@ -4170,6 +4205,16 @@ const actions = {
     ask('/api/plugins/claude/update', {}, () => toast('Updated. Sessions already open pick it up after /reload-plugins or a restart.'), () => { updating = false; });
   },
   modPass: d => { state.modPassed = d.v; },
+  upgrade: () => { modal = 'upgrade'; },
+  upgradeYes: () => {
+    modal = null;
+    if (upgrading) return false;
+    upgrading = true;
+    fetch('/api/upgrade', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      .then(async res => { if (!res.ok) throw new Error((await res.text()).trim() || res.status); toast('Installed. Slorp is restarting, and this page loads again once it is back.'); })
+      .catch(err => { upgrading = false; serviceSaid(err); refresh(true); });
+  },
+  releasePass: d => { state.releasePassed = d.v; },
   uninstallMod: () => {
     if (installing || removing || updating) return false;
     toast('Uninstall the Slorp mod from Claude Code? Its sessions could then only be watched.', () => {
