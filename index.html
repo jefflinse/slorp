@@ -1586,7 +1586,7 @@ function identifiedLaunch(previous, body) {
   const requestId = previous?.fingerprint === fingerprint ? previous.requestId : crypto.randomUUID();
   return { fingerprint, requestId, body: { ...normalized, requestId } };
 }
-const lifecycleCap = (agent, key) => capabilities[agent]?.[key] ?? (agent === 'claude' && ['start', 'resume', 'resumeCommand'].includes(key));
+const lifecycleCap = (agent, key) => capabilities[agent]?.[key] ?? (agent === 'claude' && ['start', 'resume', 'resumeCommand', 'attach'].includes(key));
 const canStop = s => s.canStop ?? (s.agent === 'claude' && !!s.job);
 const startSupported = () => lifecycleCap(startWith === 'local' ? 'claude' : startWith, 'start') && (startWith !== 'local' || !!localName());
 function startDirs() {
@@ -1779,7 +1779,7 @@ function startModal() {
       ${on === 'claude' ? pick('model', 'Model', START_MODELS, last.model) + pick('effortLevel', 'Effort level', START_EFFORTS, last.effortLevel)
         : on === 'opencode' ? openCodeOptions() : `<div class="field"><span>Thinking</span><div class="seg" role="group" aria-label="Thinking"><button type="button" class="${startThinking ? 'on' : ''}" data-act="startThinking" data-to="1" aria-pressed="${startThinking}">On</button><button type="button" class="${startThinking ? '' : 'on'}" data-act="startThinking" data-to="" aria-pressed="${!startThinking}">Off</button></div></div>
           <label><span>Temperature <i>optional</i></span><input name="temperature" type="number" min="0" max="2" step="0.05" data-keep="start-temperature" value="${esc(last.temperature ?? '')}" placeholder="The model's own"></label>`}
-      ${terminalApp() && on !== 'opencode' ? `<label class="wide tick"><input type="checkbox" name="terminal" ${startDraft.terminal ? 'checked' : ''}><span>Open it in ${esc(terminalApp().name)} once it has started</span></label>` : ''}
+      ${terminalApp() && lifecycleCap(on === 'local' ? 'claude' : on, 'attach') ? `<label class="wide tick"><input type="checkbox" name="terminal" ${startDraft.terminal ? 'checked' : ''}><span>Open it in ${esc(terminalApp().name)} once it has started</span></label>` : ''}
       ${on === 'opencode' && startAttempt && !launching ? '<div class="none wide">Retrying unchanged options reuses the same request ID. <button type="button" class="btn" data-act="startReset">Prepare a new session</button> to intentionally create a separate conversation.</div>' : ''}
       <div class="mfoot wide"><span>${on === 'local' ? `Starts a Claude Code session in the background that runs on ${esc(local)}` : `Starts a ${on === 'opencode' ? 'OpenCode' : 'Claude Code'} session in the background`}${real ? `, filed under ${esc(e.name)}` : ''}.</span>
         <span class="bar"><button type="button" class="btn" data-act="modalClose">Cancel</button><button class="btn go" ${launching || startProblem() ? 'disabled' : ''} title="${esc(startProblem())}">${launching ? 'Starting…' : 'Start session'}</button></span></div>
@@ -2905,9 +2905,9 @@ const commandReading = new Set(), reopening = new Set();
 /* The terminal emulator sessions are opened in: the one chosen in Settings, or else the one Slorp was started
    from. There is none where Slorp knows of no terminal emulator. */
 const terminalApp = () => terminal.apps.find(a => a.id === settings.terminal) || terminal.apps.find(a => a.id === terminal.default);
-/* Whether a session can be opened in a terminal: an open one when it is Claude Code's and runs in the
-   background, and a closed one when its agent has a command that resumes it. */
-const opensInTerminal = s => !!terminalApp() && (live.some(x => x.id === s.id) ? s.agent === 'claude' && !!s.job : lifecycleCap(s.agent, 'resumeCommand'));
+/* Whether a session can be opened in a terminal: an open one when it runs in the background and its agent
+   can be attached to, and a closed one when its agent has a command that resumes it. */
+const opensInTerminal = s => !!terminalApp() && (live.some(x => x.id === s.id) ? !!s.job && lifecycleCap(s.agent, 'attach') : lifecycleCap(s.agent, 'resumeCommand'));
 const terminalOpening = new Set();
 async function openTerminal(id) {
   if (terminalOpening.has(id)) return;
@@ -3655,7 +3655,7 @@ function startBody() {
        <datalist id="default-dirs">${dirOptions([...new Set(live.map(s => s.cwd).concat(openEfforts().flatMap(e => e.dirs)).filter(Boolean).map(tilde))])}</datalist>`)}
     ${setting('Effort', 'The effort a session is filed under, unless it is started from another.', pick('effort', 'Default effort', [['', 'No effort']].concat(openEfforts().map(e => [e.id, e.name]))))}
     ${knowledge.roles.length ? setting('Slorp role', 'The role a session is given.', pick('role', 'Default role', [['', 'No role']].concat(knowledge.roles.map(r => [r.id, r.name])))) : ''}
-    ${terminalApp() ? setting('Open in terminal', `Whether a new session is also opened in ${esc(terminalApp().name)} once it has started. An OpenCode session is not.`, seg('terminal', d.terminal ? 'on' : 'off', [['on', 'On'], ['off', 'Off']], 'Open in terminal')) : ''}
+    ${terminalApp() ? setting('Open in terminal', `Whether a new session is also opened in ${esc(terminalApp().name)} once it has started.`, seg('terminal', d.terminal ? 'on' : 'off', [['on', 'On'], ['off', 'Off']], 'Open in terminal')) : ''}
     <div class="label" style="margin-top:34px">Claude Code</div>
     ${setting('Model', 'The model a Claude Code session runs on. Default leaves it to Claude Code.', pick('model', 'Default model', START_MODELS))}
     ${setting('Effort level', 'How hard it thinks. Default leaves it to Claude Code.', pick('effortLevel', 'Default effort level', START_EFFORTS))}
@@ -4340,7 +4340,7 @@ document.addEventListener('submit', e => {
       catch (err) { toast(`Could not prepare a safe launch request: ${err.message}`); return; }
     }
     launching = true;
-    const inTerminal = startDraft.terminal && !oc && !!terminalApp();
+    const inTerminal = startDraft.terminal && lifecycleCap(oc ? 'opencode' : 'claude', 'attach') && !!terminalApp();
     launchSession('/api/sessions', body, started => {
       startAttempt = null;
       if (modal === 'start') modal = null;

@@ -90,6 +90,9 @@ type agentCapabilities struct {
 	Resume        bool `json:"resume"`
 	LaunchOptions bool `json:"launchOptions"`
 	ResumeCommand bool `json:"resumeCommand"`
+	// Attach is whether a session of its running in the background can be
+	// opened in a terminal.
+	Attach bool `json:"attach"`
 }
 
 // Launcher starts, reopens and stops one agent's sessions in the background.
@@ -227,6 +230,8 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		_, c.LaunchOptions = launcher.(launchCatalog)
 		_, c.ResumeCommand = launcher.(resumeCommander)
 		c.ResumeCommand = c.ResumeCommand || agent == claude.Agent && launcher != nil
+		_, c.Attach = launcher.(attachCommander)
+		c.Attach = c.Attach || agent == claude.Agent && launcher != nil
 		capabilities[agent] = c
 	}
 	lifecycleRoutes(mux, h, launchers, terminals)

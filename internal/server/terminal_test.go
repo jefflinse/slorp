@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"io"
 	"net/http/httptest"
 	"reflect"
 	"runtime"
@@ -69,6 +70,70 @@ func TestOpeningASessionInATerminal(t *testing.T) {
 	f.terminals.err = errors.New("not allowed")
 	if code, body := open("done"); code != 502 || !strings.Contains(body, "not allowed") {
 		t.Errorf("a terminal that would not open = %d %s, want 502 saying why", code, body)
+	}
+}
+
+// attaching is a launcher whose sessions running in the background can be
+// opened in a terminal, with the command it is told to give.
+type attaching struct {
+	launcher
+	command string
+	ok      bool
+	err     error
+	asked   []string
+}
+
+func (a *attaching) AttachCommand(job string) (string, bool, error) {
+	a.asked = append(a.asked, job)
+	return a.command, a.ok, a.err
+}
+
+func TestOpeningAnAgentsOwnBackgroundSessionInATerminal(t *testing.T) {
+	st := testdb.Open(t)
+	k := testdb.KB(t, st)
+	h := hub.New(k, st)
+	h.SetRoster("opencode", []hub.Session{{ID: "run", Agent: "opencode", Job: "j9", Cwd: "/work/a"}, {ID: "mine", Agent: "opencode", Cwd: "/work/a"}})
+	l, terms := &attaching{command: "sh '/private/attach'", ok: true}, &terminals{}
+	srv := httptest.NewServer(New(h, k, integrations.NewManager(func() map[string]bool { return nil }), &asked{}, nil, map[string]Launcher{"opencode": l}, nil, nil, nil, terms, Page(nil, "")))
+	t.Cleanup(srv.Close)
+	open := func(id string) int {
+		res, err := srv.Client().Post(srv.URL+"/api/sessions/"+id+"/terminal", "application/json", strings.NewReader(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+
+	res, err := srv.Client().Get(srv.URL + "/api/sessions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if !strings.Contains(string(body), `"resumeCommand":false,"attach":true`) {
+		t.Errorf("state does not say this agent's background sessions can be attached to: %s", body)
+	}
+
+	if code := open("run"); code != 204 {
+		t.Fatalf("opening a session the launcher runs = %d", code)
+	}
+	if want := [][2]string{{"two", "sh '/private/attach'"}}; !reflect.DeepEqual(terms.opened, want) || !reflect.DeepEqual(l.asked, []string{"j9"}) {
+		t.Errorf("opened %q having asked for %q, want %q for job j9", terms.opened, l.asked, want)
+	}
+	if code := open("mine"); code != 409 || len(l.asked) != 1 {
+		t.Errorf("opening a session in a terminal of its own = %d having asked for %q, want 409 without asking", code, l.asked)
+	}
+	l.ok = false
+	if code := open("run"); code != 409 {
+		t.Errorf("opening a session the launcher no longer runs = %d, want 409", code)
+	}
+	l.err = errors.New("disk full")
+	if code := open("run"); code != 500 {
+		t.Errorf("a command that could not be prepared = %d, want 500", code)
+	}
+	if len(terms.opened) != 1 {
+		t.Errorf("opened %q, want nothing more after the first", terms.opened)
 	}
 }
 

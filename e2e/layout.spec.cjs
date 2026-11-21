@@ -454,3 +454,21 @@ test('the New Session dialog starts a session in the workspace chosen, and offer
   assert.deepEqual(page.posts.filter(([url]) => url.includes('/api/kb/')), [['/api/kb/workspaces', { name: 'thing', dir: '/work/thing/' }]])
   assert.equal(page.posts.find(([url]) => url === '/api/sessions')[1].dir, '/work/thing/')
 })
+
+test('an OpenCode session Slorp runs is opened in a terminal where the service can attach to one', async t => {
+  const run = { ...session('run', 'solo', 'Slorp runs this one', 'idle', 3), agent: 'opencode', job: 'j2', canStop: true }
+  const mine = { ...session('mine', 'solo', 'This one is in my terminal', 'idle', 5), agent: 'opencode' }
+  const page = await world(t, 'sessions', { ...mac, sessions: [run, mine], capabilities: { opencode: { attach: true } } })
+  const button = page.locator('.pane.detail').getByRole('button', { name: 'Open in iTerm2' })
+  await page.locator('.pane.list .row', { hasText: 'This one is in my terminal' }).click()
+  await page.locator('.pane.detail h1', { hasText: 'This one is in my terminal' }).waitFor()
+  assert.equal(await button.count(), 0)
+  await page.locator('.pane.list .row', { hasText: 'Slorp runs this one' }).click()
+  await button.click()
+  await page.waitForFunction(() => document.querySelector('#toast.show')?.textContent.includes('Opened in iTerm2'))
+  assert.deepEqual(page.posts.filter(([url]) => url.endsWith('/terminal')), [['/api/sessions/run/terminal', {}]])
+
+  const without = await world(t, 'sessions', { ...mac, sessions: [run], capabilities: { opencode: { attach: false } } })
+  await without.locator('.pane.detail h1', { hasText: 'Slorp runs this one' }).waitFor()
+  assert.equal(await without.getByRole('button', { name: 'Open in iTerm2' }).count(), 0)
+})

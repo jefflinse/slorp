@@ -25,6 +25,13 @@ type resumeCommander interface {
 	ResumeCommand(id, dir string) string
 }
 
+// attachCommander is a launcher whose running sessions can be opened in a
+// terminal: AttachCommand gives the shell command that opens the one running
+// as job, and ok is false when it runs none.
+type attachCommander interface {
+	AttachCommand(job string) (command string, ok bool, err error)
+}
+
 // resumeCommand is the shell command that resumes one of an agent's closed
 // sessions in a terminal, in the directory it worked in. ok is false for an
 // agent that has none.
@@ -48,18 +55,27 @@ func claudeBin(launchers map[string]Launcher) string {
 var (
 	errNoSession     = errors.New("no such session")
 	errOpenElsewhere = errors.New("this session is open in a terminal of its own; only a background or a closed session can be opened in another")
+	errNoCommand     = errors.New("this agent has no resume command")
 )
 
 // terminalCommand is the shell command that opens a session in a terminal:
-// one that attaches to a Claude Code session running in the background, or
-// the one that resumes a closed session. A session open in a terminal of its
-// own has none.
+// one that attaches to a session running in the background, or the one that
+// resumes a closed session. A session open in a terminal of its own has
+// none.
 func terminalCommand(h *hub.Hub, launchers map[string]Launcher, id string) (string, error) {
 	for _, s := range h.Sessions() {
 		if s.ID != id {
 			continue
 		}
-		if s.Agent != claude.Agent || s.Job == "" {
+		if s.Job == "" {
+			return "", errOpenElsewhere
+		}
+		if l, ok := launchers[s.Agent].(attachCommander); ok {
+			if command, ok, err := l.AttachCommand(s.Job); ok || err != nil {
+				return command, err
+			}
+		}
+		if s.Agent != claude.Agent {
 			return "", errOpenElsewhere
 		}
 		attach := hub.ShellQuote(claudeBin(launchers)) + " attach " + hub.ShellQuote(s.Job)
@@ -75,7 +91,7 @@ func terminalCommand(h *hub.Hub, launchers map[string]Launcher, id string) (stri
 	if command, ok := resumeCommand(launchers, s.Agent, id, s.Cwd); ok {
 		return command, nil
 	}
-	return "", errors.New("this agent has no resume command")
+	return "", errNoCommand
 }
 
 func lifecycleError(w http.ResponseWriter, err error, id string) {
@@ -243,8 +259,10 @@ func lifecycleRoutes(mux *http.ServeMux, h *hub.Hub, launchers map[string]Launch
 			http.Error(w, err.Error(), http.StatusNotFound)
 		case errors.Is(err, errOpenElsewhere):
 			http.Error(w, err.Error(), http.StatusConflict)
-		case err != nil:
+		case errors.Is(err, errNoCommand):
 			http.Error(w, err.Error(), http.StatusBadRequest)
+		case err != nil:
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 		default:
 			if err := terminals.Open(r.Context(), app, command); err != nil {
 				http.Error(w, err.Error(), http.StatusBadGateway)
