@@ -568,15 +568,15 @@ select.btn { appearance: none; padding-right: 24px; background-image: linear-gra
 .eedit .sw.on { box-shadow: 0 0 0 2px var(--raised), 0 0 0 4px var(--ink); }
 .srow input[type="checkbox"] { flex: none; width: 16px; height: 16px; margin: 0; align-self: center; accent-color: var(--accent); }
 .ebig .tabbody .add { padding: 14px 0 0; border-top: 0; }
-/* Sessions that can be dragged onto an effort to file them there */
+/* Sessions and pull requests that can be dragged onto an effort to file them there */
 .tray { margin-top: 14px; }
 .tray .label { margin-bottom: 6px; }
 .trow { display: flex; align-items: baseline; gap: 2px; padding: 6px 8px; border-radius: 7px; cursor: grab; }
 .trow:hover { background: var(--sel); }
 .trow button { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .trow button:hover { color: var(--accent); }
-.srow[draggable] { cursor: grab; }
-.trow.dragging, .srow.dragging { opacity: 0.4; }
+.srow[draggable], .en[draggable], .tabbody .row[draggable] { cursor: grab; }
+.trow.dragging, .srow.dragging, .en.dragging, .row.dragging { opacity: 0.4; }
 .ecard.drop, .ebig.drop { border-color: var(--accent); border-style: solid; box-shadow: 0 0 0 2px var(--accent); }
 .shelf { margin-top: 34px; }
 .shelf .ghead { padding: 0 0 10px; }
@@ -1430,8 +1430,7 @@ function effortDetail(e) {
     <div class="crumb"><span class="mono">${esc(e.raw)}</span></div>
     <div class="titled"><h1>${effortMark(e, 'l')}${esc(e.name)}</h1></div>
     <div class="sec"><div class="label"><span>${spark}Where this stands</span></div><p class="prose">${esc(e.stands)}</p></div>
-    <div class="sec"><div class="label"><span>Needs you (${needs.length})</span></div>
-      ${needs.length ? `<div style="margin:0 -18px">${needs.map(i => rowHtml(i, 'openItem')).join('')}</div>` : '<div class="none">Nothing.</div>'}</div>
+    ${effortNeeds(e, needs)}
     ${effortTabs([
       ['sessions', 'Sessions', sess.length, sess.length ? `<div class="rows plain">${sess.map(s => sessionRow(s, e.id)).join('')}</div>` : '<div class="none">Nothing running.</div>'],
       effortPulls(e),
@@ -1859,11 +1858,19 @@ function effortQuestions(e, qs) {
       <form class="add" data-form="questions"><input name="text" data-keep="eq-text-${e.id}" placeholder="Something about this you haven't decided yet" required aria-label="An open question">
         <input type="hidden" name="effort" value="${e.id}"><button class="btn go">Add</button></form>`, manage('questions')];
 }
-/* The pull requests filed under an effort, each a way to its page. There is no such part while there is nowhere for them to come from. */
+/* What needs the user in an effort, on its large card: the most pressing few, and the rest behind a button. */
+const NEEDS_SHOWN = 3;
+function effortNeeds(e, needs) {
+  const all = state.expanded['needs:' + e.id], more = needs.length > NEEDS_SHOWN;
+  return `<div class="sec"><div class="label"><span>Needs you (${needs.length})</span></div>
+      ${needs.length ? `<div style="margin:0 -18px">${(all ? needs : needs.slice(0, NEEDS_SHOWN)).map(i => rowHtml(i, 'openItem')).join('')}</div>` : '<div class="none">Nothing.</div>'}
+      ${more ? `<button class="link" style="margin-top:8px;font-size:12.5px" data-act="expand" data-id="needs:${e.id}" aria-expanded="${!!all}">${all ? 'Show fewer' : `Show all ${num(needs.length)}`}</button>` : ''}</div>`;
+}
+/* The pull requests filed under an effort, each a way to its page and to be dragged onto another effort. There is no such part while there is nowhere for them to come from. */
 function effortPulls(e) {
   if (pullsOff()) return null;
   const list = allPulls().filter(p => (p.effort || 'unsorted') === e.id);
-  return ['pulls', 'PRs', list.length, list.length ? `<div class="rows">${list.map(p => pullRow(p, 'pullOpen')).join('')}</div>` : '<div class="none">No open pull requests are filed here.</div>'];
+  return ['pulls', 'PRs', list.length, list.length ? `<div class="rows">${list.map(p => pullRow(p, 'pullOpen', dragsRepo(p.repo, e.id))).join('')}</div>` : '<div class="none">No open pull requests are filed here.</div>'];
 }
 /* The days an effort moved on as the journal has them, the latest first: the last two in full, and the rest
    behind a button. days is undefined until they have been fetched. */
@@ -1931,8 +1938,7 @@ function effortDetailLive(e) {
     ${head}
     ${e.shelved ? `<div class="shelved"><span>Shelved. It is off the board and the model files nothing new here. Everything filed under it is kept.</span><button class="btn" data-act="effortShelve" data-id="${e.id}" data-to="0">Bring it back</button></div>` : ''}
     <div class="sec"><div class="label"><span>${real && e.stands && sess.length ? spark : ''}Where this stands</span></div><p class="prose">${esc(stands)}</p></div>
-    <div class="sec"><div class="label"><span>Needs you (${needs.length})</span></div>
-      ${needs.length ? `<div style="margin:0 -18px">${needs.map(i => rowHtml(i, 'openItem')).join('')}</div>` : '<div class="none">Nothing.</div>'}</div>
+    ${effortNeeds(e, needs)}
     ${effortTabs([
       ['sessions', 'Sessions', sess.length, `${sess.length ? `<div class="rows plain">${sess.map(x => `<div class="srow" ${dragsFrom(x.id, e.id)}><span class="dot ${statusOf(x)[0]}"></span>
           <div class="body"><div class="ttl"><button data-act="openSession" data-id="${x.id}" title="Open this session">${esc(clip(x.label, 90))}</button></div>
@@ -2049,15 +2055,15 @@ const cardName = e => `view-transition-name:effort-${e.id}`;
 
 /* An effort as a card: what it is, where it stands, a row for each thing in it that needs the user and then
    for each of its other open sessions, up to CARD_ROWS of them, and its sessions as dots with when it was
-   last active. A mini card is one collapsed in the column beside the effort that is open, and keeps only
+   last active. A row can be dragged onto another card to file what it is about there. A mini card is one collapsed in the column beside the effort that is open, and keeps only
    the name, how many things need the user, the dots and the time; sel marks the one that is open. Unsorted, which the
    user did not declare, and a shelved effort stay where they are put. */
 const CARD_ROWS = 6;
 function effortCard(e, mini, sel) {
   const { needs, quiet, dots, idle } = effortFacts(e), n = needs.length, loose = e.id === 'unsorted' || !!e.shelved;
-  const rows = needs.map(i => `<button class="en" data-act="openItem" data-id="${i.id}" style="${kindColor(i.kind)}">${title(i, 'nt')}
+  const rows = needs.map(i => `<button class="en" data-act="openItem" data-id="${i.id}" ${dragsItem(i, e.id)} style="${kindColor(i.kind)}">${title(i, 'nt')}
         <span class="w">${i.urgency === 'whenever' ? '' : `<span class="tag ${i.urgency}">${i.urgency}</span>`}<span>${ago(ageOf(i))}</span></span></button>`)
-    .concat(quiet.map(q => `<button class="en" data-act="openSession" data-id="${esc(q.id)}" style="${kindColor(q.kind)}">${q.name}
+    .concat(quiet.map(q => `<button class="en" data-act="openSession" data-id="${esc(q.id)}" ${dragsFrom(q.id, e.id)} style="${kindColor(q.kind)}">${q.name}
         <span class="w">${stat(...q.status)}<span>${ago(q.mins)}</span></span></button>`));
   const line = state.fluent && e.line && (!live || dots.length) ? `<p class="l">${spark}${esc(e.line)}</p>` : e.about ? `<p class="l">${esc(e.about)}</p>` : '';
   const about = `${e.name}: ${n ? `${num(n)} need${n === 1 ? 's' : ''} you` : 'nothing needs you'}, ${plural(dots.length, 'session')}`;
@@ -2086,8 +2092,13 @@ const newEffortMini = () => adding ? `<form class="ecard mini new" data-form="ef
       <input name="about" data-keep="effort-about" placeholder="One line on what it covers" aria-label="What it covers">
       <span class="send"><button type="button" class="btn" data-act="effortAddCancel">Cancel</button><button class="btn go">Add</button></span>
     </form>` : '<button class="ecard mini new" data-act="effortAdd">+ New effort</button>';
-/* What makes a session's row one that can be dragged onto an effort, from the effort it is filed under. */
+/* What makes a row one that can be dragged onto an effort, from the effort it is filed under: a session's,
+   a pull request's, which takes its repository with it, or that of a thing that needs the user, which goes
+   by its session or its repository and, in the demo, by itself. */
 const dragsFrom = (id, from) => `draggable="true" data-session="${esc(id)}" data-from="${from}" title="Drag onto an effort to file it there"`;
+const dragsRepo = (repo, from) => `draggable="true" data-repo="${esc(repo)}" data-from="${from}" title="Drag onto an effort to file ${esc(repo)} there"`;
+const dragsItem = (it, from) => !it.live ? `draggable="true" data-item="${esc(it.id)}" data-from="${from}" title="Drag onto an effort to move it there"`
+  : it.feed ? (it.repo ? dragsRepo(it.repo, from) : '') : it.session ? dragsFrom(it.session.id, from) : '';
 /* The open sessions filed under no effort, beneath the column, each to be dragged onto the effort it belongs to. */
 function unsortedTray() {
   const list = live ? live.filter(s => !s.effort).map(s => [s.id, statusOf(s), s.label]) : SESSIONS.filter(s => sessEffort(s) === 'unsorted').map(s => [s.id, [s.status, STATUS[s.status]], s.title || s.name]);
@@ -2101,6 +2112,14 @@ function fileSession(id, to) {
   const prev = state.sessMoved[id];
   state.sessMoved[id] = to;
   toast(to === 'unsorted' ? 'Left unsorted' : `Filed under ${effortById(to).name}`, () => { if (prev) state.sessMoved[id] = prev; else delete state.sessMoved[id]; });
+}
+
+/* Files a repository, and so every pull request from it, under an effort, or under none when given Unsorted. */
+function fileRepo(repo, to) {
+  const said = to === 'unsorted' ? `${repo} left unsorted` : `Everything from ${repo} now files under ${effortById(to).name}`;
+  if (live) { api('POST', '/api/repos/effort', { repo, effort: to === 'unsorted' ? '' : to }, () => toast(said)); return; }
+  MOCK_PULLS.filter(x => x.repo === repo).forEach(x => { x.effort = to; });
+  toast(said);
 }
 
 /* The efforts the user has shelved, under the board: shut until asked for, unless something in one needs the user. */
@@ -2148,25 +2167,32 @@ function moveEffort(id, before) {
    dragged is the card while it is held, dropped whether it was let go on the page, and settling when the
    others will have finished moving aside. */
 let dragged = null, dropped = false, settling = 0;
-/* Dragging a session's row onto an effort files it there: onto a card in the column, or onto the large card
-   for the effort that is open. filing is the row while it is held, and dropOn the effort it is over, if
-   that is not the one it is already filed under. */
+/* Dragging a row onto an effort files what it is about there: onto a card on the board or in the column, or
+   onto the large card for the effort that is open. A shelved effort's card on the board takes nothing.
+   filing is the row while it is held, and dropOn the effort it is over, if that is not the one it is
+   already filed under. */
 let filing = null, dropOn = null;
 const dropTarget = el => {
-  const on = el?.closest?.('.estack .ecard[data-id], .ebig'), to = on && (on.matches('.ebig') ? state.effortSel : on.dataset.id);
+  const on = el?.closest?.('.ecard[data-id], .ebig'), to = on && !on.closest('.shelf') && (on.matches('.ebig') ? state.effortSel : on.dataset.id);
   return to && to !== filing.dataset.from ? on : null;
 };
+function fileDragged(row, to) {
+  const { session, repo, item } = row.dataset;
+  if (session) fileSession(session, to);
+  else if (repo) fileRepo(repo, to);
+  else changes.move({ id: item }, { value: to });
+}
 function overEffort(on) {
   if (on === dropOn) return;
   dropOn?.classList.remove('drop');
   (dropOn = on)?.classList.add('drop');
 }
 document.addEventListener('dragstart', e => {
-  const row = e.target.closest?.('[data-session][draggable]');
+  const row = e.target.closest?.('[data-from][draggable]');
   if (row) {
     filing = row;
     e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', row.dataset.session);
+    e.dataTransfer.setData('text/plain', row.dataset.session || row.dataset.repo || row.dataset.item);
     requestAnimationFrame(() => row.classList.add('dragging'));
     return;
   }
@@ -2198,7 +2224,7 @@ document.addEventListener('dragover', e => {
   settling = performance.now() + 180;
 });
 document.addEventListener('drop', e => {
-  if (filing && dropOn) { e.preventDefault(); fileSession(filing.dataset.session, dropOn.matches('.ebig') ? state.effortSel : dropOn.dataset.id); }
+  if (filing && dropOn) { e.preventDefault(); fileDragged(filing, dropOn.matches('.ebig') ? state.effortSel : dropOn.dataset.id); }
   if (dragged) { e.preventDefault(); dropped = true; }
 });
 document.addEventListener('dragend', () => {
@@ -3087,9 +3113,9 @@ function pullGroups() {
 }
 const pullsShown = () => pullGroups().flatMap(([key, , list]) => state.collapsed['pr:' + key] ? [] : list);
 
-function pullRow(p, act = 'pullSel') {
+function pullRow(p, act = 'pullSel', drags = '') {
   const [word, tone] = pullState(p), open = openPoints(p).length, next = state.fluent && p.brief?.next;
-  return `<button class="row ${act === 'pullSel' && pullKey(p) === state.pullSel ? 'sel' : ''}" data-act="${act}" data-id="${esc(pullKey(p))}" style="${kindColor('github')}">
+  return `<button class="row ${act === 'pullSel' && pullKey(p) === state.pullSel ? 'sel' : ''}" data-act="${act}" data-id="${esc(pullKey(p))}" ${drags} style="${kindColor('github')}">
     <span class="h"><span class="t">${esc(clip(p.title, 90))}</span><span class="w"><span>${ago(pullAt(p))}</span>${p.urgency === 'blocking' || p.urgency === 'awaiting' ? `<span class="tag ${p.urgency}">${p.urgency}</span>` : ''}</span></span>
     <span class="st">${next ? spark + esc(next) : esc(p.needs)}</span>
     ${state.rows === 'short' ? '' : `<span class="m"><span class="mono">${esc(p.repo.split('/').pop())}#${p.number}</span><span>${p.mine ? 'yours' : `by ${esc(p.author || 'someone')}`}${p.reviewed ? ', reviewed' : ''}</span>
@@ -4106,8 +4132,7 @@ const changes = {
     const to = el.value, it = itemById(d.id);
     if (!to) return false;
     if (to === '__new') { openEffort(null); return; }
-    api('POST', '/api/repos/effort', { repo: it.repo, effort: to === 'unsorted' ? '' : to },
-      () => toast(to === 'unsorted' ? `${it.repo} left unsorted` : `Everything from ${it.repo} now files under ${effortById(to).name}`));
+    fileRepo(it.repo, to);
     return false;
   },
   move: (d, el) => {

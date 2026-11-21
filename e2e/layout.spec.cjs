@@ -10,14 +10,14 @@ const session = (id, effort, label, status, mins) => ({ id, agent: 'claude', kin
   startedAt: ago(mins + 60), activeAt: ago(mins), lastPrompt: '', lastReply: '', used: {}, canReply: true, timeline: [{ at: ago(mins), prompt: 'Carry on' }],
   model: 'claude-opus-5-5', contextTokens: 50000, contextWindow: 200000 })
 
-async function world(t, hash) {
+async function world(t, hash, extra = {}) {
   const data = {
     sessions: [{ ...session('quiet', 'solo', 'Tidy the importer', 'idle', 8), lastReply: '**Done.** The importer is tidy.\n\n- Want the tests next?' }, session('asks', 'pair', 'Wire the outbox', 'waiting', 2), session('busy', 'pair', 'Benchmark the loader', 'working', 5),
       ...Array.from({ length: 8 }, (_, i) => session(`w${i}`, 'fleet', `Worker ${i + 1}`, 'idle', 10 + i))],
     efforts: [...['solo', 'pair', 'fleet', 'bare'].map(id => ({ id, name: id, about: '', dirs: [`/work/${id}`] })),
       { id: 'past', name: 'past', about: '', dirs: ['/work/past'], activeAt: ago(2880) }],
     items: [{ id: 'item', sessionId: 'asks', kind: 'question', title: 'Which retry policy?', ask: 'Pick one.', urgency: 'awaiting', at: ago(2), replies: [] }],
-    summarizer: { model: 'fixture' }, capabilities: {},
+    summarizer: { model: 'fixture' }, capabilities: {}, ...extra,
   }
   const posts = []
   const server = createServer((req, res) => {
@@ -248,4 +248,42 @@ test('the top bar counts tokens before cost and says when the local model is at 
   assert.equal(await model.innerText(), 'live · fixture · ✦describing')
   assert.equal(await model.locator('.dot.running').count(), 1)
   assert.equal(await model.getAttribute('title'), 'The local model is at work: describe quiet')
+})
+
+test('a large effort card shows the three most pressing things that need you until asked for them all', async t => {
+  const items = ['w0', 'w1', 'w2', 'w3'].map((id, i) => ({ id: `ask-${id}`, sessionId: id, kind: 'question', title: `Question ${i + 1}`, ask: 'Pick one.', urgency: 'awaiting', at: ago(i + 1), replies: [] }))
+  const page = await world(t, 'efforts', { items })
+  await page.locator('.ecard[data-id="fleet"] .eh').click()
+  const needs = page.locator('.ebig .sec').filter({ hasText: 'Needs you (4)' })
+  await needs.waitFor()
+  assert.deepEqual(await needs.locator('.row .t').allInnerTexts(), ['Question 1', 'Question 2', 'Question 3'])
+  await needs.getByRole('button', { name: 'Show all four' }).click()
+  assert.equal(await needs.locator('.row').count(), 4)
+  await needs.getByRole('button', { name: 'Show fewer' }).click()
+  assert.equal(await needs.locator('.row').count(), 3)
+})
+
+test('a session or a thing that needs you is dragged from one card on the board to another to file it there', async t => {
+  const page = await world(t, 'efforts')
+  const card = id => page.locator(`.board .ecard[data-id="${id}"]`), filed = () => page.posts.filter(([url]) => url.endsWith('/effort'))
+  await card('solo').locator('.en').waitFor()
+  await card('solo').locator('.en', { hasText: 'Tidy the importer' }).dragTo(card('pair'))
+  await page.waitForFunction(() => document.querySelector('#toast.show'))
+  assert.deepEqual(filed(), [['/api/sessions/quiet/effort', { effort: 'pair' }]])
+  await card('pair').locator('.en', { hasText: 'Which retry policy?' }).dragTo(card('fleet'))
+  await page.waitForFunction(() => document.querySelectorAll('.ecard.drop').length === 0)
+  assert.deepEqual(filed()[1], ['/api/sessions/asks/effort', { effort: 'fleet' }])
+  await card('pair').locator('.en', { hasText: 'Benchmark the loader' }).dragTo(card('pair').locator('.eh'))
+  assert.equal(filed().length, 2)
+})
+
+test('a pull request is dragged onto an effort to file its repository there', async t => {
+  const pull = { source: 'github', repo: 'acme/widgets', number: 7, title: 'Prune old snapshots', url: 'https://github.com/acme/widgets/pull/7', author: 'marta', mine: true, at: ago(30), needs: 'Waiting on review', effort: 'solo' }
+  const page = await world(t, 'efforts', { integrations: [{ id: 'github', name: 'GitHub', enabled: true, lookups: [], watches: [] }], pullRequests: [pull] })
+  await page.locator('.ecard[data-id="solo"] .eh').click()
+  await page.locator('.ebig').getByRole('tab', { name: /^PRs/ }).click()
+  await page.locator('.ebig .tabbody .row', { hasText: 'Prune old snapshots' }).dragTo(page.locator('.estack .ecard[data-id="pair"]'))
+  await page.waitForFunction(() => document.querySelector('#toast.show'))
+  assert.deepEqual(page.posts.filter(([url]) => url === '/api/repos/effort'), [['/api/repos/effort', { repo: 'acme/widgets', effort: 'pair' }]])
+  assert.equal(await page.locator('#toast').innerText(), 'Everything from acme/widgets now files under pair')
 })
