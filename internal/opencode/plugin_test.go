@@ -25,6 +25,7 @@ func put(t *testing.T, path, text string) {
 
 func fixture(t *testing.T) *Adapter {
 	t.Helper()
+	unmanaged(t)
 	root := t.TempDir()
 	st := testdb.Open(t)
 	a := &Adapter{Home: root, Data: filepath.Join(root, "slorp"), ConfigDir: filepath.Join(root, "config", "opencode"), URL: "http://127.0.0.1:5858", Bin: filepath.Join(root, "opencode"), Hub: hub.New(testdb.KB(t, st), st)}
@@ -36,6 +37,41 @@ echo 'opencode v2.3.2'
 		t.Fatal(err)
 	}
 	return a
+}
+
+// unsetEnv removes each variable for the rest of the test.
+func unsetEnv(t *testing.T, keys ...string) {
+	t.Helper()
+	for _, key := range keys {
+		t.Setenv(key, "")
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// unmanaged removes the OpenCode and Slorp overrides a test inherits when it
+// runs inside a Slorp-managed session, leaving what an ordinary shell has.
+// SLORP_NATIVE_TEST stays, since it chooses which tests run.
+func unmanaged(t *testing.T) {
+	t.Helper()
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if (strings.HasPrefix(key, "OPENCODE_") || strings.HasPrefix(key, "SLORP_")) && key != "SLORP_NATIVE_TEST" {
+			unsetEnv(t, key)
+		}
+	}
+}
+
+// clearEnv removes every variable but PATH and TMPDIR for the rest of the
+// test.
+func clearEnv(t *testing.T) {
+	t.Helper()
+	for _, entry := range os.Environ() {
+		if key, _, _ := strings.Cut(entry, "="); key != "PATH" && key != "TMPDIR" {
+			unsetEnv(t, key)
+		}
+	}
 }
 
 func TestBundledInstallWithoutCheckout(t *testing.T) {

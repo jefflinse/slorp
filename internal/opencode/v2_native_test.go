@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -20,12 +19,7 @@ func TestV2NativeLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, entry := range os.Environ() {
-		key, _, _ := strings.Cut(entry, "=")
-		if key != "PATH" && key != "TMPDIR" {
-			t.Setenv(key, "")
-		}
-	}
+	clearEnv(t)
 	a := fixture(t)
 	a.Bin = bin
 	for _, key := range []string{"XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"} {

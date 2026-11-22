@@ -35,7 +35,35 @@ test('PID mismatch and rejected verification never issue a session or form opera
   assert.deepEqual(calls, ['http://localhost:4096/api/info'])
 })
 
+// managed gives the test a Slorp-managed run's environment, or with no run
+// an ordinary shell's, whichever the tests themselves run in.
+function managed(t: { after: (fn: () => void) => void }, run?: { file: string; run: string }) {
+  const saved = { SLORP_MANAGED_FILE: process.env.SLORP_MANAGED_FILE, SLORP_MANAGED_RUN: process.env.SLORP_MANAGED_RUN }
+  if (run) { process.env.SLORP_MANAGED_FILE = run.file; process.env.SLORP_MANAGED_RUN = run.run }
+  else { delete process.env.SLORP_MANAGED_FILE; delete process.env.SLORP_MANAGED_RUN }
+  t.after(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value
+    }
+  })
+}
+
+test('a managed run never consults shared discovery', async t => {
+  managed(t, { file: '/nonexistent/session.json', run: 'token' })
+  const calls: string[] = []
+  t.mock.method(globalThis, 'fetch', async (url: string) => { calls.push(url); return Response.json({ pid: process.pid }) })
+  let discovered = 0
+  const native = new Native({} as any, undefined, async () => {
+    discovered++
+    return { url: 'http://127.0.0.1:4096', auth: undefined }
+  })
+  await assert.rejects(native.active(new AbortController().signal), /terminal transport/)
+  assert.equal(discovered, 0)
+  assert.deepEqual(calls, [])
+})
+
 test('matching shared discovery uses registration auth rather than the process password', async t => {
+  managed(t)
   const calls: { url: string; init: RequestInit }[] = []
   t.mock.method(globalThis, 'fetch', async (url: string, init: RequestInit) => {
     calls.push({ url, init })
@@ -54,6 +82,7 @@ test('matching shared discovery uses registration auth rather than the process p
 })
 
 test('another registered service is never used; requests fall back to the terminal relay', async t => {
+  managed(t)
   const calls: string[] = []
   t.mock.method(globalThis, 'fetch', async (url: string) => { calls.push(url); return Response.json({ pid: process.pid + 1 }) })
   const native = new Native({} as any, undefined, async () => ({ url: 'http://127.0.0.1:4096', auth: undefined }))
