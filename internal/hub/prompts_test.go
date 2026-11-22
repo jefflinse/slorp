@@ -36,7 +36,7 @@ func TestPromptsPersistAndAreHandedOutAsACopy(t *testing.T) {
 	}
 	rewriting(h, RewriteNever)
 	tell(h, "Write in British English.", map[string]string{ActNote: "Say where the effort stands."})
-	h.Rewrite(ActFile)
+	must(t, h.Rewrite(ActFile))
 
 	got := h.Settings()
 	got.Prompts.Tasks[ActNote] = "changed by the caller"
@@ -127,7 +127,7 @@ func TestChangedInstructionsLeaveWritingBehindUntilItIsRewritten(t *testing.T) {
 				if len(behind) == 0 {
 					return
 				}
-				h.Rewrite(behind...)
+				must(t, h.Rewrite(behind...))
 				if got := waiting(); got != tt.want {
 					t.Errorf("once rewritten: %s; want %s", got, tt.want)
 				}
@@ -159,7 +159,7 @@ func TestRewriteAll(t *testing.T) {
 	if got := waiting(); got != nothing {
 		t.Fatal(got)
 	}
-	h.Rewrite()
+	must(t, h.Rewrite())
 	if got := waiting(); got != "describe 2, file 0, role 0, note 0, brief 1" {
 		t.Fatalf("asked to rewrite it all: %s; want every session described again and the pull request briefed", got)
 	}
@@ -172,16 +172,16 @@ func TestRewriteAll(t *testing.T) {
 
 func TestABriefWrittenBeforeARewriteWasAskedForDoesNotStand(t *testing.T) {
 	h, _ := settled(t)
-	h.Rewrite(ActNote)
+	must(t, h.Rewrite(ActNote))
 	if p := listed(t, h, 1); len(h.Unbriefed()) != 0 || p.Behind {
 		t.Fatalf("after another task was rewritten: %+v; want the brief to stand", p)
 	}
-	h.Rewrite(ActBrief)
+	must(t, h.Rewrite(ActBrief))
 	waiting := h.Unbriefed()
 	if p := listed(t, h, 1); len(waiting) != 1 || !p.Behind || p.Brief == nil {
 		t.Fatalf("asked for again: %d waiting, %+v; want the brief kept, marked behind, and written again", len(waiting), p)
 	}
-	h.Rewrite(ActBrief)
+	must(t, h.Rewrite(ActBrief))
 	h.SetBrief(waiting[0].Ref, PullBrief{Stands: "Asked for before the last rewrite."}, nil)
 	if p := listed(t, h, 1); !p.Behind || p.Brief.Stands != "As first written." {
 		t.Errorf("a brief asked for before the last rewrite stood as current: %+v", p.Brief)

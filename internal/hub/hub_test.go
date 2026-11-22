@@ -482,7 +482,7 @@ func TestIntegrationSettings(t *testing.T) {
 		t.Fatal("setup: the session should be described")
 	}
 
-	h.SetIntegration("github", true)
+	must(t, h.SetIntegration("github", true))
 	quieten(h, "s1")
 	if len(h.Undescribed()) != 1 {
 		t.Error("turning an integration on did not queue sessions to be described again with it")
@@ -492,7 +492,7 @@ func TestIntegrationSettings(t *testing.T) {
 	}
 	describe(h, "s1", KindReview)
 
-	h.SetIntegration("github", true)
+	must(t, h.SetIntegration("github", true))
 	quieten(h, "s1")
 	if len(h.Undescribed()) != 0 {
 		t.Error("setting an integration to what it already was queued everything again")

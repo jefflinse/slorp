@@ -8,12 +8,12 @@ import (
 
 func TestStateKeepsTheSettingsItWasTakenWith(t *testing.T) {
 	h, _, _ := newHub(t)
-	h.SetIntegration("github", true)
+	must(t, h.SetIntegration("github", true))
 	before, settings := h.State(), h.Settings()
 
-	h.SetIntegration("github", false)
-	h.SetIntegration("other", true)
-	h.Rewrite(ActDescribe)
+	must(t, h.SetIntegration("github", false))
+	must(t, h.SetIntegration("other", true))
+	must(t, h.Rewrite(ActDescribe))
 
 	for name, s := range map[string]Settings{"state": before.Settings, "settings": settings} {
 		if !s.Integrations["github"] || s.Integrations["other"] || s.Rewritten[ActDescribe] != 0 {
@@ -44,12 +44,16 @@ func TestWrapupKeepsTheEffortsItWasTakenWith(t *testing.T) {
 
 func TestStateEncodesWhileSettingsChange(t *testing.T) {
 	h, _, _ := newHub(t)
-	h.SetIntegration("github", true)
+	must(t, h.SetIntegration("github", true))
 	var wg sync.WaitGroup
 	wg.Go(func() {
 		for i := range 200 {
-			h.SetIntegration("github", i%2 == 0)
-			h.Rewrite(ActDescribe)
+			if err := h.SetIntegration("github", i%2 == 0); err != nil {
+				t.Error(err)
+			}
+			if err := h.Rewrite(ActDescribe); err != nil {
+				t.Error(err)
+			}
 		}
 	})
 	for range 200 {
