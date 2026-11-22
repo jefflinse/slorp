@@ -20,6 +20,7 @@ import (
 	"github.com/jefflinse/slorp/internal/hub"
 	"github.com/jefflinse/slorp/internal/integrations"
 	"github.com/jefflinse/slorp/internal/kb"
+	"github.com/jefflinse/slorp/internal/store"
 	"github.com/jefflinse/slorp/internal/terminal"
 	"github.com/jefflinse/slorp/internal/testdb"
 )
@@ -41,6 +42,8 @@ type fixture struct {
 	prober *prober
 	// terminals is what the server asked to have opened in a terminal.
 	terminals *terminals
+	// store is where the hub and knowledge base are kept.
+	store *store.Store
 }
 
 // launcher records what it was asked to start, reopen, stop and install.
@@ -132,7 +135,7 @@ func fixtureWithHistory(t *testing.T, histories map[string]History, extraPlugins
 	}
 	srv := httptest.NewServer(New(h, k, tools, feeds, readers, map[string]Launcher{"claude": launch}, plugins, map[string]Delegates{"claude": rec}, probe, terms, nil, Page([]byte("<title>slorp</title>"), "")))
 	t.Cleanup(srv.Close)
-	return &fixture{t, srv, h, k, feeds, probes, rec, launch, probe, terms}
+	return &fixture{t, srv, h, k, feeds, probes, rec, launch, probe, terms, st}
 }
 
 // terminals stands in for the terminal emulators on a machine: two of them,

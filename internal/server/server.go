@@ -1431,27 +1431,34 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		w.WriteHeader(http.StatusNoContent)
 	})
 
+	// A save says only what it changes, which is laid over the settings as
+	// they are when it is kept.
 	mux.HandleFunc("POST /api/settings", func(w http.ResponseWriter, r *http.Request) {
-		in := h.Settings()
-		if !readJSON(w, r, &in) {
+		var said json.RawMessage
+		if !readJSON(w, r, &said) {
 			return
 		}
-		var ok bool
-		if in.Model.URL, ok = modelURL(in.Model.URL); !ok {
-			http.Error(w, "the model server's address must be an http or https one", http.StatusBadRequest)
-			return
-		}
-		in.Model.Name = strings.TrimSpace(in.Model.Name)
-		if in.Terminal != "" && !slices.ContainsFunc(here.Terminal.Apps, func(a terminal.App) bool { return a.ID == in.Terminal }) {
-			http.Error(w, "no such terminal emulator is installed", http.StatusBadRequest)
-			return
-		}
-		var err error
-		if in.Prompts, err = prompts(in.Prompts); err != nil {
+		behind, err := h.UpdateSettings(func(in *hub.Settings) error {
+			if err := json.Unmarshal(said, in); err != nil {
+				return errors.New("bad request body")
+			}
+			var ok bool
+			if in.Model.URL, ok = modelURL(in.Model.URL); !ok {
+				return errors.New("the model server's address must be an http or https one")
+			}
+			in.Model.Name = strings.TrimSpace(in.Model.Name)
+			if in.Terminal != "" && !slices.ContainsFunc(here.Terminal.Apps, func(a terminal.App) bool { return a.ID == in.Terminal }) {
+				return errors.New("no such terminal emulator is installed")
+			}
+			var err error
+			in.Prompts, err = prompts(in.Prompts)
+			return err
+		})
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if behind := h.SetSettings(in); len(behind) > 0 {
+		if len(behind) > 0 {
 			writeJSON(w, http.StatusOK, struct {
 				// Behind are the tasks for which what the model wrote was
 				// written under other instructions than it now has.

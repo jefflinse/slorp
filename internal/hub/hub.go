@@ -1354,8 +1354,23 @@ func (s Settings) clone() Settings {
 // which is none of them where the user has such writing always written
 // again.
 func (h *Hub) SetSettings(s Settings) []string {
+	behind, _ := h.UpdateSettings(func(now *Settings) error {
+		*now = s
+		return nil
+	})
+	return behind
+}
+
+// UpdateSettings has change edit a copy of the user's preferences as they
+// are, and keeps what comes of it as SetSettings would, all under the hub's
+// lock: no other change comes between. Nothing changes when change fails.
+func (h *Hub) UpdateSettings(change func(*Settings) error) ([]string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	s := h.settings.clone()
+	if err := change(&s); err != nil {
+		return nil, err
+	}
 	s.Integrations, s.IntegrationsRevision, s.Rewritten = h.settings.Integrations, h.settings.IntegrationsRevision, h.settings.Rewritten
 	s.Prompts.Tasks = maps.Clone(s.Prompts.Tasks)
 	if s.Prompts.Tasks == nil {
@@ -1371,7 +1386,7 @@ func (h *Hub) SetSettings(s Settings) []string {
 		behind = nil
 	}
 	h.saveSettings()
-	return behind
+	return behind, nil
 }
 
 // Rewrite has the model write again what it wrote for tasks, or with none
