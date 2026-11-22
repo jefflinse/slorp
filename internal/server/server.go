@@ -20,8 +20,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jefflinse/slorp/internal/claude"
+	"github.com/jefflinse/slorp/internal/enrich"
 	"github.com/jefflinse/slorp/internal/hub"
 	"github.com/jefflinse/slorp/internal/integrations"
 	"github.com/jefflinse/slorp/internal/kb"
@@ -38,6 +40,9 @@ var agents = map[string]bool{claude.Agent: true, opencode.Agent: true}
 const (
 	// nameLimit is how long a name may be, in runes.
 	nameLimit = 80
+	// promptLimit is how long instructions to the local model may be, in
+	// runes.
+	promptLimit = 20000
 	// maxLimits is how many usage windows one bridge may report.
 	maxLimits = 8
 	// startLimit is how long the first prompt of a session started here may
@@ -182,6 +187,38 @@ func modelURL(s string) (string, bool) {
 		return "", false
 	}
 	return u.Scheme + "://" + u.Host + strings.TrimSuffix(strings.TrimRight(u.Path, "/"), "/v1"), true
+}
+
+// prompts returns what the user has the local model told, in the form Slorp
+// keeps it: trimmed, and with nothing for a task whose instructions are
+// empty or Slorp's own. It is an error to name a task the model does not
+// do, or to write more than promptLimit.
+func prompts(p hub.Prompts) (hub.Prompts, error) {
+	tidy := func(s string) (string, error) {
+		if s = strings.TrimSpace(strings.ReplaceAll(s, "\r\n", "\n")); utf8.RuneCountInString(s) > promptLimit {
+			return "", fmt.Errorf("instructions to the local model may be at most %d characters long", promptLimit)
+		}
+		return s, nil
+	}
+	own := enrich.Defaults()
+	out := hub.Prompts{Tasks: map[string]string{}}
+	var err error
+	if out.Global, err = tidy(p.Global); err != nil {
+		return hub.Prompts{}, err
+	}
+	for task, text := range p.Tasks {
+		standing, known := own[task]
+		if !known {
+			return hub.Prompts{}, fmt.Errorf("the local model does no task called %q", task)
+		}
+		if text, err = tidy(text); err != nil {
+			return hub.Prompts{}, err
+		}
+		if text != "" && text != standing {
+			out.Tasks[task] = text
+		}
+	}
+	return out, nil
 }
 
 // absolute returns path as the absolute path it names, reading a leading "~"
@@ -1332,8 +1369,20 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			http.Error(w, "no such terminal emulator is installed", http.StatusBadRequest)
 			return
 		}
+		var err error
+		if in.Prompts, err = prompts(in.Prompts); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		h.SetSettings(in)
 		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("GET /api/prompts", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, struct {
+			// Defaults are Slorp's own instructions for each task.
+			Defaults map[string]string `json:"defaults"`
+		}{enrich.Defaults()})
 	})
 
 	mux.HandleFunc("POST /api/model/check", func(w http.ResponseWriter, r *http.Request) {

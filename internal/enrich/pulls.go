@@ -213,7 +213,7 @@ func (e *Enricher) brief(ctx context.Context, model string, w hub.Unbriefed) (hu
 			Line string `json:"line"`
 		} `json:"points"`
 	}
-	if err := e.ask(ctx, model, briefSystem, b.String(), "brief", briefSchema(len(w.Points), d.Since != nil), &out); err != nil {
+	if err := e.ask(ctx, model, hub.ActBrief, b.String(), "brief", briefSchema(len(w.Points), d.Since != nil), &out); err != nil {
 		return hub.PullBrief{}, nil, err
 	}
 	if strings.TrimSpace(out.Stands) == "" {

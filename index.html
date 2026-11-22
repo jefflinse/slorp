@@ -705,6 +705,12 @@ button.ecard.new:hover { border-color: var(--ink3); color: var(--ink); }
 .add.model .send { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--ink3); font-size: 12px; }
 .add.model .send span:last-child { display: flex; gap: 8px; }
 .none.warn { color: var(--warn); }
+.card.prompt .tag { margin-left: 6px; vertical-align: 2px; }
+form.prompt { margin: 0 0 18px; }
+form.prompt textarea { display: block; width: 100%; min-height: 260px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); resize: vertical; font-size: 12.5px; line-height: 1.55; }
+form.prompt.global textarea { min-height: 92px; }
+form.prompt .send { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; color: var(--ink3); font-size: 12px; }
+form.prompt .send span:last-child { display: flex; gap: 8px; flex: none; }
 .card.set .why { max-width: 58ch; font-size: 13.5px; }
 .card.set > input, .card.set > select.btn, .card.set .pick > input, .card.set .pick > select.btn { flex: none; width: 260px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background-color: var(--bg); font-size: 13.5px; }
 .card.set > select.btn, .card.set .pick > select.btn { padding-right: 26px; text-overflow: ellipsis; }
@@ -1013,7 +1019,7 @@ const viewOn = v => VIEWS.includes(v) && (v !== 'attention' || state.legacyAtten
 /* The views the top bar names, in its order; Settings is reached by its own button, and what the local model has done from the model's name. Pull requests are named only while GitHub is turned on to list them. */
 const nav = () => VIEWS.filter(v => viewOn(v) && v !== 'settings' && v !== 'log' && !(v === 'pulls' && pullsOff()));
 const VIEW_NAMES = { pulls: 'PRs' };
-const fresh = () => ({ view: 'home', sel: null, effortSel: null, effortOrder: null, hideEmpty: true, kbSel: 'questions', setSel: 'general', logKind: 'all', profileSel: null, groupBy: 'effort', srcFilter: 'all', legacyAttention: false, pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', effortTab: 'sessions', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto', look: 'slorp',
+const fresh = () => ({ view: 'home', sel: null, effortSel: null, effortOrder: null, hideEmpty: true, kbSel: 'questions', setSel: 'general', logKind: 'all', profileSel: null, promptSel: null, groupBy: 'effort', srcFilter: 'all', legacyAttention: false, pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', effortTab: 'sessions', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto', look: 'slorp',
   handled: {}, moved: {}, sessMoved: {}, extra: [], arrived: {}, collapsed: {}, left: {}, showHandled: false, variant: {}, rawOpen: {},
   actSel: null, pullSel: null, journalSel: null, pullTab: 'talk', expanded: {}, kb: structuredClone(KB_SEED), seq: 100 });
 let state = fresh();
@@ -3852,7 +3858,7 @@ function viewLog() {
 
 /* ───────────────────────── Settings ───────────────────────── */
 
-const SETTINGS = { general: 'General', start: 'Session Profiles', integrations: 'Integrations', model: 'Local Model', keys: 'Keyboard' };
+const SETTINGS = { general: 'General', start: 'Session Profiles', integrations: 'Integrations', model: 'Local Model', prompts: 'Prompts', keys: 'Keyboard' };
 /* One setting: what it is called, what it does, and what changes it. */
 const setting = (name, about, control) => `<div class="card set"><div class="body"><div class="nm">${name}</div><div class="why">${about}</div></div>${control}</div>`;
 const choice = (act, cur, options, about) => `<span class="seg" role="group" aria-label="${about}">${options.map(([to, name]) => `<button class="${to === cur ? 'on' : ''}" data-act="${act}" data-to="${to}">${name}</button>`).join('')}</span>`;
@@ -4080,6 +4086,64 @@ function modelBody() {
     ${setting('What It Has Done', 'Each piece of work the local model did for Slorp, with the sessions, efforts, pull requests and workspaces it was about.', '<button class="btn" data-act="view" data-view="log">See the Log</button>')}`;
 }
 
+/* The tasks the local model does for Slorp, in the order it comes to them for a session: what each is called here,
+   and what comes of it. */
+const PROMPT_TASKS = [
+  ['describe', 'Session Summaries', 'A session\'s title and summary, what it needs from you, and the replies it suggests.'],
+  ['lookup', 'Lookups', 'What to look up in a tool, such as a pull request, before a session is summarized.'],
+  ['file', 'Filing', 'Which effort a session belongs under, where neither a directory nor you have said.'],
+  ['role', 'Role Guesses', 'Which role a session plays, where you have not given it one.'],
+  ['note', 'Effort Notes', 'Where an effort stands, from the sessions filed under it.'],
+  ['brief', 'Pull Request Briefs', 'Where a pull request stands, and what each point waiting on you comes to.'],
+  ['wrapup', 'Wrap-ups', 'A day\'s page of the journal.'],
+  ['backfill', 'Earlier History', 'How each of a session\'s earlier exchanges came out.'],
+];
+/* What the user has the local model told: ahead of every task, and in place of Slorp's own instructions for each. */
+const prompts = () => ({ global: settings.prompts?.global || '', tasks: settings.prompts?.tasks || {} });
+/* Slorp's own instructions for each task, read from the service the first time they are wanted. */
+let promptDefaults = null, promptsReading = false, promptsError = '';
+function loadPromptDefaults(retry = false) {
+  if (promptDefaults || promptsReading || (promptsError && !retry)) return;
+  promptsReading = true; promptsError = '';
+  fetch('/api/prompts').then(async res => { if (!res.ok) throw new Error(res.status); promptDefaults = (await res.json()).defaults || {}; })
+    .catch(() => { promptsError = 'Could not read Slorp\'s own instructions from the service.'; })
+    .finally(() => { promptsReading = false; render(); });
+}
+/* Counts the changes to what is saved for each prompt, so that its box then shows what was saved and not what had
+   been typed. */
+const promptRevs = {}, promptSaved = {};
+/* The box one prompt is written in: what goes ahead of every task where id is "global", and otherwise the
+   instructions for that task, which are Slorp's own until the user saves others. */
+function promptForm(id, name) {
+  const p = prompts(), global = id === 'global', saved = global ? p.global : p.tasks[id] || '';
+  if (promptSaved[id] !== saved) { promptSaved[id] = saved; promptRevs[id] = (promptRevs[id] || 0) + 1; }
+  const says = global ? 'Sent to the model before the instructions for whichever task it is doing.'
+    : saved ? 'Yours, in place of Slorp\'s own.' : 'Slorp\'s own. Change them and save, and the model goes by yours.';
+  return `<form class="prompt ${global ? 'global' : ''}" data-form="prompt" data-id="${id}">
+      <textarea name="text" class="mono" data-keep="prompt-${id}-${promptRevs[id]}" maxlength="20000" spellcheck="false" ${global ? 'placeholder="Such as: Write in British English."' : 'required'} aria-label="${global ? name : `Instructions for ${name}`}">${esc(global ? saved : saved || promptDefaults[id] || '')}</textarea>
+      <div class="send"><span>${says}</span><span>${saved && !global ? `<button type="button" class="btn" data-act="promptReset" data-id="${id}">Reset to Default</button>` : ''}<button class="btn go">Save</button></span></div>
+    </form>`;
+}
+function promptsBody() {
+  const p = prompts();
+  if (!PROMPT_TASKS.some(([id]) => id === state.promptSel)) state.promptSel = null;
+  if (state.promptSel) loadPromptDefaults();
+  const edit = (id, name) => promptDefaults ? promptForm(id, name)
+    : `<div class="none" role="status" style="margin-bottom:14px">${promptsError ? `${esc(promptsError)} <button type="button" class="btn" data-act="promptsRetry">Retry</button>` : 'Reading Slorp\'s own instructions…'}</div>`;
+  const tasks = PROMPT_TASKS.map(([id, name, about]) => {
+    const open = state.promptSel === id;
+    return `<div class="card set prompt" data-prompt="${id}"><div class="body"><div class="nm">${name}${p.tasks[id] ? ' <span class="tag whenever">Customized</span>' : ''}</div><div class="why">${about}</div></div>
+      <button class="btn" data-act="promptSel" data-id="${id}" aria-expanded="${open}">${open ? 'Done' : 'Edit'}</button></div>${open ? edit(id, name) : ''}`;
+  }).join('');
+  return `${modelless() ? `<p class="none" style="margin-bottom:10px">${NO_MODEL}, so none of this is used until one is.</p>` : ''}
+    <div class="card set prompt" data-prompt="global"><div class="body"><div class="nm">Before Every Task${p.global ? ' <span class="tag whenever">Customized</span>' : ''}</div>
+      <div class="why">Goes ahead of the instructions for every task below. Leave it empty to add nothing.</div></div></div>
+    ${promptForm('global', 'Before Every Task')}
+    <div class="label" style="margin-top:34px">Tasks</div>
+    <p class="lede" style="margin-bottom:10px">Each task has instructions of Slorp's own, which you can replace with yours. Slorp holds the model to the shape of answer a task needs whatever its instructions say, so yours should ask for the same things.</p>
+    ${tasks}`;
+}
+
 const keys = () => [[`1 – ${nav().length}`, nav().map(v => VIEW_NAMES[v] || cap(v)).join(', ')], [',', 'Settings'], ['j  k', `Next and previous in the ${listOf(['Home', 'Sessions'].concat(pullsOff() ? [] : 'PRs', 'Journal'))} lists`], ['e', 'Dismiss the selected item'], ['s', 'Snooze the selected item for an hour'],
   ['r', 'Fluent or raw'], [onMac() ? '/  ⌘K' : '/  Ctrl+K', 'Search sessions'], [onMac() ? 'n  ⌃N' : 'n', 'Start a session'], ['w', "Today's page of the journal"], [onMac() ? '⌘↵' : 'Ctrl+↵', 'Send what is in a message box'], ['Esc', 'Close a menu, a dialog, or a rename']];
 
@@ -4088,12 +4152,14 @@ const SETTINGS_LEDE = {
   start: 'A profile is a named set of what a new session starts with: what it runs on, where, and how. The New Session dialog offers them and opens with the default one, when there is one. Whatever a profile sets can still be changed there before a session is started.',
   integrations: 'What Slorp is connected to: the agents whose sessions it watches, and the tools it reads.',
   model: 'Summaries, suggested replies, automatic filing and wrap-ups are written by a model on a server you choose, usually one running on this machine. What your sessions say is sent to that server and nowhere else.',
+  prompts: 'What the local model is told before each piece of work it does for Slorp. A change takes effect at once, and what the model wrote for open sessions, efforts and pull requests is written again under it. Pages of the journal and earlier history stay as they were written until you ask for them again.',
   keys: 'They work anywhere outside a text box; those with ⌘, ⌃ or Ctrl work inside one too.',
 };
 function settingsBody(sec) {
   if (sec === 'general') return generalBody();
   if (sec === 'start') return live ? profilesBody() : '<div class="none">Sessions are started through the Slorp service, which this demo is not connected to.</div>';
   if (sec === 'model') return live ? modelBody() : '<div class="none">The demo has no local model to report on.</div>';
+  if (sec === 'prompts') return live ? promptsBody() : '<div class="none">The demo has no local model to instruct.</div>';
   if (sec === 'keys') return `<dl class="facts keys">${keys().map(([k, what]) => `<dt class="mono">${k}</dt><dd>${what}</dd>`).join('')}</dl>`;
   if (!live) return '<div class="none">Integrations belong to the Slorp service, which this demo is not connected to.</div>';
   return `<div class="label">Agents</div>${agentsBody()}
@@ -4106,7 +4172,8 @@ function settingsBody(sec) {
 function viewSettings() {
   if (!SETTINGS[state.setSel]) state.setSel = 'general';
   const on = Object.values(plugins).filter(p => p.installed && p.enabled).length + integrations.filter(i => i.enabled).length;
-  const aside = { start: live ? knowledge.profiles.length || '' : '', integrations: live ? on : '', model: live ? (summarizer.off ? 'off' : summarizer.model ? 'on' : 'none') : '' };
+  const aside = { start: live ? knowledge.profiles.length || '' : '', integrations: live ? on : '', model: live ? (summarizer.off ? 'off' : summarizer.model ? 'on' : 'none') : '',
+    prompts: live ? (prompts().global ? 1 : 0) + Object.keys(prompts().tasks).length || '' : '' };
   const nav = Object.entries(SETTINGS).map(([k, name]) => `<button class="${state.setSel === k ? 'on' : ''}" data-act="setSel" data-s="${k}">${name}<span>${aside[k] ?? ''}</span></button>`).join('');
   return `<div class="split narrow">
     <section class="pane list kbnav"><div class="label">Settings</div>${nav}</section>
@@ -4286,6 +4353,12 @@ const actions = {
   logMore: () => { logShown += LOG_PAGE; },
   workspaces: () => { state.kbSel = 'workspaces'; go('knowledge'); },
   modelCheck: () => { checkModel(); return false; },
+  promptSel: d => { state.promptSel = state.promptSel === d.id ? null : d.id; },
+  promptsRetry: () => { loadPromptDefaults(true); return false; },
+  promptReset: (d, el) => {
+    ask('/api/settings', { prompts: { tasks: { [d.id]: '' } } }, () => { el.closest('form').querySelector('textarea').removeAttribute('data-keep'); toast('Back to Slorp\'s own'); });
+    return false;
+  },
   modelTry: () => { checkModel(modelTyped()); return false; },
   modelOff: d => { api('POST', '/api/settings', { model: { off: d.to === 'off' } }, () => { modelCheck = null; }); return false; },
   setGo: d => { state.setSel = d.s; go('settings'); },
@@ -4704,6 +4777,11 @@ document.addEventListener('submit', e => {
   }
   if (sec === 'effortEdit') { api('POST', `/api/efforts/${form.dataset.id}`, { name: f.name, about: f.about, color: f.color, glyph: f.glyph }); editing = null; render(); return; }
   if (sec === 'tag') { tagDay(form.dataset.id, f.tag, true); clear(); if (!live) render(); return; }
+  if (sec === 'prompt') {
+    const box = form.querySelector('textarea'), task = form.dataset.id;
+    ask('/api/settings', { prompts: task === 'global' ? { global: box.value } : { tasks: { [task]: box.value } } }, () => { box.removeAttribute('data-keep'); toast('Saved'); });
+    return;
+  }
   if (sec === 'model') {
     const typed = modelTyped(), chosen = { ...(summarizer.fixedUrl ? {} : { url: typed.url }), ...(summarizer.fixedModel ? {} : { name: typed.name }) };
     ask('/api/settings', { model: chosen }, () => {

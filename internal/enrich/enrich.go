@@ -362,7 +362,7 @@ func (e *Enricher) route(ctx context.Context, model string, w hub.Unrouted) (str
 	var out struct {
 		Effort string `json:"effort"`
 	}
-	if err := e.ask(ctx, model, routeSystem, b.String(), "filing", schema, &out); err != nil {
+	if err := e.ask(ctx, model, hub.ActFile, b.String(), "filing", schema, &out); err != nil {
 		return "", err
 	}
 	for _, ef := range w.Efforts {
@@ -393,7 +393,7 @@ func (e *Enricher) role(ctx context.Context, model string, w hub.Unroled) (strin
 	var out struct {
 		Kind string `json:"kind"`
 	}
-	if err := e.ask(ctx, model, roleSystem, b.String(), "role", schema, &out); err != nil {
+	if err := e.ask(ctx, model, hub.ActRole, b.String(), "role", schema, &out); err != nil {
 		return "", err
 	}
 	for _, r := range w.Roles {
@@ -423,7 +423,7 @@ func (e *Enricher) note(ctx context.Context, model string, w hub.Unnoted) (hub.N
 	knowing(&b, "Questions the developer has left open about this effort; mention one only if the sessions now depend on it:", w.Questions)
 	knowing(&b, "What the developer wants you to keep in mind:", w.Context)
 	var n hub.Note
-	err := e.ask(ctx, model, noteSystem, b.String(), "note", noteSchema, &n)
+	err := e.ask(ctx, model, hub.ActNote, b.String(), "note", noteSchema, &n)
 	n.Line = strings.TrimSuffix(strings.TrimSpace(n.Line), ".")
 	return n, err
 }
@@ -615,7 +615,7 @@ func (e *Enricher) lookUp(ctx context.Context, model string, s hub.Session, exch
 	}
 	msg, err := e.chat(ctx, e.BaseURL, map[string]any{
 		"model": model, "temperature": 0, "max_tokens": maxTokens, "reasoning_effort": "none",
-		"messages": []map[string]string{{"role": "system", "content": planSystem}, {"role": "user", "content": exchange + "\n\n" + strings.Join(notes, "\n")}},
+		"messages": []map[string]string{{"role": "system", "content": e.instructions(hub.PromptLookup)}, {"role": "user", "content": exchange + "\n\n" + strings.Join(notes, "\n")}},
 		"tools":    defs,
 	})
 	if err != nil {
@@ -669,7 +669,7 @@ func (e *Enricher) describe(ctx context.Context, model string, w hub.Undescribed
 
 	knowing(&b, "What the developer wants you to keep in mind, as background rather than about this session in particular:", w.Context)
 	var in hub.Insight
-	if err := e.ask(ctx, model, system, b.String(), "insight", schema, &in); err != nil {
+	if err := e.ask(ctx, model, hub.ActDescribe, b.String(), "insight", schema, &in); err != nil {
 		return hub.Insight{}, err
 	}
 	in.Lookups = lookups
@@ -688,15 +688,15 @@ func (e *Enricher) describe(ctx context.Context, model string, w hub.Undescribed
 	return in, nil
 }
 
-// ask sends one system and user message and decodes the reply, which the
-// server constrains to schema, into out.
-func (e *Enricher) ask(ctx context.Context, model, system, user, name string, schema json.RawMessage, out any) error {
+// ask sends the instructions for task and one user message, and decodes the
+// reply, which the server constrains to schema, into out.
+func (e *Enricher) ask(ctx context.Context, model, task, user, name string, schema json.RawMessage, out any) error {
 	msg, err := e.chat(ctx, e.BaseURL, map[string]any{
 		"model": model, "temperature": 0.2, "max_tokens": maxTokens,
 		// These tasks need no deliberation; servers and models that cannot
 		// turn reasoning off ignore this.
 		"reasoning_effort": "none",
-		"messages":         []map[string]string{{"role": "system", "content": system}, {"role": "user", "content": user}},
+		"messages":         []map[string]string{{"role": "system", "content": e.instructions(task)}, {"role": "user", "content": user}},
 		"response_format":  map[string]any{"type": "json_schema", "json_schema": map[string]any{"name": name, "strict": true, "schema": schema}},
 	})
 	if err != nil {

@@ -645,6 +645,22 @@ type Settings struct {
 	// Terminal names the terminal emulator sessions are opened in, empty
 	// for whichever Slorp was started from.
 	Terminal string `json:"terminal,omitempty"`
+	// Prompts is what the user has the local model told.
+	Prompts Prompts `json:"prompts"`
+}
+
+// PromptLookup is the task of choosing what to look up before a session is
+// described. The other tasks go by the Kind of the Action they end in.
+const PromptLookup = "lookup"
+
+// Prompts is what the user has the local model told, in place of and ahead
+// of Slorp's own instructions.
+type Prompts struct {
+	// Global goes ahead of the instructions for every task.
+	Global string `json:"global"`
+	// Tasks holds the instructions the user wrote for a task, by the task,
+	// in place of Slorp's own. A task with none goes by Slorp's.
+	Tasks map[string]string `json:"tasks"`
 }
 
 // Cache is where the hub keeps what should outlive a restart.
@@ -836,6 +852,9 @@ func New(k *kb.Store, c Cache) *Hub {
 	h.warn(err)
 	if h.settings.Integrations == nil {
 		h.settings.Integrations = map[string]bool{}
+	}
+	if h.settings.Prompts.Tasks == nil {
+		h.settings.Prompts.Tasks = map[string]string{}
 	}
 	return h
 }
@@ -1265,20 +1284,45 @@ func (h *Hub) Done(requestID string) {
 	}
 }
 
+// Settings returns the user's preferences, as a copy the caller may change.
 func (h *Hub) Settings() Settings {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.settings
+	s := h.settings
+	s.Integrations, s.Prompts.Tasks = maps.Clone(s.Integrations), maps.Clone(s.Prompts.Tasks)
+	return s
 }
 
 // SetSettings replaces the user's preferences, leaving which integrations
-// are on to SetIntegration.
+// are on to SetIntegration. Whatever the local model wrote under
+// instructions that have changed is then written again.
 func (h *Hub) SetSettings(s Settings) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	s.Integrations, s.IntegrationsRevision = h.settings.Integrations, h.settings.IntegrationsRevision
+	s.Prompts.Tasks = maps.Clone(s.Prompts.Tasks)
+	if s.Prompts.Tasks == nil {
+		s.Prompts.Tasks = map[string]string{}
+	}
 	h.settings = s
 	h.saveSettings()
+}
+
+// told marks what the user has the model told for tasks: empty while they
+// go by Slorp's own instructions alone, and otherwise different whenever
+// what the user wrote for any of them, or ahead of them all, changes.
+func (h *Hub) told(tasks ...string) string {
+	p := h.settings.Prompts
+	said, any := p.Global, p.Global != ""
+	for _, t := range tasks {
+		said += "\x00" + p.Tasks[t]
+		any = any || p.Tasks[t] != ""
+	}
+	if !any {
+		return ""
+	}
+	sum := sha1.Sum([]byte(said))
+	return "~" + hex.EncodeToString(sum[:6])
 }
 
 // SetIntegration turns one integration on or off. Every session is then
@@ -1657,7 +1701,7 @@ func (h *Hub) Touch() {
 
 // routeKey identifies what a model's filing guess was based on.
 func (h *Hub) routeKey(s *Session) string {
-	return s.insightKey + ":" + strconv.Itoa(h.kb.Revision())
+	return s.insightKey + ":" + strconv.Itoa(h.kb.Revision()) + h.told(ActFile)
 }
 
 // Unrouted lists described sessions that still need the model to guess an effort.
@@ -1705,7 +1749,7 @@ func (h *Hub) Unroled() []Unroled {
 		return out
 	}
 	for _, s := range h.sessions {
-		key := s.insightKey + ":" + strconv.Itoa(h.kb.RoleRevision())
+		key := s.insightKey + ":" + strconv.Itoa(h.kb.RoleRevision()) + h.told(ActRole)
 		if s.insightKey != s.key || s.roleKey == key {
 			continue
 		}
@@ -1741,6 +1785,11 @@ func (h *Hub) Unnoted() []Unnoted {
 		var members []Session
 		var questions []string
 		key := e.Name + "\x00" + e.About
+		// What the user has go ahead of every task is left out: a change to
+		// it has the sessions described again, and the note follows them.
+		if own := h.settings.Prompts.Tasks[ActNote]; own != "" {
+			key += "\x00!" + own
+		}
 		for _, q := range know.Questions {
 			if q.Effort == e.ID {
 				questions = append(questions, q.Text)
@@ -2155,7 +2204,7 @@ func (h *Hub) Subscribe() (<-chan struct{}, func()) {
 
 func (h *Hub) changed() {
 	now := time.Now()
-	context := ":" + strconv.Itoa(h.kb.ContextRevision()) + "." + strconv.Itoa(h.settings.IntegrationsRevision)
+	context := ":" + strconv.Itoa(h.kb.ContextRevision()) + "." + strconv.Itoa(h.settings.IntegrationsRevision) + h.told(ActDescribe, PromptLookup)
 	for _, s := range h.sessions {
 		if k := contentKey(s) + context; k != s.key {
 			s.key, s.keySince = k, now

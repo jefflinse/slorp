@@ -1,6 +1,6 @@
 # Browser tests
 
-These tests load Slorp's real page in headless Chromium against small fixture HTTP services. They exercise question answers, plugin setup, history and subagent reports, effort cards, a session's side pane, the local model's log, and themes. Lifecycle tests cover starting from Sessions or an effort, directory-specific OpenCode choices, stopping/reopening, resume-command copying, and recovery from accepted-but-lost responses using journaled request IDs. They do not start agent sessions or use your Slorp database.
+These tests load Slorp's real page in headless Chromium against small fixture HTTP services. They exercise question answers, plugin setup, history and subagent reports, effort cards, a session's side pane, the local model's log and prompts, and themes. Lifecycle tests cover starting from Sessions or an effort, directory-specific OpenCode choices, stopping/reopening, resume-command copying, and recovery from accepted-but-lost responses using journaled request IDs. They do not start agent sessions or use your Slorp database.
 
 From this directory:
 
