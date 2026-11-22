@@ -10,6 +10,8 @@ async function world(t) {
   const session = { id: 'ses_history', agent: 'opencode', kind: 'interactive', label: 'Cache repair', cwd: '/work', status: 'idle', startedAt: at, activeAt: at, lastPrompt: '', lastReply: '', used: {}, canReply: true, timeline: [] }
   const data = { sessions: [session], items: [], summarizer: { model: 'fixture' }, capabilities: { opencode: { history: true }, claude: { history: true } } }
   let calls = 0, failure = '', release = () => {}
+  /* The session's record, oldest first, and what the page asked of it: the service answers with what was said before the latest. */
+  const record = [], asks = []
   let onRead = () => {}
   const reading = new Promise(resolve => { onRead = resolve })
   const server = createServer(async (req, res) => {
@@ -24,6 +26,15 @@ async function world(t) {
       session.timeline = [{ at, prompt: 'Earlier question' }]
       session.backfilling = 1
       res.writeHead(202, { 'content-type': 'application/json' }).end(JSON.stringify({ exchanges: 1, queued: 1 }))
+    } else if (req.url === '/api/sessions/ses_history/exchanges' && req.method === 'POST') {
+      let body = ''
+      for await (const chunk of req) body += chunk
+      const asked = JSON.parse(body)
+      asks.push(asked)
+      if (failure) { res.writeHead(502).end(failure); return }
+      const before = record.slice(0, -1), at = asked.from ? before.findIndex(x => x.at >= asked.from) : -1
+      const first = Math.max(0, (at < 0 ? before.length : at) - (asked.more || 0))
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ exchanges: before.slice(first).reverse(), head: record.at(-1)?.at, more: first > 0 }))
     } else {
       res.setHeader('content-type', 'text/html'); res.end(readFileSync(join(__dirname, '..', 'index.html')))
     }
@@ -39,7 +50,7 @@ async function world(t) {
   await page.goto(`http://127.0.0.1:${server.address().port}/#sessions`)
   const button = () => page.getByRole('button', { name: 'Fill In Earlier History', exact: true })
   await button().first().waitFor()
-  return { page, session, data, button, reading, calls: () => calls, release: () => release(), fail: why => { failure = why } }
+  return { page, session, data, button, reading, record, asks, calls: () => calls, release: () => release(), fail: why => { failure = why } }
 }
 
 test('history controls follow declared capability for either harness', async t => {
@@ -75,6 +86,68 @@ test('export failures explain the problem and restore the action', async t => {
   await o.page.waitForFunction(() => document.querySelector('#toast').textContent.includes('session not found'))
   await o.button().first().waitFor()
   assert.equal(o.session.timeline.length, 0)
+})
+
+test('earlier exchanges are read one at a time, as cards that open onto all that was said', async t => {
+  const o = await world(t), page = o.page
+  const ago = mins => new Date(Date.now() - mins * 60000).toISOString()
+  const said = (mins, prompt, reply) => ({ at: ago(mins), prompt, reply })
+  o.record.push(said(180, 'First question', 'First answer'), said(120, 'Second question', 'The **second** answer'), said(60, 'Latest question', 'Latest answer'))
+  Object.assign(o.session, { lastPrompt: 'Latest question', lastReply: 'Latest answer', timeline: [{ at: ago(60), prompt: 'Latest question' }] })
+  await page.evaluate(() => refresh(true))
+  const cards = page.locator('.tabbody .xc'), more = page.getByRole('button', { name: 'Load More', exact: true })
+  await more.waitFor()
+  assert.equal(await cards.count(), 0)
+  assert.deepEqual(o.asks, [])
+
+  await more.click()
+  await cards.first().waitFor()
+  assert.deepEqual(o.asks, [{ more: 1 }])
+  assert.match(await cards.first().innerText(), /2h ago\s+Second question/)
+  assert.equal(await cards.first().locator('.xb').count(), 0)
+
+  /* The model's line on an exchange reaches its card by way of the timeline. */
+  o.session.timeline.unshift({ at: o.record[1].at, prompt: 'Second question', line: 'Chose the retry policy', summary: 'It settled on backing off.' })
+  await page.evaluate(() => refresh(true))
+  await cards.first().getByText('Chose the retry policy').waitFor()
+  assert.match(await cards.first().innerText(), /It settled on backing off\./)
+
+  await cards.first().locator('.xh').click()
+  assert.match(await cards.first().locator('.xb').innerText(), /YOU SAID\s+Second question\s+The second answer/i)
+  assert.equal(await cards.first().locator('.xb b').innerText(), 'second')
+
+  await more.click()
+  await cards.nth(1).waitFor()
+  assert.deepEqual(o.asks[1], { from: o.record[1].at, more: 1 })
+  assert.match(await cards.nth(1).innerText(), /3h ago\s+First question/)
+  assert.equal(await cards.first().locator('.xb').count(), 1, 'an opened exchange stays open as more are read')
+  assert.equal(await more.count(), 0)
+  await page.locator('.xmore').getByText('This is as far back as Slorp reads.').waitFor()
+
+  /* Once the user speaks again, what was the latest exchange joins the cards, without being asked for. */
+  o.record.push(said(0, 'Newest question', ''))
+  Object.assign(o.session, { lastPrompt: 'Newest question' })
+  o.session.timeline.push({ at: o.record[3].at, prompt: 'Newest question' })
+  await page.evaluate(() => refresh(true))
+  await cards.nth(2).waitFor()
+  assert.deepEqual(o.asks[2], { from: o.record[0].at, more: 0 })
+  assert.deepEqual((await cards.allInnerTexts()).map(text => text.split('\n').filter(Boolean)[1]), ['Latest question', '✦Chose the retry policy', 'First question'])
+  await page.evaluate(() => refresh(true))
+  assert.equal(o.asks.length, 3)
+})
+
+test('a record that cannot be read says why and leaves the exchange to be asked for again', async t => {
+  const o = await world(t), page = o.page, more = page.getByRole('button', { name: 'Load More', exact: true })
+  o.record.push({ at: new Date(Date.now() - 3600000).toISOString(), prompt: 'Only question', reply: 'Only answer' })
+  o.fail('OpenCode export failed: session not found')
+  await more.click()
+  assert.match(await page.locator('.xmore [role="alert"]').innerText(), /could not be read: OpenCode export failed: session not found/)
+  o.fail('')
+  await more.click()
+  await page.locator('.xmore').getByText('Nothing was said before this.').waitFor()
+  o.data.capabilities.opencode.history = false
+  await page.evaluate(() => refresh(true))
+  assert.equal(await page.locator('.earlier').count(), 0)
 })
 
 test('without a local model the history action explains why it is disabled', async t => {

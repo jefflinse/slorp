@@ -334,6 +334,24 @@ h1 .pen:hover { color: var(--accent); background: var(--sel); }
 .said.open .tx { display: block; }
 .said .link { margin-top: 4px; font-size: 12px; }
 .tabbody { padding-top: 14px; }
+/* A conversation's earlier exchanges: a card each, which opens onto all that was said in it */
+.earlier { margin-top: 20px; }
+.earlier > .label { margin-bottom: 8px; }
+.xc { border: 1px solid var(--line); border-radius: 10px; background: var(--raised); }
+.xc + .xc { margin-top: 8px; }
+.xc.open { border-color: var(--ink3); }
+.xh { display: flex; align-items: baseline; gap: 12px; width: 100%; padding: 9px 12px 10px; border-radius: 10px; }
+.xc:not(.open) .xh:hover { background: color-mix(in srgb, var(--sel) 55%, transparent); }
+.xh .when { flex: none; min-width: 44px; color: var(--ink3); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.xh .b { flex: 1; min-width: 0; }
+.xh .t { display: block; font-size: 14px; font-weight: 550; line-height: 1.35; overflow-wrap: anywhere; }
+.xh .t.you { color: var(--ink2); font-weight: 400; }
+.xh .t.you::before { content: 'You: '; color: var(--ink3); }
+.xh .st { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin-top: 2px; color: var(--ink2); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+.xc.open .xh .st { display: block; }
+.xb { padding: 12px 14px 14px; border-top: 1px solid var(--line); }
+.xmore { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; margin-top: 10px; }
+.xmore .btn { padding: 4px 11px; font-size: 12.5px; }
 .md { font-size: 14.5px; line-height: 1.6; max-width: 80ch; overflow-wrap: anywhere; }
 .md > :first-child { margin-top: 0; }
 .md p, .md ul, .md ol, .md pre, .md table, .md blockquote { margin: 10px 0 0; }
@@ -2770,18 +2788,68 @@ function aboutSession(s) {
     ${sent ? `<div class="label" style="margin-top:22px">Sent From Here</div><div class="livebox"><div class="sent">${sent}</div></div>` : ''}`;
 }
 
+/* What the user said in an exchange, cut short until asked for in full, and what the agent answered, rendered
+   or as it was written. */
+const saidBlock = (key, text) => `<div class="said ${state.expanded['said:' + key] ? 'open' : ''}"><div class="label">You Said</div><div class="tx">${esc(text)}</div>
+    <button class="link" data-act="expand" data-id="said:${esc(key)}" hidden>${state.expanded['said:' + key] ? 'Show Less' : 'Show All of It'}</button></div>`;
+const answered = text => state.sourceRaw ? `<div class="rawblock"><div class="tx">${esc(text)}</div></div>` : md(text);
+
+/* What was said in a session before its latest exchange, read from its agent's own record only when asked
+   for, EARLIER_STEP exchanges at a time. By session: those read so far, the latest first, when the latest of
+   all was said as the record has it, whether the record holds more, and when the user had last spoken as the
+   read began. */
+const EARLIER_STEP = 1, earlier = {};
+const lastSaid = s => (s.timeline || []).findLast(m => !m.compacted)?.at || '';
+function readEarlier(s, more) {
+  const e = earlier[s.id] ||= { list: [] };
+  if (e.reading) return;
+  e.reading = true; e.error = ''; e.asked = lastSaid(s);
+  fetch(`/api/sessions/${encodeURIComponent(s.id)}/exchanges`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from: e.list.at(-1)?.at, more }) })
+    .then(async res => { if (!res.ok) throw new Error((await res.text()).trim() || res.status); return res.json(); })
+    .then(data => { e.list = data.exchanges || []; e.head = data.head; e.more = !!data.more; e.read = true; })
+    .catch(err => { e.error = err instanceof TypeError ? 'Could not reach the Slorp service.' : `Its record could not be read: ${err.message}`; })
+    .finally(() => { e.reading = false; render(); });
+}
+/* The exchanges read for a session. Once the user has spoken in it again they are read once more, so that what
+   was its latest exchange joins them; a prompt the record lacks is not asked after twice. */
+function earlierOf(s) {
+  const e = earlier[s.id], said = lastSaid(s);
+  if (e?.read && !e.reading && e.asked !== said && new Date(said) - new Date(e.head) > 5000) readEarlier(s, 0);
+  return e;
+}
+/* An earlier exchange as a card: when it was and the model's line and account of how it came out, or failing
+   those what the user said, opening onto all that was said in it. */
+function exchangeCard(s, x) {
+  const key = `x:${s.id}:${x.at}`, open = !!state.expanded[key];
+  const m = (s.timeline || []).find(m => !m.compacted && +new Date(m.at) === +new Date(x.at));
+  const says = m?.line ? `<span class="t">${spark}${esc(m.line)}</span>${m.summary ? `<span class="st">${esc(m.summary)}</span>` : ''}`
+    : `<span class="t you">${esc(clip(gist(x.prompt), 140))}</span>${x.reply && s.backfilling && !modelless() ? `<span class="st">${spark}Summarizing…</span>` : ''}`;
+  return `<div class="xc ${open ? 'open' : ''}"><button class="xh" data-act="expand" data-id="${esc(key)}" aria-expanded="${open}">
+      <span class="when" title="${esc(new Date(x.at).toLocaleString())}">${ago(minsSince(x.at))}</span><span class="b">${says}</span><span class="chev ${open ? '' : 'shut'}">▼</span></button>
+    ${open ? `<div class="xb">${saidBlock(key, x.prompt)}${x.reply ? answered(x.reply) : '<div class="none">No response to this was recorded.</div>'}</div>` : ''}</div>`;
+}
+/* The earlier exchanges under a session's latest, and the button that reads the next. There is none where the
+   session's agent keeps no record Slorp can read. */
+function earlierBody(s) {
+  if (!capabilities[s.agent]?.history) return '';
+  const e = earlierOf(s), list = e?.list || [];
+  const next = e?.reading ? '<button class="btn" disabled>Reading…</button>'
+    : !e?.read || e.more ? `<button class="btn" data-act="earlier" data-id="${esc(s.id)}" title="Reads the exchange before ${list.length ? 'these' : 'this one'} from the session's own record${modelless() ? '' : ', and has the local model say how it came out'}. It happens only when you ask.">Load More</button>`
+    : `<span class="none">${list.length ? 'This is as far back as Slorp reads.' : 'Nothing was said before this.'}</span>`;
+  return `<div class="earlier">${list.length ? '<div class="label">Earlier</div>' : ''}${list.map(x => exchangeCard(s, x)).join('')}
+    <div class="xmore">${next}${e?.error ? `<span class="none" role="alert">${esc(e.error)}</span>` : ''}</div></div>`;
+}
+
 /* The tabs under a session: the latest of its conversation, rendered or as it
-   was written, its subagents, and what else is going on in the same effort. */
+   was written, with its earlier exchanges beneath, its subagents, and what else
+   is going on in the same effort. */
 function detailTabs(s) {
   const effort = s.effort || 'unsorted', others = alsoRows(effort, s.id), subs = s.subagents || [];
   const on = ['also'].concat(subs.length ? 'subs' : []).includes(state.detailTab) ? state.detailTab : 'source';
   const tab = (key, name) => `<button class="label ${on === key ? 'on' : ''}" data-act="detailTab" data-t="${key}">${name}</button>`;
-  const shown = state.sourceRaw ? `<div class="rawblock"><div class="tx">${esc(s.lastReply)}</div></div>` : md(s.lastReply);
-  const open = state.expanded['said:' + s.id];
-  const source = () => `${s.lastPrompt ? `<div class="said ${open ? 'open' : ''}"><div class="label">You Said</div><div class="tx">${esc(s.lastPrompt)}</div>
-      <button class="link" data-act="expand" data-id="said:${s.id}" hidden>${open ? 'Show Less' : 'Show All of It'}</button></div>` : ''}
-    ${s.lastReply ? shown : '<div class="none">No response found for this session.</div>'}
-    <div class="none mono" style="margin-top:12px">${esc(rawOf(s))}</div>`;
+  const source = () => `${s.lastPrompt ? saidBlock(s.id, s.lastPrompt) : ''}
+    ${s.lastReply ? answered(s.lastReply) : '<div class="none">No response found for this session.</div>'}
+    <div class="none mono" style="margin-top:12px">${esc(rawOf(s))}</div>${earlierBody(s)}`;
   return `<div class="tabs" role="tablist">${tab('source', 'Conversation')}${subs.length ? tab('subs', `Subagents<span class="n">${subs.length}</span>`) : ''}${tab('also', `Also In ${esc(effortById(effort).name)}<span class="n">${others.count}</span>`)}
       ${on !== 'source' ? '' : `<span class="tools">${s.lastReply ? `<button class="btn" data-act="copyReply" data-id="${s.id}" title="Copy the response as it was written">Copy</button>` : ''}
         <span class="seg" role="group" aria-label="How the response is shown"><button class="${state.sourceRaw ? '' : 'on'}" data-act="sourceRaw" data-on="0">Rendered</button><button class="${state.sourceRaw ? 'on' : ''}" data-act="sourceRaw" data-on="1">Raw</button></span></span>`}</div>
@@ -4313,6 +4381,7 @@ const actions = {
     return false;
   },
   expand: d => { state.expanded[d.id] = !state.expanded[d.id]; },
+  earlier: d => { const s = live.find(x => x.id === d.id); if (s) readEarlier(s, EARLIER_STEP); },
   actSel: d => { state.actSel = d.id; },
   openSession: d => { state.actSel = d.id; go('sessions'); },
   pullSel: d => { state.pullSel = d.id; },

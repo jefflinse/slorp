@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -222,4 +223,58 @@ func TestBackfillReconcilesALiveReplayAndItsLaterSnapshots(t *testing.T) {
 	check(h)
 	h.Backfill("s", xs)
 	check(h)
+}
+
+func TestRecallAddsAndQueuesOnlyWhatIsAskedFor(t *testing.T) {
+	h, _, _ := newHub(t)
+	t0 := time.Now().Add(-10 * time.Hour).Truncate(time.Second)
+	at := func(n int) time.Time { return t0.Add(time.Duration(n) * time.Hour) }
+	h.SetRoster(agent, []Session{{ID: "s", Agent: agent, Status: Idle, LastPrompt: "third thing", PromptAt: at(3).Add(3 * time.Second)}})
+	record := []Exchange{
+		{At: at(0), Compacted: &Compaction{At: at(0)}},
+		{At: at(1), Prompt: "first thing", Reply: "Did the first."},
+		{At: at(2), Prompt: "second thing", Reply: "Did the second."},
+		{At: at(3), Prompt: "third thing", Reply: "Did the third."},
+	}
+	prompts := func() (out []string) {
+		for _, m := range session(t, h, "s").Timeline {
+			out = append(out, m.Prompt)
+		}
+		return out
+	}
+	waiting := func() (out []string) {
+		for _, u := range h.Unfilled() {
+			for _, x := range u.Exchanges {
+				out = append(out, x.Prompt)
+			}
+		}
+		return out
+	}
+
+	if _, ok := h.Recall("nobody", record, nil); ok {
+		t.Fatal("Recall took a session that is not open")
+	}
+	if queued, ok := h.Recall("s", record, []time.Time{at(2)}); !ok || queued != 1 {
+		t.Fatalf("Recall = %d, %v; want the one exchange asked for", queued, ok)
+	}
+	if got := prompts(); !slices.Equal(got, []string{"second thing", "third thing"}) || !session(t, h, "s").Timeline[1].At.Equal(at(3)) {
+		t.Fatalf("timeline = %q; want the exchange asked for beside the one it had, at the record's time", got)
+	}
+	if got := waiting(); !slices.Equal(got, []string{"second thing"}) {
+		t.Fatalf("waiting = %q; want only the exchange asked for", got)
+	}
+
+	if queued, _ := h.Recall("s", record, []time.Time{at(1), at(2)}); queued != 2 {
+		t.Fatalf("a second Recall left %d waiting; want the one already waiting and the one added", queued)
+	}
+	if got := waiting(); !slices.Equal(got, []string{"second thing", "first thing"}) {
+		t.Fatalf("waiting = %q; want what was asked for first still first, and once", got)
+	}
+	h.SetFilled(h.Unfilled()[0], []Filled{{N: 0, Line: "Second done"}, {N: 1, Line: "First done"}})
+	if got := session(t, h, "s").Timeline; len(got) != 3 || got[0].Line != "First done" || got[1].Line != "Second done" || got[2].Line != "" {
+		t.Fatalf("timeline = %+v; want the model's line on each exchange recalled", got)
+	}
+	if queued, _ := h.Recall("s", record, []time.Time{at(1), at(2)}); queued != 0 {
+		t.Errorf("recalling what the model has described queued %d", queued)
+	}
 }

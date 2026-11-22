@@ -767,36 +767,101 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		edited(w, k.Assign(r.PathValue("id"), in.Effort))
 	})
 
-	// The page asks, for one session and only when the user says so, for its
-	// timeline to be filled in from the session's own record.
-	mux.HandleFunc("POST /api/sessions/{id}/backfill", func(w http.ResponseWriter, r *http.Request) {
+	// recorded reads an open session's latest exchanges from its agent's own
+	// record, and answers the request itself when it cannot.
+	recorded := func(w http.ResponseWriter, r *http.Request) (exchanges []hub.Exchange, ok bool) {
 		id := r.PathValue("id")
 		sessions := h.Sessions()
 		at := slices.IndexFunc(sessions, func(s hub.Session) bool { return s.ID == id })
 		if at < 0 {
 			http.Error(w, "no such session", http.StatusNotFound)
-			return
+			return nil, false
 		}
 		read := history[sessions[at].Agent]
 		if read == nil {
 			http.Error(w, "this agent keeps no record Slorp can read", http.StatusBadRequest)
-			return
+			return nil, false
 		}
 		exchanges, err := read(r.Context(), id, hub.BackfillLimit)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
+			return nil, false
 		}
 		if err := r.Context().Err(); err != nil {
 			http.Error(w, err.Error(), http.StatusRequestTimeout)
+			return nil, false
+		}
+		return exchanges, true
+	}
+
+	// The page asks, for one session and only when the user says so, for its
+	// timeline to be filled in from the session's own record.
+	mux.HandleFunc("POST /api/sessions/{id}/backfill", func(w http.ResponseWriter, r *http.Request) {
+		exchanges, ok := recorded(w, r)
+		if !ok {
 			return
 		}
-		queued, ok := h.Backfill(id, exchanges)
+		queued, ok := h.Backfill(r.PathValue("id"), exchanges)
 		if !ok {
 			http.Error(w, "the session closed while its history was being read", http.StatusConflict)
 			return
 		}
 		writeJSON(w, http.StatusAccepted, map[string]int{"exchanges": len(exchanges), "queued": queued})
+	})
+
+	// The page asks, only when the user says so, for what was said in a
+	// session before its latest exchange: everything from the earliest it
+	// already shows, said at from, and more before that, the latest first.
+	// The model is asked how each of those added came out. head is when the
+	// latest exchange was said, and more whether the record holds any earlier.
+	mux.HandleFunc("POST /api/sessions/{id}/exchanges", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			From time.Time `json:"from"`
+			More int       `json:"more"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		exchanges, ok := recorded(w, r)
+		if !ok {
+			return
+		}
+		said := slices.DeleteFunc(slices.Clone(exchanges), func(x hub.Exchange) bool { return x.Compacted != nil })
+		type exchange struct {
+			At     time.Time `json:"at"`
+			Prompt string    `json:"prompt"`
+			Reply  string    `json:"reply"`
+		}
+		out := struct {
+			Exchanges []exchange `json:"exchanges"`
+			Head      time.Time  `json:"head,omitzero"`
+			More      bool       `json:"more"`
+		}{Exchanges: []exchange{}}
+		var added []time.Time
+		if len(said) > 0 {
+			out.Head = said[len(said)-1].At
+			earlier := said[:len(said)-1]
+			shown := len(earlier)
+			if !in.From.IsZero() {
+				if i := slices.IndexFunc(earlier, func(x hub.Exchange) bool { return !x.At.Before(in.From) }); i >= 0 {
+					shown = i
+				}
+			}
+			first := max(0, shown-min(max(in.More, 0), hub.BackfillLimit))
+			out.More = first > 0
+			for i := len(earlier) - 1; i >= first; i-- {
+				x := earlier[i]
+				out.Exchanges = append(out.Exchanges, exchange{x.At, x.Prompt, x.Reply})
+				if i < shown {
+					added = append(added, x.At)
+				}
+			}
+		}
+		if _, ok := h.Recall(r.PathValue("id"), exchanges, added); !ok {
+			http.Error(w, "the session closed while its history was being read", http.StatusConflict)
+			return
+		}
+		writeJSON(w, http.StatusOK, out)
 	})
 
 	// The page searches the sessions, open and closed.

@@ -19,7 +19,8 @@ const (
 	historyTimeout = 30 * time.Second
 	historyBytes   = 64 << 20
 	historyPrompt  = 8000
-	historyReply   = 2000
+	// historyReply is as much as is kept of a session's last message.
+	historyReply = 30000
 )
 
 var sessionIDPattern = regexp.MustCompile(`^ses[A-Za-z0-9_-]{1,128}$`)

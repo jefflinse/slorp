@@ -37,7 +37,7 @@ const (
 	originRead  = 16 << 20
 	promptLimit = 8000
 	// exchangeReply is how much of an answer Exchanges keeps, in runes.
-	exchangeReply = 2000
+	exchangeReply = ReplyLimit
 )
 
 type Adapter struct {
