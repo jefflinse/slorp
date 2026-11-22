@@ -30,6 +30,9 @@ func Open(path string) (*Store, error) {
 		kind TEXT NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL,
 		updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		PRIMARY KEY (kind, id))`)
+	if err == nil {
+		_, err = db.Exec(`CREATE INDEX IF NOT EXISTS docs_kind ON docs (kind)`)
+	}
 	if err != nil {
 		db.Close()
 		return nil, err
@@ -63,22 +66,32 @@ func (s *Store) Get(kind, id string, v any) (bool, error) {
 	return true, json.Unmarshal([]byte(body), v)
 }
 
-// eachPage is how many documents Each reads before it calls back.
-const eachPage = 128
+// eachPage is how many documents Each reads before it calls back, and
+// eachQuery how it reads them: docs_kind orders a kind's documents by rowid,
+// so each page is a seek rather than a sort.
+const (
+	eachPage  = 128
+	eachQuery = `SELECT rowid, id, body FROM docs WHERE kind = ? AND rowid > ? AND rowid <= ? ORDER BY rowid LIMIT ?`
+)
 
-// Each calls fn with every document of a kind, oldest first. The store holds
-// no connection while fn runs, so fn may use the store and take other locks
-// whose holders are waiting on it.
+// Each calls fn with every document of a kind that was there when it was
+// called, oldest first. The store holds no connection while fn runs, so fn
+// may use the store and take other locks whose holders are waiting on it.
+// Documents are read a page at a time, not as one snapshot: one changed or
+// deleted while Each runs is seen as it is when its page is read.
 func (s *Store) Each(kind string, fn func(id string, body []byte)) error {
 	type doc struct {
 		id   string
 		body []byte
 	}
-	var after int64
-	for {
+	var after, last int64
+	if err := s.db.QueryRow(`SELECT COALESCE(MAX(rowid), 0) FROM docs WHERE kind = ?`, kind).Scan(&last); err != nil {
+		return err
+	}
+	for after < last {
 		page := make([]doc, 0, eachPage)
 		err := func() error {
-			rows, err := s.db.Query(`SELECT rowid, id, body FROM docs WHERE kind = ? AND rowid > ? ORDER BY rowid LIMIT ?`, kind, after, eachPage)
+			rows, err := s.db.Query(eachQuery, kind, after, last, eachPage)
 			if err != nil {
 				return err
 			}
@@ -104,6 +117,7 @@ func (s *Store) Each(kind string, fn func(id string, body []byte)) error {
 			return nil
 		}
 	}
+	return nil
 }
 
 func (s *Store) Delete(kind, id string) error {

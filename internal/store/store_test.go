@@ -107,6 +107,39 @@ func TestEachLetsGoOfTheStoreWhileCallingBack(t *testing.T) {
 	}
 }
 
+func TestEachStopsAtWhatWasThereWhenCalled(t *testing.T) {
+	st := testdb.Open(t)
+	const n = 200
+	for i := range n {
+		if err := st.Put("thing", strconv.Itoa(i), doc{i}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	done := make(chan error, 1)
+	seen := 0
+	go func() {
+		var inside error
+		err := st.Each("thing", func(id string, _ []byte) {
+			seen++
+			if err := st.Put("thing", "new-"+id, doc{}); inside == nil {
+				inside = err
+			}
+		})
+		done <- errors.Join(err, inside)
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+		if seen != n {
+			t.Errorf("Each called back %d times while adding documents of its kind, want the %d there when it began", seen, n)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Each never finished while adding documents of its kind")
+	}
+}
+
 func TestDelete(t *testing.T) {
 	st := testdb.Open(t)
 	st.Put("thing", "a", doc{1})
