@@ -63,21 +63,47 @@ func (s *Store) Get(kind, id string, v any) (bool, error) {
 	return true, json.Unmarshal([]byte(body), v)
 }
 
-// Each calls fn with every document of a kind, oldest first.
+// eachPage is how many documents Each reads before it calls back.
+const eachPage = 128
+
+// Each calls fn with every document of a kind, oldest first. The store holds
+// no connection while fn runs, so fn may use the store and take other locks
+// whose holders are waiting on it.
 func (s *Store) Each(kind string, fn func(id string, body []byte)) error {
-	rows, err := s.db.Query(`SELECT id, body FROM docs WHERE kind = ? ORDER BY rowid`, kind)
-	if err != nil {
-		return err
+	type doc struct {
+		id   string
+		body []byte
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var id, body string
-		if err := rows.Scan(&id, &body); err != nil {
+	var after int64
+	for {
+		page := make([]doc, 0, eachPage)
+		err := func() error {
+			rows, err := s.db.Query(`SELECT rowid, id, body FROM docs WHERE kind = ? AND rowid > ? ORDER BY rowid LIMIT ?`, kind, after, eachPage)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var d doc
+				var body string
+				if err := rows.Scan(&after, &d.id, &body); err != nil {
+					return err
+				}
+				d.body = []byte(body)
+				page = append(page, d)
+			}
+			return rows.Err()
+		}()
+		if err != nil {
 			return err
 		}
-		fn(id, []byte(body))
+		for _, d := range page {
+			fn(d.id, d.body)
+		}
+		if len(page) < eachPage {
+			return nil
+		}
 	}
-	return rows.Err()
 }
 
 func (s *Store) Delete(kind, id string) error {
