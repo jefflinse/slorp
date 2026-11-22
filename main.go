@@ -159,10 +159,13 @@ func run() (exe string, restart bool) {
 	go poller.Run(ctx)
 
 	history := map[string]server.History{
-		claude.Agent: func(_ context.Context, id string, limit int) ([]hub.Exchange, error) {
-			return transcripts.Exchanges(id, limit)
+		claude.Agent: {
+			Exchanges: func(_ context.Context, id string, limit int) ([]hub.Exchange, error) {
+				return transcripts.Exchanges(id, limit)
+			},
+			Reply: func(_ context.Context, id, ends string) (string, error) { return transcripts.Reply(id, ends) },
 		},
-		opencode.Agent: oc.Exchanges,
+		opencode.Agent: {Exchanges: oc.Exchanges, Reply: oc.Reply},
 	}
 	srv := &http.Server{Addr: *addr, Handler: server.New(h, k, tools, poller, history, map[string]server.Launcher{claude.Agent: transcripts, opencode.Agent: oc}, map[string]server.PluginManager{claude.Agent: transcripts, opencode.Agent: oc}, map[string]server.Delegates{claude.Agent: transcripts}, summarizer, terminal.New(), releases, server.Page(page, *ui))}
 	go func() {

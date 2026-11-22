@@ -3,6 +3,7 @@ package kb_test
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/jefflinse/slorp/internal/kb"
@@ -876,5 +877,73 @@ func TestProfiles(t *testing.T) {
 	}
 	if err := k.RemoveProfile(first); err == nil {
 		t.Error("removing a profile that is gone was accepted")
+	}
+}
+
+func TestHandoffs(t *testing.T) {
+	st := testdb.Open(t)
+	k := testdb.KB(t, st)
+	if got := k.Knowledge().Handoffs; got == nil || len(got) != 0 {
+		t.Errorf("Handoffs = %v before any is added, want an empty list", got)
+	}
+	first, err := k.AddHandoff(kb.Handoff{ID: "mine", Name: " Review ", Text: "\nPlease review this:\n\n---\n{{response}}\n---\n"})
+	must(t, err)
+	second, err := k.AddHandoff(kb.Handoff{Name: "Fixes", Text: "{{response}}"})
+	must(t, err)
+	want := []kb.Handoff{
+		{ID: first, Name: "Review", Text: "Please review this:\n\n---\n{{response}}\n---"},
+		{ID: second, Name: "Fixes", Text: "{{response}}"},
+	}
+	if got := k.Knowledge().Handoffs; first == "" || first == "mine" || first == second || !reflect.DeepEqual(got, want) {
+		t.Fatalf("Handoffs = %+v, want %+v", got, want)
+	}
+
+	set := func(h kb.Handoff) error {
+		return k.EditHandoff(h.ID, func(q *kb.Handoff) error { *q = h; return nil })
+	}
+	bad := map[string]kb.Handoff{
+		"no name":            {Text: "x"},
+		"a blank name":       {Name: "  ", Text: "x"},
+		"a name another has": {Name: "review", Text: "x"},
+		"no message":         {Name: "X"},
+		"a blank message":    {Name: "X", Text: " \n "},
+		"too long a message": {Name: "X", Text: strings.Repeat("é", kb.HandoffLimit+1)},
+	}
+	for name, h := range bad {
+		if _, err := k.AddHandoff(h); err == nil {
+			t.Errorf("a handoff with %s was accepted", name)
+		}
+		h.ID = second
+		if err := set(h); err == nil {
+			t.Errorf("a handoff changed to have %s was accepted", name)
+		}
+	}
+	if err := set(kb.Handoff{ID: "nope", Name: "X", Text: "x"}); err == nil {
+		t.Error("changing a handoff that does not exist was accepted")
+	}
+	if err := k.EditHandoff(second, func(h *kb.Handoff) error { h.Name = "Changed"; return errors.New("no") }); err == nil {
+		t.Error("an edit that failed was accepted")
+	}
+	if after := k.Knowledge().Handoffs; !reflect.DeepEqual(after, want) {
+		t.Errorf("after the rejected ones: %+v, want %+v", after, want)
+	}
+
+	must(t, k.EditHandoff(second, func(h *kb.Handoff) error {
+		h.ID, h.Name, h.Text = "other", "REVIEW 2", strings.Repeat("é", kb.HandoffLimit)
+		return nil
+	}))
+	want[1] = kb.Handoff{ID: second, Name: "REVIEW 2", Text: strings.Repeat("é", kb.HandoffLimit)}
+	if got := k.Knowledge().Handoffs; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after changing one: %+v, want %+v", got, want)
+	}
+	if after := testdb.KB(t, st).Knowledge().Handoffs; !reflect.DeepEqual(after, want) {
+		t.Errorf("after reopening: %+v, want %+v", after, want)
+	}
+	must(t, k.RemoveHandoff(first))
+	if got := k.Knowledge().Handoffs; !reflect.DeepEqual(got, want[1:]) {
+		t.Errorf("after removing one: %+v, want %+v", got, want[1:])
+	}
+	if err := k.RemoveHandoff(first); err == nil {
+		t.Error("removing a handoff that is gone was accepted")
 	}
 }

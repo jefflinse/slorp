@@ -488,6 +488,40 @@ func (a *Adapter) Exchanges(sessionID string, limit int) ([]hub.Exchange, error)
 	return out[max(0, len(out)-limit):], nil
 }
 
+// Reply reads the whole of a session's transcript and returns, in full, the
+// latest message its agent wrote that ends with ends. It is empty when the
+// transcript holds no such message.
+func (a *Adapter) Reply(sessionID, ends string) (string, error) {
+	path := a.transcript(sessionID)
+	if path == "" {
+		return "", fmt.Errorf("no transcript was found for the session %q", sessionID)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	var found string
+	for r := bufio.NewReaderSize(f, 1<<20); ; {
+		line, err := r.ReadBytes('\n')
+		if err != nil {
+			break
+		}
+		if !bytes.Contains(line, []byte(`"type":"assistant"`)) {
+			continue
+		}
+		var e entry
+		if json.Unmarshal(line, &e) != nil || e.Type != "assistant" || e.IsSidechain {
+			continue
+		}
+		if text := assistantText(e.Message.Content); text != "" && strings.HasSuffix(text, ends) {
+			found = text
+		}
+	}
+	return found, nil
+}
+
 // typed returns what the user typed in a user entry: its text, with or
 // without attachments. Tool results, command echoes and the harness's own
 // notices are not typed, and give "".

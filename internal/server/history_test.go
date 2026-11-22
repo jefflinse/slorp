@@ -14,13 +14,13 @@ import (
 
 func TestHistoryCapabilitiesAndOpenCodeBackfill(t *testing.T) {
 	called := 0
-	f := fixtureWithHistory(t, map[string]History{"opencode": func(ctx context.Context, id string, limit int) ([]hub.Exchange, error) {
+	f := fixtureWithHistory(t, map[string]History{"opencode": {Exchanges: func(ctx context.Context, id string, limit int) ([]hub.Exchange, error) {
 		called++
 		if ctx.Done() == nil || id != "ses_history" || limit != hub.BackfillLimit {
 			t.Errorf("history arguments: %q %d", id, limit)
 		}
 		return []hub.Exchange{{At: time.UnixMilli(1700000000000), Prompt: "Fix it", Reply: "Fixed."}}, nil
-	}})
+	}}})
 	_, body := f.do("GET", "/api/sessions", "", nil)
 	var state struct {
 		Capabilities map[string]agentCapabilities `json:"capabilities"`
@@ -42,10 +42,10 @@ func TestHistoryCapabilitiesAndOpenCodeBackfill(t *testing.T) {
 
 func TestHistoryDoesNotQueueForASessionThatClosesDuringRead(t *testing.T) {
 	var f *fixture
-	f = fixtureWithHistory(t, map[string]History{"opencode": func(context.Context, string, int) ([]hub.Exchange, error) {
+	f = fixtureWithHistory(t, map[string]History{"opencode": {Exchanges: func(context.Context, string, int) ([]hub.Exchange, error) {
 		f.hub.Retire("opencode", -time.Second)
 		return []hub.Exchange{{At: time.Now(), Prompt: "Lost session", Reply: "Done"}}, nil
-	}})
+	}}})
 	f.post("/api/bridge/poll", `{"agent":"opencode","sessionId":"ses_history"}`)
 	if code := f.post("/api/sessions/ses_history/backfill", `{}`); code != http.StatusConflict {
 		t.Fatalf("closed session = %d", code)
@@ -64,9 +64,9 @@ func TestExchangesBeforeTheLatestAreReadAsAskedFor(t *testing.T) {
 		{At: at(4), Prompt: "three", Reply: "Did three."},
 		{At: at(5), Prompt: "four"},
 	}
-	f := fixtureWithHistory(t, map[string]History{"opencode": func(context.Context, string, int) ([]hub.Exchange, error) {
+	f := fixtureWithHistory(t, map[string]History{"opencode": {Exchanges: func(context.Context, string, int) ([]hub.Exchange, error) {
 		return record, nil
-	}})
+	}}})
 	f.post("/api/bridge/poll", `{"agent":"opencode","sessionId":"ses_history"}`)
 	type answer struct {
 		Exchanges []struct {

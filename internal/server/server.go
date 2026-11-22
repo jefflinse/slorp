@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/jefflinse/slorp/internal/claude"
@@ -88,9 +89,16 @@ type Feeds interface {
 	Rescan()
 }
 
-// History reads what was said in a session from its agent's own record,
-// oldest first and at most limit of it.
-type History func(ctx context.Context, sessionID string, limit int) ([]hub.Exchange, error)
+// History reads a session's own record, as its agent keeps it. Either
+// reading is nil where the agent's record cannot give it.
+type History struct {
+	// Exchanges returns what was said in a session, oldest first and at
+	// most limit of it.
+	Exchanges func(ctx context.Context, sessionID string, limit int) ([]hub.Exchange, error)
+	// Reply returns in full the latest message the agent wrote in a session
+	// that ends with ends, empty when the record holds none.
+	Reply func(ctx context.Context, sessionID, ends string) (string, error)
+}
 
 type agentCapabilities struct {
 	History       bool `json:"history"`
@@ -284,7 +292,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 	epoch := strconv.FormatInt(time.Now().UnixNano(), 36)
 	capabilities := map[string]agentCapabilities{}
 	for agent, read := range history {
-		capabilities[agent] = agentCapabilities{History: read != nil}
+		capabilities[agent] = agentCapabilities{History: read.Exchanges != nil}
 	}
 	for agent, launcher := range launchers {
 		c := capabilities[agent]
@@ -801,6 +809,38 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		edited(w, k.RemoveProfile(r.PathValue("id")))
 	})
 
+	mux.HandleFunc("POST /api/handoffs", func(w http.ResponseWriter, r *http.Request) {
+		var in kb.Handoff
+		if !readJSON(w, r, &in) {
+			return
+		}
+		id, err := k.AddHandoff(in)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		h.Touch()
+		writeJSON(w, http.StatusOK, map[string]string{"id": id})
+	})
+
+	// A change to a handoff says only what is changed.
+	mux.HandleFunc("POST /api/handoffs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var said json.RawMessage
+		if !readJSON(w, r, &said) {
+			return
+		}
+		edited(w, k.EditHandoff(r.PathValue("id"), func(h *kb.Handoff) error {
+			if json.Unmarshal(said, h) != nil {
+				return errors.New("bad request body")
+			}
+			return nil
+		}))
+	})
+
+	mux.HandleFunc("DELETE /api/handoffs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		edited(w, k.RemoveHandoff(r.PathValue("id")))
+	})
+
 	mux.HandleFunc("POST /api/sessions/{id}/effort", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Effort string `json:"effort"`
@@ -821,7 +861,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			http.Error(w, "no such session", http.StatusNotFound)
 			return nil, false
 		}
-		read := history[sessions[at].Agent]
+		read := history[sessions[at].Agent].Exchanges
 		if read == nil {
 			http.Error(w, "this agent keeps no record Slorp can read", http.StatusBadRequest)
 			return nil, false
@@ -837,6 +877,36 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		}
 		return exchanges, true
 	}
+
+	// The page asks for all of what a session last said, which Slorp keeps
+	// only the end of when it is long. whole is false when the rest could not
+	// be read from the session's own record, and why says what stood in the way.
+	mux.HandleFunc("GET /api/sessions/{id}/response", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		sessions := h.Sessions()
+		at := slices.IndexFunc(sessions, func(s hub.Session) bool { return s.ID == id })
+		if at < 0 {
+			http.Error(w, "no such session", http.StatusNotFound)
+			return
+		}
+		kept := sessions[at].LastReply
+		out := struct {
+			Text  string `json:"text"`
+			Whole bool   `json:"whole"`
+			Why   string `json:"why,omitempty"`
+		}{Text: kept, Whole: !replyCut(kept)}
+		if read := history[sessions[at].Agent].Reply; out.Whole {
+		} else if read == nil {
+			out.Why = "this agent keeps no record Slorp can read"
+		} else if said, err := read(r.Context(), id, strings.TrimLeft(kept, "…\uFFFD")); err != nil {
+			out.Why = err.Error()
+		} else if said == "" {
+			out.Why = "the session's record does not hold it"
+		} else {
+			out.Text, out.Whole = said, true
+		}
+		writeJSON(w, http.StatusOK, out)
+	})
 
 	// The page asks, for one session and only when the user says so, for its
 	// timeline to be filled in from the session's own record.
@@ -1482,6 +1552,13 @@ func localOnly(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// replyCut reports whether a session's last message, as Slorp keeps it, may
+// be only the end of what was said: a bridge sends at most claude.ReplyLimit
+// UTF-16 units of it, and a transcript gives that many runes.
+func replyCut(kept string) bool {
+	return len(utf16.Encode([]rune(kept))) >= claude.ReplyLimit
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {

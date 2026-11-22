@@ -638,6 +638,9 @@ button.ecard.new:hover { border-color: var(--ink3); color: var(--ink); }
 .modal.start .seg button:disabled { color: var(--ink3); opacity: 0.6; cursor: not-allowed; }
 .modal.start .mfoot { margin-top: 6px; }
 .modal.start .mfoot > span:first-child { flex: 1; min-width: 200px; }
+.modal.handoff { width: min(760px, 100%); }
+.modal.handoff textarea { min-height: 300px; font-size: 12.5px; line-height: 1.55; }
+.modal.handoff .none { margin: 0; }
 .epage { display: grid; grid-template-columns: minmax(0, 740px) minmax(240px, 360px); gap: 0 56px; align-items: start; }
 .epage aside { padding-top: 34px; }
 .epage aside .sec:first-child { margin-top: 0; }
@@ -709,6 +712,9 @@ button.ecard.new:hover { border-color: var(--ink3); color: var(--ink); }
 form.prompt { margin: 0 0 18px; }
 form.prompt textarea { display: block; width: 100%; min-height: 260px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); resize: vertical; font-size: 12.5px; line-height: 1.55; }
 form.prompt.global textarea { min-height: 92px; }
+form.prompt.handoff { margin-left: 44px; padding-left: 16px; border-left: 2px solid var(--line); }
+form.prompt.handoff textarea { min-height: 170px; }
+form.prompt.handoff input { display: block; width: 100%; margin-bottom: 8px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 13.5px; }
 form.prompt .send { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; color: var(--ink3); font-size: 12px; }
 form.prompt .send span:last-child { display: flex; gap: 8px; flex: none; }
 .card.set .why { max-width: 58ch; font-size: 13.5px; }
@@ -1019,7 +1025,7 @@ const viewOn = v => VIEWS.includes(v) && (v !== 'attention' || state.legacyAtten
 /* The views the top bar names, in its order; Settings is reached by its own button, and what the local model has done from the model's name. Pull requests are named only while GitHub is turned on to list them. */
 const nav = () => VIEWS.filter(v => viewOn(v) && v !== 'settings' && v !== 'log' && !(v === 'pulls' && pullsOff()));
 const VIEW_NAMES = { pulls: 'PRs' };
-const fresh = () => ({ view: 'home', sel: null, effortSel: null, effortOrder: null, hideEmpty: true, kbSel: 'questions', setSel: 'general', logKind: 'all', profileSel: null, promptSel: null, groupBy: 'effort', srcFilter: 'all', legacyAttention: false, pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', effortTab: 'sessions', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto', look: 'slorp',
+const fresh = () => ({ view: 'home', sel: null, effortSel: null, effortOrder: null, hideEmpty: true, kbSel: 'questions', setSel: 'general', logKind: 'all', profileSel: null, handoffSel: null, handoffWith: {}, handoffTo: {}, promptSel: null, groupBy: 'effort', srcFilter: 'all', legacyAttention: false, pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', effortTab: 'sessions', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto', look: 'slorp',
   handled: {}, moved: {}, sessMoved: {}, extra: [], arrived: {}, collapsed: {}, left: {}, showHandled: false, variant: {}, rawOpen: {},
   actSel: null, pullSel: null, journalSel: null, pullTab: 'talk', expanded: {}, kb: structuredClone(KB_SEED), seq: 100 });
 let state = fresh();
@@ -1755,7 +1761,7 @@ function draftStart(effort, profile) {
 function redraftStart(profile) {
   const was = startDraft, filed = starting;
   draftStart('', profile);
-  Object.assign(startDraft, { prompt: was.prompt, name: was.name });
+  Object.assign(startDraft, { prompt: was.prompt, name: was.name, from: was.from });
   if (!startDraft.dir) Object.assign(startDraft, { dir: was.dir, typing: was.typing });
   if (!starting) starting = filed;
   loadStartCatalog();
@@ -2328,7 +2334,7 @@ let capabilities = {};
 let platform = '', terminal = { apps: [], default: '' };
 const onMac = () => platform ? platform === 'darwin' : /Mac/.test(navigator.platform);
 const historyReading = new Set();
-let knowledge = { questions: [], context: [], routing: [], roles: [], workspaces: [], profiles: [] }, integrations = [], lookups = [], feeds = {}, pulls = [], limits = [], archive = [], plugins = {}, archiveDocs = {};
+let knowledge = { questions: [], context: [], routing: [], roles: [], workspaces: [], profiles: [], handoffs: [] }, integrations = [], lookups = [], feeds = {}, pulls = [], limits = [], archive = [], plugins = {}, archiveDocs = {};
 let providerLimits = [];
 /* Fetches a closed session's timeline, once per time it closes. */
 const archiveAsked = {};
@@ -2374,7 +2380,7 @@ async function refresh(force) {
     capabilities = data.capabilities || {};
     platform = data.platform || '';
     terminal = { apps: [], default: '', ...data.terminal };
-    knowledge = { roles: [], workspaces: [], profiles: [], ...(data.knowledge || knowledge) };
+    knowledge = { roles: [], workspaces: [], profiles: [], handoffs: [], ...(data.knowledge || knowledge) };
     adoptStartDefaults();
     integrations = data.integrations || [];
     lookups = data.lookups || [];
@@ -2857,7 +2863,7 @@ function detailTabs(s) {
     ${s.lastReply ? answered(s.lastReply) : '<div class="none">No response found for this session.</div>'}
     <div class="none mono" style="margin-top:12px">${esc(rawOf(s))}</div>${earlierBody(s)}`;
   return `<div class="tabs" role="tablist">${tab('source', 'Conversation')}${subs.length ? tab('subs', `Subagents<span class="n">${subs.length}</span>`) : ''}${tab('also', `Also In ${esc(effortById(effort).name)}<span class="n">${others.count}</span>`)}
-      ${on !== 'source' ? '' : `<span class="tools">${s.lastReply ? `<button class="btn" data-act="copyReply" data-id="${s.id}" title="Copy the response as it was written">Copy</button>` : ''}
+      ${on !== 'source' ? '' : `<span class="tools">${s.lastReply ? `<button class="btn" data-act="copyReply" data-id="${s.id}" title="Copy the response as it was written">Copy</button><button class="btn" data-act="handoffOpen" data-id="${s.id}" title="Send this response to another session, wrapped in a handoff of yours">Send To…</button>` : ''}
         <span class="seg" role="group" aria-label="How the response is shown"><button class="${state.sourceRaw ? '' : 'on'}" data-act="sourceRaw" data-on="0">Rendered</button><button class="${state.sourceRaw ? 'on' : ''}" data-act="sourceRaw" data-on="1">Raw</button></span></span>`}</div>
     <div class="tabbody">${on === 'also' ? others.html : on === 'subs' ? subsBody(s.id, subs, false, s.used) : source()}</div>`;
 }
@@ -3858,7 +3864,7 @@ function viewLog() {
 
 /* ───────────────────────── Settings ───────────────────────── */
 
-const SETTINGS = { general: 'General', start: 'Session Profiles', integrations: 'Integrations', model: 'Local Model', prompts: 'Prompts', keys: 'Keyboard' };
+const SETTINGS = { general: 'General', start: 'Session Profiles', handoffs: 'Handoffs', integrations: 'Integrations', model: 'Local Model', prompts: 'Prompts', keys: 'Keyboard' };
 /* One setting: what it is called, what it does, and what changes it. */
 const setting = (name, about, control) => `<div class="card set"><div class="body"><div class="nm">${name}</div><div class="why">${about}</div></div>${control}</div>`;
 const choice = (act, cur, options, about) => `<span class="seg" role="group" aria-label="${about}">${options.map(([to, name]) => `<button class="${to === cur ? 'on' : ''}" data-act="${act}" data-to="${to}">${name}</button>`).join('')}</span>`;
@@ -3996,6 +4002,135 @@ function profilesBody() {
   }).join('');
   return `${cards || '<div class="none">No profiles yet. Without one, the New Session dialog opens with nothing chosen.</div>'}
     <form class="add" data-form="profiles"><input name="name" data-keep="profiles-name" placeholder="Name, such as Reviews" maxlength="60" required autocomplete="off" aria-label="Name"><button class="btn go">Add Profile</button></form>`;
+}
+
+/* The handoffs: messages that carry what one session last said to another. What a handoff's text names between
+   double braces is filled in from the session it is sent from; anything else in braces is left as written. */
+const HANDOFF_VARS = [
+  ['response', 'what the session last said', s => s.lastReply || ''],
+  ['prompt', 'what you last said to it', s => s.lastPrompt || ''],
+  ['session', 'its name', s => s.label || ''],
+  ['directory', 'where it works', s => s.cwd || ''],
+  ['branch', 'the branch it is on', s => s.branch || ''],
+];
+const HANDOFF_STARTER = 'Another session has finished its work. Please review it and report what you find:\n\n---\n{{response}}\n---';
+const handoffById = id => knowledge.handoffs.find(h => h.id === id);
+const handoffText = (text, s) => text.replace(/\{\{\s*(\w+)\s*\}\}/g, (all, name) => { const v = HANDOFF_VARS.find(([k]) => k === name); return v ? v[2](s) : all; });
+/* Adds a handoff with a message to start from, and opens it to be edited. */
+function addHandoff(name, done) {
+  return fetch('/api/handoffs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, text: HANDOFF_STARTER }) })
+    .then(async res => {
+      if (!res.ok) throw new Error((await res.text()).trim() || res.status);
+      state.handoffSel = (await res.json()).id; save();
+      if (done) done();
+      refresh(true);
+    }).catch(serviceSaid);
+}
+/* The boxes a handoff is edited in, kept when Save is pressed. */
+function handoffForm(h) {
+  return `<form class="prompt handoff" data-form="handoff" data-id="${h.id}">
+      <input name="name" data-keep="handoff-${h.id}-name" value="${esc(h.name)}" maxlength="60" required autocomplete="off" aria-label="Handoff name">
+      <textarea name="text" class="mono" data-keep="handoff-${h.id}-text" maxlength="20000" spellcheck="false" required aria-label="Handoff message">${esc(h.text)}</textarea>
+      <div class="send"><span>${HANDOFF_VARS.map(([k, what]) => `<code class="mono">{{${k}}}</code> is ${what}`).join(', ')}.</span><span><button class="btn go">Save</button></span></div>
+    </form>`;
+}
+function handoffsBody() {
+  if (!handoffById(state.handoffSel)) state.handoffSel = null;
+  const cards = knowledge.handoffs.map(h => {
+    const open = state.handoffSel === h.id;
+    return `<div class="card profile" data-handoff="${h.id}"><span class="glyph">${esc(h.name[0].toUpperCase())}</span>
+      <div class="body"><div class="nm">${esc(h.name)}</div><div class="why">${esc(clip(h.text.replace(/\s+/g, ' '), 150))}</div></div>
+      <span class="does"><button class="btn" data-act="handoffSel" data-id="${h.id}" aria-expanded="${open}">${open ? 'Done' : 'Edit'}</button></span>
+      <button class="x" data-act="handoffRemove" data-id="${h.id}" title="Remove" aria-label="Remove">×</button></div>${open ? handoffForm(h) : ''}`;
+  }).join('');
+  return `${cards || '<div class="none">No handoffs yet. Without one, Send To sends a response just as it was written, unless you change it first.</div>'}
+    <form class="add" data-form="handoffs"><input name="name" data-keep="handoffs-name" placeholder="Name, such as Review Request" maxlength="60" required autocomplete="off" aria-label="Name"><button class="btn go">Add Handoff</button></form>`;
+}
+
+/* The response being sent on: the session it is from, all of what that session last said, the handoff it is
+   wrapped in, where it is going, and the message as first drawn. HANDOFF_NEW in place of a session sends it as the
+   first prompt of a new one. */
+let handoff = null;
+const HANDOFF_NEW = '__new';
+/* As much of a session's last message as the service keeps. One this long may be only the end of what was said,
+   and all of it is then read from the session's own record. */
+const REPLY_KEPT = 30000;
+/* Reads all of what the session a handoff is from last said, and draws the message from it. Where the record
+   could not give it, the message is drawn from the end that is kept and the dialog says why. */
+function readWhole(h) {
+  h.reading = true; h.whole = true; h.why = '';
+  fetch(`/api/sessions/${encodeURIComponent(h.from)}/response`)
+    .then(async res => { if (!res.ok) throw new Error((await res.text()).trim() || res.status); return res.json(); })
+    .then(data => { h.said = data.text; h.whole = !!data.whole; h.why = data.why || ''; })
+    .catch(err => { h.whole = false; h.why = err instanceof TypeError ? 'the Slorp service could not be reached' : err.message; })
+    .finally(() => { h.reading = false; if (handoff === h) { h.text = handoffDraft(); render(); } });
+}
+/* The sessions a response can be sent on to: the open ones that can be replied to, those of its own effort first. */
+function handoffTargets(from) {
+  const can = liveSessions()[0].filter(x => x.id !== from.id && x.canReply), near = x => (x.effort || 'unsorted') === (from.effort || 'unsorted');
+  return [can.filter(near), can.filter(x => !near(x))];
+}
+const handoffDraft = () => handoffText(handoffById(handoff.with)?.text || '{{response}}', { ...live.find(x => x.id === handoff.from), lastReply: handoff.said });
+/* Opens the dialog for a session, with the handoff last used from it and the session it last sent to, where both
+   are still there. With nowhere to send it, it is offered to a new session. */
+function openHandoff(id) {
+  const s = live.find(x => x.id === id);
+  if (!s?.lastReply) return false;
+  const targets = handoffTargets(s).flat(), was = state.handoffTo[id];
+  handoff = { from: id, said: s.lastReply, with: (handoffById(state.handoffWith[id]) || knowledge.handoffs[0])?.id || '', to: targets.some(x => x.id === was) ? was : targets.length ? '' : HANDOFF_NEW };
+  if (s.lastReply.length >= REPLY_KEPT) readWhole(handoff);
+  else handoff.text = handoffDraft();
+  modal = 'handoff'; modalFocus = true;
+}
+function handoffModal() {
+  const s = handoff && live.find(x => x.id === handoff.from);
+  if (!s) { modal = handoff = null; return ''; }
+  const [near, far] = handoffTargets(s), to = handoff.to = handoff.to === HANDOFF_NEW || near.concat(far).some(x => x.id === handoff.to) ? handoff.to : '';
+  const option = x => `<option value="${esc(x.id)}" ${x.id === to ? 'selected' : ''}>${esc(clip(x.label, 70))} · ${esc(KINDS[x.agent] || x.agent)} · ${statusOf(x)[1]}</option>`;
+  const group = (name, list) => list.length ? `<optgroup label="${esc(name)}">${list.map(option).join('')}</optgroup>` : '';
+  const notes = [handoff.whole === false && `Only the end of the response is here: Slorp keeps that much, and could not read the rest from the session's record${handoff.why ? ` (${esc(handoff.why)})` : ''}. <button type="button" class="btn" data-act="handoffRead">Read It Again</button>`,
+    s.status === 'working' && 'This session is working again, so this is what it said before.'].filter(Boolean);
+  return `<div class="veil"><div class="modal start handoff" data-act="noop" role="dialog" aria-label="Send To Another Session">
+    <h2>Send To Another Session</h2>
+    <form data-form="handoffSend">
+      <label><span>Handoff</span><select class="btn" data-change="handoffWith" aria-label="Handoff">${knowledge.handoffs.map(h => `<option value="${esc(h.id)}" ${h.id === handoff.with ? 'selected' : ''}>${esc(h.name)}</option>`).join('')}<option value="" ${handoffById(handoff.with) ? '' : 'selected'}>None, Just the Response</option></select></label>
+      <label><span>Send To</span><select class="btn" data-change="handoffTo" aria-label="Send to" ${to ? '' : 'data-first'}>${to ? '' : '<option value="" selected disabled>Choose a Session…</option>'}${group(`In ${effortById(s.effort || 'unsorted').name}`, near)}${group(near.length ? 'Elsewhere' : 'Open Sessions', far)}<option value="${HANDOFF_NEW}" ${to === HANDOFF_NEW ? 'selected' : ''}>A New Session…</option></select></label>
+      ${handoff.reading ? '<div class="none wide" role="status">Reading the whole response from the session\'s record…</div>'
+        : `<label class="wide"><span>Message <i>from ${esc(clip(s.label, 60))}; change anything before it goes</i></span><textarea name="text" class="mono" data-keep="handoff-text" spellcheck="false" required ${to ? 'data-first' : ''}>${esc(handoff.text)}</textarea></label>`}
+      ${notes.length ? `<div class="none wide" role="status">${notes.join(' ')}</div>` : ''}
+      ${knowledge.handoffs.length ? '' : '<div class="none wide">You have no handoffs yet. One wraps the response in words of yours. <button type="button" class="btn" data-act="handoffEdit">Write One</button></div>'}
+      <div class="mfoot wide"><span>${to === HANDOFF_NEW ? 'Opens the New Session dialog with this as its prompt, in the same directory.' : 'Arrives as your next message once that session is idle.'}</span>
+        <span class="bar"><button type="button" class="btn" data-act="modalClose">Cancel</button><button class="btn go" ${handoff.sending || handoff.reading ? 'disabled' : to ? '' : 'disabled title="Choose where to send it."'}>${handoff.sending ? 'Sending…' : to === HANDOFF_NEW ? 'Continue…' : 'Send'}</button></span></div>
+    </form>
+  </div></div>`;
+}
+/* Sends the message in the dialog on: to an open session as the user's next message there, or into the New
+   Session dialog as its prompt. The handoff and the session chosen are remembered for the session it came from,
+   and that session for the one it went to, so that the answer can be sent back as readily. */
+function sendHandoff(text) {
+  const s = live.find(x => x.id === handoff?.from), to = handoff?.to, sent = handoff;
+  if (!s || !to || sent.sending) return;
+  state.handoffWith[s.id] = handoff.with;
+  if (to === HANDOFF_NEW) {
+    if (launching || partialStart || startAttempt) { toast('A session is already being started. Finish with that one first.'); return; }
+    openStart(s.effort || '', s.cwd);
+    Object.assign(startDraft, { prompt: text, from: s.id });
+    handoff = null; save(); render();
+    return;
+  }
+  const target = live.find(x => x.id === to);
+  if (!target) { toast('That session is no longer open'); render(); return; }
+  sent.sending = true; render();
+  fetch(`/api/sessions/${encodeURIComponent(to)}/reply`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) })
+    .then(async res => {
+      if (!res.ok) throw new Error((await res.text()).trim() || res.status);
+      state.handoffTo[s.id] = to; state.handoffTo[to] ??= s.id;
+      if (handoff === sent) { handoff = null; if (modal === 'handoff') modal = null; }
+      toast(`Sent to ${clip(target.label, 50)}`, () => showSession(to), 'Open It');
+      save();
+    })
+    .catch(serviceSaid)
+    .finally(() => { sent.sending = false; refresh(true); });
 }
 
 /* The agents Slorp watches, each with the plugin that lets it be answered from here. */
@@ -4187,6 +4322,7 @@ const keys = () => [[`1 – ${nav().length}`, nav().map(v => VIEW_NAMES[v] || ca
 const SETTINGS_LEDE = {
   general: 'How this page looks and behaves.',
   start: 'A profile is a named set of what a new session starts with: what it runs on, where, and how. The New Session dialog offers them and opens with the default one, when there is one. Whatever a profile sets can still be changed there before a session is started.',
+  handoffs: 'A handoff is a message that carries what one session last said to another, wrapped however you like. Send To, beside a session\'s latest response, offers them. Nothing is sent until you have read it over and pressed Send.',
   integrations: 'What Slorp is connected to: the agents whose sessions it watches, and the tools it reads.',
   model: 'Summaries, suggested replies, automatic filing and wrap-ups are written by a model on a server you choose, usually one running on this machine. What your sessions say is sent to that server and nowhere else.',
   prompts: 'What the local model is told before each piece of work it does for Slorp. A change takes effect with the next thing the model writes.',
@@ -4195,6 +4331,7 @@ const SETTINGS_LEDE = {
 function settingsBody(sec) {
   if (sec === 'general') return generalBody();
   if (sec === 'start') return live ? profilesBody() : '<div class="none">Sessions are started through the Slorp service, which this demo is not connected to.</div>';
+  if (sec === 'handoffs') return live ? handoffsBody() : '<div class="none">Handoffs are kept by the Slorp service, which this demo is not connected to.</div>';
   if (sec === 'model') return live ? modelBody() : '<div class="none">The demo has no local model to report on.</div>';
   if (sec === 'prompts') return live ? promptsBody() : '<div class="none">The demo has no local model to instruct.</div>';
   if (sec === 'keys') return `<dl class="facts keys">${keys().map(([k, what]) => `<dt class="mono">${k}</dt><dd>${what}</dd>`).join('')}</dl>`;
@@ -4209,7 +4346,7 @@ function settingsBody(sec) {
 function viewSettings() {
   if (!SETTINGS[state.setSel]) state.setSel = 'general';
   const on = Object.values(plugins).filter(p => p.installed && p.enabled).length + integrations.filter(i => i.enabled).length;
-  const aside = { start: live ? knowledge.profiles.length || '' : '', integrations: live ? on : '', model: live ? (summarizer.off ? 'off' : summarizer.model ? 'on' : 'none') : '',
+  const aside = { start: live ? knowledge.profiles.length || '' : '', handoffs: live ? knowledge.handoffs.length || '' : '', integrations: live ? on : '', model: live ? (summarizer.off ? 'off' : summarizer.model ? 'on' : 'none') : '',
     prompts: live ? (prompts().global ? 1 : 0) + Object.keys(prompts().tasks).length || '' : '' };
   const nav = Object.entries(SETTINGS).map(([k, name]) => `<button class="${state.setSel === k ? 'on' : ''}" data-act="setSel" data-s="${k}">${name}<span>${aside[k] ?? ''}</span></button>`).join('');
   return `<div class="split narrow">
@@ -4316,7 +4453,7 @@ function draw() {
   document.documentElement.style.setProperty('--notice', `${44 * notices.length}px`);
   $('#notice').innerHTML = notices.join('');
   $('#main').innerHTML = main;
-  $('#modal').innerHTML = modal === 'search' ? searchModal() : modal === 'start' ? startModal() : modal === 'resumeError' ? retainedSessionModal(partialResume) : modal === 'effortDelete' ? deleteModal() : modal === 'effortMerge' ? mergeModal() : modal === 'upgrade' ? upgradeModal() : modal === 'rewrite' ? rewriteModal() : '';
+  $('#modal').innerHTML = modal === 'search' ? searchModal() : modal === 'start' ? startModal() : modal === 'resumeError' ? retainedSessionModal(partialResume) : modal === 'effortDelete' ? deleteModal() : modal === 'effortMerge' ? mergeModal() : modal === 'upgrade' ? upgradeModal() : modal === 'rewrite' ? rewriteModal() : modal === 'handoff' ? handoffModal() : '';
   if (modalFocus) { modalFocus = false; $('#q, #modal [data-first]')?.focus(); }
   // The toggle shows only where there is more of what the user said to see.
   document.querySelectorAll('.said').forEach(el => {
@@ -4384,6 +4521,11 @@ const actions = {
   profileTo: d => { const p = profileById(d.id); if (p) setProfile(p, { [d.key]: d.key === 'engine' ? d.to : d.to === 'on' }); },
   profileCatalogRetry: d => { loadProfileCatalog(d.dir, true); },
   profileRemove: d => { api('DELETE', `/api/profiles/${d.id}`, null, () => toast('Removed')); return false; },
+  handoffSel: d => { state.handoffSel = state.handoffSel === d.id ? null : d.id; },
+  handoffRemove: d => { api('DELETE', `/api/handoffs/${d.id}`, null, () => toast('Removed')); return false; },
+  handoffOpen: d => openHandoff(d.id),
+  handoffRead: () => { if (handoff && !handoff.reading) readWhole(handoff); },
+  handoffEdit: () => { modal = handoff = null; state.setSel = 'handoffs'; go('settings'); },
   lookTo: d => { state.look = d.to; },
   setSel: d => { state.setSel = d.s; },
   logKind: d => { state.logKind = d.k; logShown = LOG_PAGE; },
@@ -4706,6 +4848,8 @@ const changes = {
     if (profileDirTyping) queueMicrotask(() => $(`[data-keep="profile-${p.id}-dir"]`)?.focus());
   },
   roleAttention: (d, el) => { api('POST', `/api/roles/${d.id}`, { attention: el.value }); return false; },
+  handoffWith: (d, el) => { handoff.with = el.value; if (!handoff.reading) el.form.elements.text.value = handoff.text = handoffDraft(); },
+  handoffTo: (d, el) => { handoff.to = el.value; },
   move: (d, el) => {
     if (!el.value) return false;
     const prev = state.moved[d.id];
@@ -4844,11 +4988,13 @@ document.addEventListener('submit', e => {
       catch (err) { toast(`Could not prepare a safe launch request: ${err.message}`); return; }
     }
     launching = true;
+    const from = startDraft.from;
     const inTerminal = startDraft.terminal && lifecycleCap(oc ? 'opencode' : 'claude', 'attach') && !!terminalApp();
     launchSession('/api/sessions', body, started => {
       startAttempt = null;
       if (modal === 'start') modal = null;
       startDraft.prompt = startDraft.name = '';
+      if (from && started.sessionId) { state.handoffTo[from] = started.sessionId; state.handoffTo[started.sessionId] = from; delete startDraft.from; }
       if (inTerminal && started.sessionId) terminalWhenUp.set(started.sessionId, Date.now());
       const dir = f.dir.trim(), keep = !workspaceAt(dir) && (() => { addWorkspace(dir.replace(/\/+$/, '').split('/').pop() || dir, dir); });
       toast(inTerminal && !started.sessionId ? 'Started. Open it in a terminal from its page once it shows up.' : 'Started. It will show up here in a moment.', keep, 'Save its directory as a workspace');
@@ -4863,6 +5009,12 @@ document.addEventListener('submit', e => {
   }
   if (sec === 'workspaces') { addWorkspace(f.name.trim(), f.dir, clear); return; }
   if (sec === 'profiles') { addProfile({ name: f.name.trim() }, clear); return; }
+  if (sec === 'handoffs') { addHandoff(f.name.trim(), clear); return; }
+  if (sec === 'handoff') {
+    ask(`/api/handoffs/${form.dataset.id}`, { name: f.name, text: f.text }, () => { form.querySelectorAll('[data-keep]').forEach(el => el.removeAttribute('data-keep')); toast('Saved'); });
+    return;
+  }
+  if (sec === 'handoffSend') { if (f.text?.trim()) sendHandoff(f.text.trim()); return; }
   if (live) { api('POST', `/api/kb/${sec}`, { ...f, origin: 'you wrote this down' }); clear(); return; }
   if (sec === 'questions') state.kb.questions.unshift({ id, text: f.text, effort: f.effort, age: 0, origin: 'you wrote this down' });
   else state.kb[sec].push({ id, text: f.text });
@@ -4878,7 +5030,7 @@ document.addEventListener('keydown', e => {
   if ((e.metaKey || e.ctrlKey) && e.key === 'n' && live) { e.preventDefault(); if (modal !== 'start') { openStart(''); render(); } return; }
   /* ⌘↵ in a message box presses the button that sends it. */
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && e.target.tagName === 'TEXTAREA') {
-    const form = e.target.closest('form[data-form="start"]');
+    const form = e.target.closest('form[data-form="start"], form[data-form="handoffSend"]');
     if (form) { e.preventDefault(); form.requestSubmit(); return; }
     const bar = e.target.nextElementSibling;
     const send = bar?.matches('.send') && [...bar.querySelectorAll('button')].pop();

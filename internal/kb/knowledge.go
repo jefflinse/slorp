@@ -64,6 +64,8 @@ type Knowledge struct {
 	Workspaces []Workspace `json:"workspaces"`
 	// Profiles are offered when a session is started.
 	Profiles []Profile `json:"profiles"`
+	// Handoffs are offered when what a session said is sent to another.
+	Handoffs []Handoff `json:"handoffs"`
 }
 
 // Sections of the knowledge base, as Add and Remove name them.
@@ -98,6 +100,7 @@ func (s *Store) Knowledge() Knowledge {
 		Roles:      append([]Role{}, k.Roles...),
 		Workspaces: append([]Workspace{}, k.Workspaces...),
 		Profiles:   append([]Profile{}, k.Profiles...),
+		Handoffs:   append([]Handoff{}, k.Handoffs...),
 	}
 }
 

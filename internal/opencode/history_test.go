@@ -280,3 +280,38 @@ func TestHistoryReadHonorsCancellation(t *testing.T) {
 		t.Fatalf("cancelled read = %v", err)
 	}
 }
+
+func TestReplyIsReadWhole(t *testing.T) {
+	long := strings.Repeat("二", historyReply+5)
+	raw := `{"info":{"id":"ses_history","revert":{"messageID":"msg_reverted"}},"messages":[
+	{"id":"msg_user","type":"user","time":{"created":1},"text":"Fix it"},
+	{"id":"msg_first","type":"assistant","time":{"created":2,"completed":3},"content":[{"type":"text","text":"Earlier. ` + long + `"}]},
+	{"id":"msg_answer","type":"assistant","time":{"created":4,"completed":5},"content":[{"type":"text","text":" Done. "},{"type":"tool","text":"ls"},{"type":"text","text":"` + long + `"}]},
+	{"id":"msg_running","type":"assistant","time":{"created":6},"content":[{"type":"text","text":"Still writing. ` + long + `"}]},
+	{"id":"msg_reverted","type":"assistant","time":{"created":7,"completed":8},"content":[{"type":"text","text":"Undone. ` + long + `"}]}]}`
+	kept := string([]rune(long)[5:])
+	if got, err := readReply(strings.NewReader(raw), "ses_history", kept); err != nil || got != "Done.\n\n"+long {
+		t.Errorf("reply = %d runes, %v; want all of the latest completed message, its text parts a blank line apart", len([]rune(got)), err)
+	}
+	if got, err := readReply(strings.NewReader(raw), "ses_history", "never said"); err != nil || got != "" {
+		t.Errorf("reply = %q, %v; want nothing for what was never said", got, err)
+	}
+	if _, err := readReply(strings.NewReader(raw), "ses_other", kept); err == nil {
+		t.Error("read a reply from another session's export")
+	}
+
+	t.Setenv("TMPDIR", t.TempDir())
+	a := historyCommand(t, `test "$1" = session && test "$2" = export && test "$3" = ses_history && test "$4" = --standalone || exit 2
+exec /bin/cat "$HOME/history.json"
+`)
+	put(t, filepath.Join(a.Home, "history.json"), raw)
+	if got, err := a.Reply(context.Background(), "ses_history", kept); err != nil || got != "Done.\n\n"+long {
+		t.Errorf("Reply = %d runes, %v; want the whole message from an export", len([]rune(got)), err)
+	}
+	if left, _ := os.ReadDir(os.TempDir()); len(left) != 0 {
+		t.Errorf("temporary exports were kept: %+v", left)
+	}
+	if _, err := a.Reply(context.Background(), "ses_../../other", kept); err == nil {
+		t.Error("accepted a session id that is not one")
+	}
+}

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jefflinse/slorp/internal/claude"
 	"github.com/jefflinse/slorp/internal/hub"
 	"github.com/jefflinse/slorp/internal/integrations"
 	"github.com/jefflinse/slorp/internal/kb"
@@ -125,7 +126,7 @@ func fixtureWithHistory(t *testing.T, histories map[string]History, extraPlugins
 			plugins[agent] = plugin
 		}
 	}
-	readers := map[string]History{"claude": rec.read}
+	readers := map[string]History{"claude": {Exchanges: rec.read, Reply: rec.reply}}
 	for agent, reader := range histories {
 		readers[agent] = reader
 	}
@@ -154,8 +155,10 @@ func (t *terminals) Open(_ context.Context, app, command string) error {
 
 type record struct {
 	exchanges []hub.Exchange
-	err       error
-	asked     []string
+	// said is the whole of what the session last said, as its record has it.
+	said  string
+	err   error
+	asked []string
 	// subagents are what each session is read as having started, by
 	// session, and reports what each reported, by session and subagent.
 	subagents map[string][]hub.Subagent
@@ -172,6 +175,14 @@ func (r *record) Report(sessionID, id string) (hub.SubagentReport, bool) {
 func (r *record) read(_ context.Context, sessionID string, limit int) ([]hub.Exchange, error) {
 	r.asked = append(r.asked, sessionID+" "+strconv.Itoa(limit))
 	return r.exchanges, r.err
+}
+
+func (r *record) reply(_ context.Context, sessionID, ends string) (string, error) {
+	r.asked = append(r.asked, sessionID+" ends "+strconv.Itoa(len(ends)))
+	if r.err != nil || !strings.HasSuffix(r.said, ends) {
+		return "", r.err
+	}
+	return r.said, nil
 }
 
 // do sends a request the way the web UI or a bridge would. edit may change
@@ -1675,5 +1686,111 @@ func TestProfilesOverHTTP(t *testing.T) {
 	}
 	if code, _ := f.do("DELETE", "/api/profiles/"+made.ID, "", nil); code != 204 || len(f.state().Knowledge.Profiles) != 0 {
 		t.Errorf("remove a profile = %d, leaving %+v", code, f.state().Knowledge.Profiles)
+	}
+}
+
+func TestHandoffsOverHTTP(t *testing.T) {
+	f := newFixture(t)
+	if _, body := f.do("GET", "/api/sessions", "", nil); !strings.Contains(body, `"handoffs":[]`) {
+		t.Errorf("state lacks an empty list of handoffs, which the page reads: %s", body)
+	}
+	code, body := f.do("POST", "/api/handoffs", `{"name":"Review","text":"Please review:\n{{response}}"}`, nil)
+	var made struct{ ID string }
+	if err := json.Unmarshal([]byte(body), &made); code != 200 || err != nil || made.ID == "" {
+		t.Fatalf("add a handoff = %d %s, want its id", code, body)
+	}
+	got := f.state().Knowledge.Handoffs
+	if len(got) != 1 || got[0].ID != made.ID || got[0].Name != "Review" || got[0].Text != "Please review:\n{{response}}" {
+		t.Fatalf("handoffs = %+v, want the one added", got)
+	}
+	for name, body := range map[string]string{"no name": `{"text":"x"}`, "a name another has": `{"name":"review","text":"x"}`, "no message": `{"name":"Empty"}`, "what is not JSON": `{`} {
+		if code := f.post("/api/handoffs", body); code != 400 {
+			t.Errorf("a handoff with %s = %d, want 400", name, code)
+		}
+	}
+	if code := f.post("/api/handoffs/"+made.ID, `{"id":"other","name":"Reviews"}`); code != 204 {
+		t.Fatalf("rename a handoff = %d", code)
+	}
+	got = f.state().Knowledge.Handoffs
+	if len(got) != 1 || got[0].ID != made.ID || got[0].Name != "Reviews" || got[0].Text != "Please review:\n{{response}}" {
+		t.Errorf("handoffs = %+v, want the one there was, changed only in its name", got)
+	}
+	for name, body := range map[string]string{"no name": `{"name":" "}`, "no message": `{"text":""}`, "what is not JSON": `{`} {
+		if code := f.post("/api/handoffs/"+made.ID, body); code != 400 {
+			t.Errorf("a handoff changed to have %s = %d, want 400", name, code)
+		}
+	}
+	if code := f.post("/api/handoffs/nope", `{"name":"X"}`); code != 400 {
+		t.Errorf("change a handoff that does not exist = %d, want 400", code)
+	}
+	if code, _ := f.do("DELETE", "/api/handoffs/"+made.ID, "", nil); code != 204 || len(f.state().Knowledge.Handoffs) != 0 {
+		t.Errorf("remove a handoff = %d, leaving %+v", code, f.state().Knowledge.Handoffs)
+	}
+}
+
+func TestWholeResponseIsReadFromTheRecord(t *testing.T) {
+	f := newFixture(t)
+	f.connect("s1")
+	ask := func() (out struct {
+		Text  string
+		Whole bool
+		Why   string
+	}) {
+		t.Helper()
+		code, body := f.do("GET", "/api/sessions/s1/response", "", nil)
+		if err := json.Unmarshal([]byte(body), &out); code != 200 || err != nil {
+			t.Fatalf("GET response = %d %s", code, body)
+		}
+		return out
+	}
+	say := func(text string) {
+		t.Helper()
+		said, _ := json.Marshal(text)
+		if code := f.post("/api/bridge/event", `{"sessionId":"s1","type":"turn.complete","text":`+string(said)+`}`); code != 204 {
+			t.Fatalf("turn.complete = %d", code)
+		}
+	}
+
+	say("Done.")
+	if got := ask(); got.Text != "Done." || !got.Whole || got.Why != "" || len(f.record.asked) != 0 {
+		t.Errorf("a short response = %+v after reading %v, want it as kept with nothing read", got, f.record.asked)
+	}
+
+	long := "It starts here. " + strings.Repeat("y", claude.ReplyLimit)
+	say(long)
+	if kept := f.state().Sessions[0].LastReply; kept != "…"+strings.Repeat("y", claude.ReplyLimit) {
+		t.Fatalf("kept %d runes of a long response, want only its end", len([]rune(kept)))
+	}
+	f.record.said = long
+	if got := ask(); got.Text != long || !got.Whole || got.Why != "" {
+		t.Errorf("a long response = %d runes, whole %v, %q; want all of it from the record", len([]rune(got.Text)), got.Whole, got.Why)
+	}
+	if want := []string{"s1 ends " + strconv.Itoa(claude.ReplyLimit)}; !reflect.DeepEqual(f.record.asked, want) {
+		t.Errorf("the record was asked %v, want %v: for what ends as the kept response does, without its mark", f.record.asked, want)
+	}
+
+	f.record.said = "Something else was said since."
+	if got := ask(); got.Text != "…"+strings.Repeat("y", claude.ReplyLimit) || got.Whole || got.Why == "" {
+		t.Errorf("a response the record lacks = whole %v, %q; want what is kept and why", got.Whole, got.Why)
+	}
+	f.record.said, f.record.err = long, errors.New("the transcript is gone")
+	if got := ask(); got.Whole || got.Why != "the transcript is gone" {
+		t.Errorf("a record that cannot be read = whole %v, %q; want why", got.Whole, got.Why)
+	}
+
+	exact := strings.Repeat("y", claude.ReplyLimit)
+	f.record.said, f.record.err = exact, nil
+	say(exact)
+	if got := ask(); got.Text != exact || !got.Whole {
+		t.Errorf("a response as long as is kept = whole %v, want it checked against the record and found whole", got.Whole)
+	}
+	f.post("/api/bridge/poll", `{"agent":"opencode","sessionId":"ses_other"}`)
+	said, _ := json.Marshal(long)
+	f.post("/api/bridge/event", `{"agent":"opencode","sessionId":"ses_other","type":"turn.complete","text":`+string(said)+`}`)
+	if code, body := f.do("GET", "/api/sessions/ses_other/response", "", nil); code != 200 || !strings.Contains(body, `"whole":false`) || !strings.Contains(body, "keeps no record") {
+		t.Errorf("a long response from an agent whose record cannot be read = %d %.200s, want what is kept and why", code, body)
+	}
+	if code, _ := f.do("GET", "/api/sessions/nope/response", "", nil); code != 404 {
+		t.Errorf("a session there is none of = %d, want 404", code)
 	}
 }

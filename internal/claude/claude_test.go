@@ -810,3 +810,44 @@ func TestSubagentsAreReadOnlyAsFarAsTheyAreNew(t *testing.T) {
 		t.Errorf("subagents = %+v, want what was read before kept and only the rest read", got)
 	}
 }
+
+func TestReplyIsReadWhole(t *testing.T) {
+	home := t.TempDir()
+	project := filepath.Join(home, ".claude", "projects", "-w")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	a := &Adapter{Home: home}
+	long := "Fixed it. " + strings.Repeat("y", ReplyLimit)
+	side := assistant(text("a subagent's answer"))
+	side["isSidechain"] = true
+	appendTo(t, filepath.Join(project, "abc-123.jsonl"), strings.Join([]string{
+		line(t, user("fix the rounding")),
+		line(t, assistant(text("Fixed it the first time. "+strings.Repeat("y", ReplyLimit)))),
+		line(t, user("again")),
+		line(t, assistant(text(" "+long+" "), map[string]any{"type": "tool_use", "name": "Bash"})),
+		line(t, side),
+		"not JSON\n",
+		line(t, user("and ship it")),
+		line(t, assistant(text("Shipping."))),
+	}, ""))
+
+	kept := strings.TrimPrefix(Tail(long, ReplyLimit), "…")
+	if got, err := a.Reply("abc-123", kept); err != nil || got != long {
+		t.Errorf("Reply = %d runes, %v; want all %d of the latest message ending as the kept one does", len([]rune(got)), err, len([]rune(long)))
+	}
+	if got, err := a.Reply("abc-123", "Shipping."); err != nil || got != "Shipping." {
+		t.Errorf("Reply = %q, %v; want the message written since", got, err)
+	}
+	if got, err := a.Reply("abc-123", "a subagent's answer"); err != nil || got != "" {
+		t.Errorf("Reply = %q, %v; want nothing for what only a subagent said", got, err)
+	}
+	if got, err := a.Reply("abc-123", "never said"); err != nil || got != "" {
+		t.Errorf("Reply = %q, %v; want nothing for what was never said", got, err)
+	}
+	for _, id := range []string{"nope", "", "../abc-123"} {
+		if _, err := a.Reply(id, kept); err == nil {
+			t.Errorf("Reply(%q) read a transcript there is none of", id)
+		}
+	}
+}
