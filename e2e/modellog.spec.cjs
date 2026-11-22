@@ -89,7 +89,7 @@ test('the local model\'s name opens onto the last five things it did and what ea
 test('the whole log lists everything, narrows by kind, leads to what each was about, and follows the model', async t => {
   const { page, menu, rows, reads, did } = await world(t)
   await menu.locator('summary').click()
-  await menu.getByRole('button', { name: 'See everything it has done' }).click()
+  await menu.getByRole('button', { name: 'See Everything It Has Done' }).click()
   await page.waitForFunction(() => document.querySelectorAll('#main .srow.act').length === 7)
   assert.equal(await page.evaluate(() => location.hash), '#log')
   assert.equal(reads.length, 1)
@@ -129,9 +129,9 @@ test('a long log is shown a hundred at a time', async t => {
   const { page, rows } = await world(t, many)
   await page.evaluate(() => { location.hash = '#log' })
   await page.waitForFunction(() => document.querySelectorAll('#main .srow.act').length === 100)
-  await page.getByRole('button', { name: 'Show 30 more' }).click()
+  await page.getByRole('button', { name: 'Show 30 More' }).click()
   assert.equal(await rows.count(), 130)
-  assert.equal(await page.getByRole('button', { name: /Show .* more/ }).count(), 0)
+  assert.equal(await page.getByRole('button', { name: /Show .* More/ }).count(), 0)
 })
 
 test('before the model has done anything the top bar and the log say so, and Settings leads to the log', async t => {
@@ -141,8 +141,8 @@ test('before the model has done anything the top bar and the log say so, and Set
   assert.equal(await menu.getByRole('button').count(), 0)
   await page.keyboard.press('Escape')
   await page.locator('[data-act="view"][data-view="settings"]').click()
-  await page.getByRole('button', { name: /Local model/ }).click()
-  await page.getByRole('button', { name: 'See the log' }).click()
+  await page.getByRole('button', { name: /Local Model/ }).click()
+  await page.getByRole('button', { name: 'See the Log' }).click()
   assert.equal(await page.evaluate(() => location.hash), '#log')
-  assert.match(await page.locator('#main .detail').innerText(), /What the local model has done[\s\S]*Nothing yet/)
+  assert.match(await page.locator('#main .detail').innerText(), /What the Local Model Has Done[\s\S]*Nothing yet/)
 })

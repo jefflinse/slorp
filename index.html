@@ -754,9 +754,9 @@ button.ecard.new:hover { border-color: var(--ink3); color: var(--ink); }
    stand in for what a local model would write; `raw` and `lines` stand in for
    what the source actually said. */
 
-const KINDS = { claude: 'Claude Code', opencode: 'OpenCode', slack: 'Slack', worker: 'Worker', local: 'Local LLM', kb: 'Knowledge base', github: 'GitHub' };
+const KINDS = { claude: 'Claude Code', opencode: 'OpenCode', slack: 'Slack', worker: 'Worker', local: 'Local LLM', kb: 'Knowledge Base', github: 'GitHub' };
 /* Blocking: you are holding up another person. Awaiting: something of your own is stopped until you act. */
-const URGENCY = { blocking: 'Blocking other people', awaiting: 'Awaiting you', whenever: 'Whenever' };
+const URGENCY = { blocking: 'Blocking Other People', awaiting: 'Awaiting You', whenever: 'Whenever' };
 const STATUS = { waiting: 'awaiting you', error: 'failed', running: 'running', done: 'finished', idle: 'idle' };
 
 const EFFORTS = [
@@ -923,7 +923,7 @@ const ITEMS = [
       'An unplaced session wrote a JSON diff script for event envelopes. Best guess is the work fork, at 41%.'],
     lines: [['summarizer', 'candidates: fork 0.41 · snap 0.22 · slorp 0.08 · none 0.29'],
       ['summarizer', 'evidence: mentions "envelope", "v0.13", "v0.14"; cwd matches no routing hint']] },
-  { id: 'a10', effort: 'slorp', kind: 'kb', src: 'Knowledge base', urgency: 'whenever', age: 12960,
+  { id: 'a10', effort: 'slorp', kind: 'kb', src: 'Knowledge Base', urgency: 'whenever', age: 12960,
     title: 'A question you parked nine days ago is about to matter',
     raw: 'kb open-question q3 · age 9d · no activity',
     ask: 'Decide where the knowledge base lives, or let it sit a little longer.',
@@ -981,9 +981,9 @@ const KB_SEED = {
   ],
 };
 const KB_SECTIONS = {
-  questions: { name: 'Open questions', lede: 'Things you have not decided yet. They resurface on Home when something starts depending on the answer.' },
-  context: { name: 'Standing context', lede: 'Facts the summarizer should always know. Plain sentences; it reads them before every pass.' },
-  routing: { name: 'Routing hints', lede: 'How things get filed under efforts. Written in plain language, and added to whenever you correct a guess.' },
+  questions: { name: 'Open Questions', lede: 'Things you have not decided yet. They resurface on Home when something starts depending on the answer.' },
+  context: { name: 'Standing Context', lede: 'Facts the summarizer should always know. Plain sentences; it reads them before every pass.' },
+  routing: { name: 'Routing Hints', lede: 'How things get filed under efforts. Written in plain language, and added to whenever you correct a guess.' },
 };
 
 /* ───────────────────────── State ───────────────────────── */
@@ -1174,7 +1174,7 @@ function briefing(items) {
   }
   const day = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
   return `<div class="brief"><div class="when"><span class="label">${day}</span><span class="label">${live ? '' : spark}briefing</span></div><p>${esc(text)}</p>
-    ${live ? `<button class="link ${modelless() ? 'off' : ''}" data-act="wrapOpen" style="margin-top:8px;font-size:12.5px" title="${modelless() ? `${NO_MODEL} to write a wrap-up.` : "What moved today, by effort, on today's page of the journal (w)"}">Wrap up the day ›</button>` : ''}</div>`;
+    ${live ? `<button class="link ${modelless() ? 'off' : ''}" data-act="wrapOpen" style="margin-top:8px;font-size:12.5px" title="${modelless() ? `${NO_MODEL} to write a wrap-up.` : "What moved today, by effort, on today's page of the journal (w)"}">Wrap Up the Day ›</button>` : ''}</div>`;
 }
 
 function handledFooter() {
@@ -1195,14 +1195,14 @@ function itemDetail(it) {
   const answer = mockAnswer(it);
   return `<div class="inner">
     <div class="crumb"><button class="eff" data-act="effort" data-id="${eff.id}">${effortMark(eff, 's')}${esc(eff.name)} ›</button>${kindBadge(it.kind, it.src)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span></div>
-    <div class="titled"><h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>${itemMenu(it, `<button data-act="park" data-id="${it.id}">Park as open question</button>
-      ${menuPart('move', 'Move to', menuTo('moveTo', it.id, EFFORTS.concat(UNSORTED).filter(e => e.id !== eff.id).map(e => [e.id, e.name])))}`)}</div>
-    <div class="need"><div class="label">${spark}What's needed from you</div><p class="ask">${esc(it.ask)}</p>${answer}</div>
+    <div class="titled"><h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>${itemMenu(it, `<button data-act="park" data-id="${it.id}">Park as Open Question</button>
+      ${menuPart('move', 'Move To', menuTo('moveTo', it.id, EFFORTS.concat(UNSORTED).filter(e => e.id !== eff.id).map(e => [e.id, e.name])))}`)}</div>
+    <div class="need"><div class="label">${spark}What's Needed From You</div><p class="ask">${esc(it.ask)}</p>${answer}</div>
     <div class="sec"><div class="label"><span>${spark}Recap</span><button data-act="rephrase" data-id="${it.id}">↻ ${v === 0 ? 'Shorter' : 'Fuller'}</button></div>
       <p class="prose" id="summary">${esc(it.summary[v])}</p></div>
-    <div class="sec"><div class="label"><span>From the source, verbatim</span><button data-act="toggleRaw" data-id="${it.id}">${rawOpen ? 'Hide' : 'Show'}</button></div>
+    <div class="sec"><div class="label"><span>From the Source, Verbatim</span><button data-act="toggleRaw" data-id="${it.id}">${rawOpen ? 'Hide' : 'Show'}</button></div>
       ${rawOpen ? rawBlock(it.lines) : `<div class="none mono">${esc(it.raw)}</div>`}</div>
-    <div class="sec"><div class="label"><span>Also going on in ${esc(eff.name)}</span></div>
+    <div class="sec"><div class="label"><span>Also Going On in ${esc(eff.name)}</span></div>
       ${siblings.length ? siblings.map(s => sessionRow(s)).join('') : '<div class="none">Nothing else is running here.</div>'}</div>
   </div>`;
 }
@@ -1234,7 +1234,7 @@ function viewAttention() {
   return `<div class="split ${sided ? 'sided' : ''} ${sided && state.sideShut ? 'shut' : ''}">
     <section class="pane list" data-scroll="att-list">
       ${briefing(all)}
-      <div class="listbar"><span class="label">Needs you</span><span class="segs"><span class="seg" role="group" aria-label="Group by">${seg}</span>
+      <div class="listbar"><span class="label">Needs You</span><span class="segs"><span class="seg" role="group" aria-label="Group by">${seg}</span>
         <span class="seg" role="group" aria-label="How much each row shows" title="Short rows show only the title, how long ago, and the description.">${rows}</span></span></div>
       ${chips}
       ${groups}
@@ -1273,7 +1273,7 @@ function sessionRow(s, from) {
 /* How one of the demo's items is answered: the efforts it could be filed under, or its suggested replies and a box. */
 function mockAnswer(it) {
   if (it.route) return `<div class="replies">${EFFORTS.map(e => `<button class="btn" data-act="route" data-id="${it.id}" data-effort="${e.id}">${esc(e.name)}</button>`).join('')}
-      <button class="btn quiet" data-act="dismiss" data-id="${it.id}">Leave unsorted</button></div>`;
+      <button class="btn quiet" data-act="dismiss" data-id="${it.id}">Leave Unsorted</button></div>`;
   const quick = (it.replies || []).map((r, i) => `<button class="btn ${i === 0 ? 'go' : ''}" data-act="reply" data-id="${it.id}" data-text="${esc(r)}">${esc(r)}</button>`).join('');
   return `${quick ? `<div class="replies">${quick}</div>` : ''}
       <textarea id="reply" data-id="${it.id}" data-keep="item-${it.id}" class="${it.draft ? 'drafted' : ''}" placeholder="Or say something else…">${esc(it.draft || '')}</textarea>
@@ -1296,16 +1296,16 @@ function queueItem(it, open) {
   if (s) {
     answer = answerBox(s, it);
     menu = sessionMenu(s, it);
-    where = `<button class="btn quiet" data-act="openItem" data-id="${it.id}">Open session ›</button>`;
+    where = `<button class="btn quiet" data-act="openItem" data-id="${it.id}">Open Session ›</button>`;
   } else if (it.feed) {
     answer = `<div class="replies">${!point && /^https:\/\//.test(it.url || '') ? `<a class="btn go" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">Open on ${esc(it.src)} ↗</a>` : ''}</div>`;
-    menu = itemMenu(it, `<button data-act="livePark" data-id="${it.id}">Park as open question</button>
+    menu = itemMenu(it, `<button data-act="livePark" data-id="${it.id}">Park as Open Question</button>
       ${filingParts(it.pull, it.repo, it.effort, it.effortVia)}`);
-    where = p ? `<button class="btn quiet" data-act="openItem" data-id="${it.id}">Its discussion ›</button>` : '';
+    where = p ? `<button class="btn quiet" data-act="openItem" data-id="${it.id}">Its Discussion ›</button>` : '';
   } else {
     answer = mockAnswer(it);
-    menu = itemMenu(it, `<button data-act="park" data-id="${it.id}">Park as open question</button>
-      ${menuPart('move', 'Move to', menuTo('moveTo', it.id, EFFORTS.concat(UNSORTED).filter(e => e.id !== effortOf(it)).map(e => [e.id, e.name])))}`);
+    menu = itemMenu(it, `<button data-act="park" data-id="${it.id}">Park as Open Question</button>
+      ${menuPart('move', 'Move To', menuTo('moveTo', it.id, EFFORTS.concat(UNSORTED).filter(e => e.id !== effortOf(it)).map(e => [e.id, e.name])))}`);
   }
   return `<div class="qi open ${it.id === freshId ? 'fresh' : ''}" style="${kindColor(it.kind)}">${head}
     <div class="need qb">${ask}${answer}<div class="qf"><span>${where}</span>${menu}</div></div></div>`;
@@ -1322,8 +1322,8 @@ function turnItem(s, open) {
   if (!open) return `<div class="qi" style="${kindColor(s.agent)}">${head}</div>`;
   return `<div class="qi open" style="${kindColor(s.agent)}">${head}
     <div class="need qb"><div class="qsaid" data-scroll="turn-${esc(s.id)}">${md(s.lastReply)}</div>${answerBox(s)}
-      <div class="qf"><button class="btn quiet" data-act="journalSession" data-id="${esc(s.id)}">Open session ›</button>
-        <span class="acts"><button class="btn quiet" data-act="turnLeave" data-id="${esc(s.id)}" title="Set it aside until it does something more (e)">Not now</button>${sessionMenu(s)}</span></div></div></div>`;
+      <div class="qf"><button class="btn quiet" data-act="journalSession" data-id="${esc(s.id)}">Open Session ›</button>
+        <span class="acts"><button class="btn quiet" data-act="turnLeave" data-id="${esc(s.id)}" title="Set it aside until it does something more (e)">Not Now</button>${sessionMenu(s)}</span></div></div></div>`;
 }
 
 /* Home's queue: what needs the user, the most pressing first, with what has been handled behind a button,
@@ -1331,14 +1331,14 @@ function turnItem(s, open) {
 function homeQueue() {
   const items = queue(), done = allItems().filter(i => !isActive(i)), turns = yourTurn(), shown = turnsShown(), order = homeOrder();
   if (!order.includes(state.sel)) state.sel = order[0] || null;
-  const needs = !items.length && !done.length && turns.length ? '' : `<div class="sec"><div class="label"><span>Needs you${items.length ? ` (${items.length})` : ''}</span>
+  const needs = !items.length && !done.length && turns.length ? '' : `<div class="sec"><div class="label"><span>Needs You${items.length ? ` (${items.length})` : ''}</span>
       ${done.length ? `<button data-act="toggleHandled" aria-expanded="${!!state.showHandled}">${done.length} handled ${state.showHandled ? '▴' : '▾'}</button>` : ''}</div>
     ${items.length ? `<div class="queue">${items.map(i => queueItem(i, i.id === state.sel)).join('')}</div>` : '<div class="none">Nothing.</div>'}
     ${done.length && state.showHandled ? `<div class="handled">${done.map(i => `<div><span class="gen">${esc(i.title)}</span><span style="white-space:nowrap">${esc(state.handled[i.id].how)} · <button class="link" data-act="restore" data-id="${i.id}">restore</button></span></div>`).join('')}</div>` : ''}</div>`;
   const more = turns.length - TURNS_SHOWN;
-  return `${needs}${turns.length ? `<div class="sec"><div class="label"><span>Your turn (${turns.length})</span></div>
+  return `${needs}${turns.length ? `<div class="sec"><div class="label"><span>Your Turn (${turns.length})</span></div>
     <div class="queue">${shown.map(s => turnItem(s, turnKey(s.id) === state.sel)).join('')}</div>
-    ${more > 0 ? `<button class="link" data-act="expand" data-id="turns">${state.expanded.turns ? 'Show fewer' : `Show ${num(more)} more`}</button>` : ''}</div>` : ''}`;
+    ${more > 0 ? `<button class="link" data-act="expand" data-id="turns">${state.expanded.turns ? 'Show Fewer' : `Show ${cap(num(more))} More`}</button>` : ''}</div>` : ''}`;
 }
 
 /* What moved today, by effort in the user's order: each session that did anything, the latest first. An
@@ -1391,7 +1391,7 @@ function effortDetail(e) {
   return `<div class="epage"><div>
     <div class="crumb"><span class="mono">${esc(e.raw)}</span></div>
     <div class="titled"><h1>${effortMark(e, 'l')}${esc(e.name)}</h1></div>
-    <div class="sec"><div class="label"><span>${spark}Where this stands</span></div><p class="prose">${esc(e.stands)}</p></div>
+    <div class="sec"><div class="label"><span>${spark}Where This Stands</span></div><p class="prose">${esc(e.stands)}</p></div>
     ${effortNeeds(e, needs)}
     ${effortTabs([
       ['sessions', 'Sessions', sess.length, sess.length ? `<div class="rows plain">${sess.map(s => sessionRow(s, e.id)).join('')}</div>` : '<div class="none">Nothing running.</div>'],
@@ -1410,9 +1410,9 @@ const VIA_REPO = { you: 'filed by you', repo: 'repository filed by you', rule: '
 function moveSelect(s) {
   const cur = s.effort || 'unsorted';
   return `<select class="btn" data-change="liveMove" data-id="${s.id}" aria-label="Move to another effort">
-    <option value="">Move to…</option>
+    <option value="">Move To…</option>
     ${openEfforts().concat(LIVE_UNSORTED).filter(e => e.id !== cur).map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join('')}
-    <option value="__new">New effort…</option></select>`;
+    <option value="__new">New Effort…</option></select>`;
 }
 
 /* What a session runs on, and how full its context window is. */
@@ -1512,10 +1512,10 @@ function pullAsks(p, box) {
   if (!p) return '';
   const where = /^https:\/\//.test(p.url || '') ? p.url : pullKey(p), whose = p.mine ? 'your' : 'the', open = openPoints(p);
   const asks = [
-    p.checks === 'failing' && ['Fix the failing checks', `The checks are failing on ${whose} pull request ${where}. Look at what failed and fix it.`],
-    p.conflicts && ['Resolve the conflicts', `${cap(whose)} pull request ${where} conflicts with ${p.base || 'its base branch'}. Bring the branch up to date and resolve the conflicts.`],
-    p.changesRequested && ['Address the review', `A reviewer asked for changes on ${whose} pull request ${where}. Read the review and address it.`],
-    open.length && ['Look at what is open', `These are waiting on me in the discussion of ${whose} pull request ${where}:\n${open.map((x, i) => `${i + 1}. ${x.who}${fileLine(x) ? ` on ${fileLine(x)}` : ''}: ${clip(x.text, 300)}`).join('\n')}\nLook into each and tell me what you would answer or change. Change nothing yet.`],
+    p.checks === 'failing' && ['Fix the Failing Checks', `The checks are failing on ${whose} pull request ${where}. Look at what failed and fix it.`],
+    p.conflicts && ['Resolve the Conflicts', `${cap(whose)} pull request ${where} conflicts with ${p.base || 'its base branch'}. Bring the branch up to date and resolve the conflicts.`],
+    p.changesRequested && ['Address the Review', `A reviewer asked for changes on ${whose} pull request ${where}. Read the review and address it.`],
+    open.length && ['Look at What Is Open', `These are waiting on me in the discussion of ${whose} pull request ${where}:\n${open.map((x, i) => `${i + 1}. ${x.who}${fileLine(x) ? ` on ${fileLine(x)}` : ''}: ${clip(x.text, 300)}`).join('\n')}\nLook into each and tell me what you would answer or change. Change nothing yet.`],
   ].filter(Boolean);
   return asks.map(([label, text]) => `<button class="btn" data-act="fill" data-box="${box}" data-text="${esc(text)}" title="From GitHub: fills the box, sends nothing"><i class="kd" style="${kindColor('github')}"></i>${label}</button>`).join('');
 }
@@ -1659,9 +1659,9 @@ function startProblem() {
     if (startCatalog.error) return startCatalog.error;
     const data = startCatalog.data, opts = startDraft.opencode;
     if (!data || startCatalog.dir !== startDraft.dir.trim()) return 'Choose a directory to load OpenCode launch options.';
-    if (opts.agentName && !data.agents.some(a => a.name === opts.agentName)) return 'Choose an available OpenCode agent or Native default.';
-    if (opts.model && !data.models.some(m => m.id === opts.model)) return 'Choose an available OpenCode model or Native default.';
-    if (opts.variant && !startVariants().includes(opts.variant)) return 'Choose an available variant or Native default.';
+    if (opts.agentName && !data.agents.some(a => a.name === opts.agentName)) return 'Choose an available OpenCode agent or Native Default.';
+    if (opts.model && !data.models.some(m => m.id === opts.model)) return 'Choose an available OpenCode model or Native Default.';
+    if (opts.variant && !startVariants().includes(opts.variant)) return 'Choose an available variant or Native Default.';
   }
   if (!startDraft.dir.trim() || !startDraft.prompt.trim()) return 'Choose a directory and write a prompt.';
   if (startWith === 'local' && startDraft.local.temperature !== '' && (!Number.isFinite(+startDraft.local.temperature) || +startDraft.local.temperature < 0 || +startDraft.local.temperature > 2)) return 'Temperature must be between 0 and 2.';
@@ -1677,7 +1677,7 @@ function syncStartSubmit() {
 /* The options of the lists an OpenCode session's agent, model and variant are chosen from, by the name each
    is sent under: what a directory offers, and what is chosen even where it is not offered. */
 function openCodeChoices(data, opts) {
-  const options = (rows, value, fallback) => [[ '', `Native default${fallback ? ` (${fallback})` : ''}` ], ...rows,
+  const options = (rows, value, fallback) => [[ '', `Native Default${fallback ? ` (${fallback})` : ''}` ], ...rows,
     ...(value && !rows.some(([id]) => id === value) ? [[value, data ? `${value} (unavailable)` : value]] : [])]
     .map(([id, name]) => `<option value="${esc(id)}" ${id === value ? 'selected' : ''}>${esc(name)}</option>`).join('');
   let models = options([], opts.model, data?.defaults.model);
@@ -1695,12 +1695,12 @@ function openCodeChoices(data, opts) {
 function openCodeOptions() {
   const choices = openCodeChoices(startCatalog.data, startDraft.opencode);
   const pick = (name, label) => `<label><span>${label}</span><select class="btn" name="${name}" data-keep="start-opencode-${name}">${choices[name]}</select></label>`;
-  return pick('agentName', 'OpenCode agent') + pick('model', 'OpenCode model') + pick('variant', 'OpenCode variant')
-    + `<div class="none wide" role="status"><span id="start-status">${esc(startProblem())}</span>${startCatalog.error ? ' <button type="button" class="btn" data-act="startCatalogRetry">Retry launch options</button>' : ''}</div>`;
+  return pick('agentName', 'OpenCode Agent') + pick('model', 'OpenCode Model') + pick('variant', 'OpenCode Variant')
+    + `<div class="none wide" role="status"><span id="start-status">${esc(startProblem())}</span>${startCatalog.error ? ' <button type="button" class="btn" data-act="startCatalogRetry">Retry Launch Options</button>' : ''}</div>`;
 }
 const START_ENGINES = ['claude', 'opencode', 'local'];
 const START_MODELS = [['', 'Default'], ['fable', 'Fable'], ['opus', 'Opus'], ['sonnet', 'Sonnet'], ['haiku', 'Haiku']];
-const START_EFFORTS = [['', 'Default'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max']];
+const START_EFFORTS = [['', 'Default'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra High'], ['max', 'Max']];
 const localName = () => summarizer.model ? summarizer.model.split('/').pop() : '';
 /* Opens the New Session dialog: for an effort when it is asked for from one, in a directory when it is asked
    for from a workspace, and from a profile when it is asked for from one, the default profile otherwise. */
@@ -1737,20 +1737,20 @@ function redraftStart(profile) {
   loadStartCatalog();
 }
 function retainedSessionModal(p) {
-  return `<div class="veil"><div class="modal start" data-act="noop" role="dialog" aria-label="Conversation retained">
-    <h2>Conversation retained</h2>
+  return `<div class="veil"><div class="modal start" data-act="noop" role="dialog" aria-label="Conversation Retained">
+    <h2>Conversation Retained</h2>
     <p role="alert">${esc(p.message)}</p>
     ${p.outcome ? `<p>Outcome: ${esc(p.outcome)}.</p>` : ''}
     <p>A native conversation already exists: <span class="mono">${esc(p.sessionId)}</span>.</p>
     <p>The prompt may have been accepted despite the error. Nothing will be resent automatically. View the existing conversation before deciding what to do next.</p>
-    <div class="bar"><button type="button" class="btn go" data-act="${p.resume ? 'resumeViewExisting' : 'startViewExisting'}" data-first ${p.viewing ? 'disabled' : ''}>${p.viewing ? 'Looking for conversation…' : 'View existing conversation'}</button>
-      <button type="button" class="btn" data-act="copyText" data-text="${esc(p.sessionId)}">Copy conversation ID</button></div>
+    <div class="bar"><button type="button" class="btn go" data-act="${p.resume ? 'resumeViewExisting' : 'startViewExisting'}" data-first ${p.viewing ? 'disabled' : ''}>${p.viewing ? 'Looking for Conversation…' : 'View Existing Conversation'}</button>
+      <button type="button" class="btn" data-act="copyText" data-text="${esc(p.sessionId)}">Copy Conversation ID</button></div>
     ${p.viewError ? `<p role="status">${esc(p.viewError)}</p>` : ''}
     <p>${p.resume ? 'Your resume prompt is kept. Retrying it unchanged reuses the same request ID and replays its recorded result, even if the cause of the error has been fixed.' : 'Your launch draft is kept. Preparing a new session restores the form; submitting it creates a separate conversation.'}</p>
-    ${p.resume && p.resetConfirm ? `<div class="need"><p>The previous prompt may already have run. A new attempt can send it again. This resets the request ID for this conversation only; nothing is resumed or sent until you press Reopen in the background.</p>
-      <div class="bar"><button type="button" class="btn" data-act="resumeResetConfirm" ${p.viewing ? 'disabled' : ''}>Confirm new resume attempt</button>
-        <button type="button" class="btn" data-act="resumeResetCancel" ${p.viewing ? 'disabled' : ''}>Cancel reset</button></div></div>` : ''}
-    <div class="mfoot">${p.resume ? (p.resetConfirm ? '' : `<button type="button" class="btn" data-act="resumeReset" ${p.viewing ? 'disabled' : ''}>Prepare a new resume attempt</button>`) : `<button type="button" class="btn" data-act="startReset" ${p.viewing ? 'disabled' : ''}>Prepare a new session</button>`}
+    ${p.resume && p.resetConfirm ? `<div class="need"><p>The previous prompt may already have run. A new attempt can send it again. This resets the request ID for this conversation only; nothing is resumed or sent until you press Reopen in the Background.</p>
+      <div class="bar"><button type="button" class="btn" data-act="resumeResetConfirm" ${p.viewing ? 'disabled' : ''}>Confirm New Resume Attempt</button>
+        <button type="button" class="btn" data-act="resumeResetCancel" ${p.viewing ? 'disabled' : ''}>Cancel Reset</button></div></div>` : ''}
+    <div class="mfoot">${p.resume ? (p.resetConfirm ? '' : `<button type="button" class="btn" data-act="resumeReset" ${p.viewing ? 'disabled' : ''}>Prepare a New Resume Attempt</button>`) : `<button type="button" class="btn" data-act="startReset" ${p.viewing ? 'disabled' : ''}>Prepare a New Session</button>`}
       <button type="button" class="btn" data-act="modalClose">Close</button></div>
   </div></div>`;
 }
@@ -1762,8 +1762,8 @@ async function viewRetainedSession(p) {
     await refresh(true);
     if ((p.resume ? partialResume : partialStart) !== p || modal !== owner) return;
     const open = live.some(s => s.id === p.sessionId), closed = archive.some(s => s.id === p.sessionId);
-    if (isOffline) p.viewError = 'Could not refresh sessions. Try View existing conversation again; this will not start or resume anything.';
-    else if (!open && !closed) p.viewError = 'The retained conversation is not listed yet. Keep its ID and try View existing conversation again; this will not start or resume anything.';
+    if (isOffline) p.viewError = 'Could not refresh sessions. Try View Existing Conversation again; this will not start or resume anything.';
+    else if (!open && !closed) p.viewError = 'The retained conversation is not listed yet. Keep its ID and try View Existing Conversation again; this will not start or resume anything.';
     else {
       modal = null;
       state.actSel = p.sessionId;
@@ -1799,28 +1799,28 @@ function startModal() {
   const real = e.id !== 'unsorted', local = localName(), on = startWith, last = startDraft[on];
   const dirs = startDirs(), first = startDraft.dir, roles = knowledge.roles.length, spaces = knowledge.workspaces.length;
   const choice = spaces ? dirChoice(first, startDraft.typing) : OTHER_DIR, typed = choice === OTHER_DIR;
-  const efforts = [['', 'No effort']].concat(openEfforts().concat(real && !openEfforts().includes(e) ? e : []).map(x => [x.id, x.name]));
+  const efforts = [['', 'No Effort']].concat(openEfforts().concat(real && !openEfforts().includes(e) ? e : []).map(x => [x.id, x.name]));
   const pick = (name, label, options, chosen) => `<label><span>${label}</span><select class="btn" name="${name}" data-keep="start-${on}-${name}">${options.map(([v, t]) => `<option value="${esc(v)}" ${v === (chosen || '') ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`;
   const way = (id, label, off) => `<button type="button" class="${on === id ? 'on' : ''}" data-act="startWith" data-to="${id}" aria-pressed="${on === id}" ${off ? `disabled title="${esc(off)}"` : ''}>${esc(label)}</button>`;
   return `<div class="veil"><div class="modal start" data-act="noop" role="dialog" aria-label="New Session">
     <h2>New Session</h2>
     <form data-form="start" data-id="${e.id}" data-engine="${on}">
-      ${knowledge.profiles.length ? `<label class="wide"><span>Profile</span><select class="btn" name="profile" data-keep="start-profile"><option value="">No profile</option>${knowledge.profiles.map(x => `<option value="${esc(x.id)}" ${x.id === startDraft.profile ? 'selected' : ''}>${esc(x.name)}${x.default ? ' (default)' : ''}</option>`).join('')}</select></label>` : ''}
-      <div class="seg wide" role="group" aria-label="What it runs on">${way('claude', 'Claude Code', lifecycleCap('claude', 'start') ? '' : 'Starting Claude is not supported')}${way('opencode', 'OpenCode', lifecycleCap('opencode', 'start') && lifecycleCap('opencode', 'launchOptions') ? '' : 'Starting OpenCode is not supported')}${way('local', local || 'Local model', !local ? 'No local model is running' : lifecycleCap('claude', 'start') ? '' : 'Starting Claude is not supported')}</div>
+      ${knowledge.profiles.length ? `<label class="wide"><span>Profile</span><select class="btn" name="profile" data-keep="start-profile"><option value="">No Profile</option>${knowledge.profiles.map(x => `<option value="${esc(x.id)}" ${x.id === startDraft.profile ? 'selected' : ''}>${esc(x.name)}${x.default ? ' (default)' : ''}</option>`).join('')}</select></label>` : ''}
+      <div class="seg wide" role="group" aria-label="What it runs on">${way('claude', 'Claude Code', lifecycleCap('claude', 'start') ? '' : 'Starting Claude is not supported')}${way('opencode', 'OpenCode', lifecycleCap('opencode', 'start') && lifecycleCap('opencode', 'launchOptions') ? '' : 'Starting OpenCode is not supported')}${way('local', local || 'Local Model', !local ? 'No local model is running' : lifecycleCap('claude', 'start') ? '' : 'Starting Claude is not supported')}</div>
       <label class="wide"><span>Prompt</span><textarea name="prompt" data-keep="start-prompt" placeholder="What should it do?" required ${first ? 'data-first' : ''}>${esc(startDraft.prompt)}</textarea></label>
-      ${spaces ? `<label class="${typed ? '' : 'wide'}"><span>Workspace</span><select class="btn" name="workspace" data-keep="start-workspace" ${choice ? '' : 'data-first'}>${workspaceChoices(choice, choice ? '' : '<option value="" selected disabled>Choose a workspace…</option>')}</select></label>` : ''}
+      ${spaces ? `<label class="${typed ? '' : 'wide'}"><span>Workspace</span><select class="btn" name="workspace" data-keep="start-workspace" ${choice ? '' : 'data-first'}>${workspaceChoices(choice, choice ? '' : '<option value="" selected disabled>Choose a Workspace…</option>')}</select></label>` : ''}
       ${typed ? `<label class="${spaces ? '' : 'wide'}"><span>Directory</span><input name="dir" class="mono" data-keep="start-dir" list="start-dirs" value="${esc(first || '')}" placeholder="~/dev/project" required spellcheck="false" autocomplete="off" ${first ? '' : 'data-first'}>
         <datalist id="start-dirs">${dirOptions(dirs)}</datalist></label>` : `<input type="hidden" name="dir" value="${esc(first || '')}">`}
-      <label><span>File under</span><select class="btn" name="effortPick" data-keep="start-effort">${efforts.map(([id, name]) => `<option value="${esc(id)}" ${id === (real ? e.id : '') ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select></label>
-      ${roles ? pick('role', 'Slorp role', [['', 'No role']].concat(knowledge.roles.map(r => [r.id, esc(r.name)])), startDraft.role) : ''}
+      <label><span>File Under</span><select class="btn" name="effortPick" data-keep="start-effort">${efforts.map(([id, name]) => `<option value="${esc(id)}" ${id === (real ? e.id : '') ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select></label>
+      ${roles ? pick('role', 'Slorp Role', [['', 'No Role']].concat(knowledge.roles.map(r => [r.id, esc(r.name)])), startDraft.role) : ''}
       <label class="${roles ? 'wide' : ''}"><span>Name <i>optional</i></span><input name="name" data-keep="start-name" value="${esc(startDraft.name)}" maxlength="80" autocomplete="off"></label>
-      ${on === 'claude' ? pick('model', 'Model', START_MODELS, last.model) + pick('effortLevel', 'Effort level', START_EFFORTS, last.effortLevel)
+      ${on === 'claude' ? pick('model', 'Model', START_MODELS, last.model) + pick('effortLevel', 'Effort Level', START_EFFORTS, last.effortLevel)
         : on === 'opencode' ? openCodeOptions() : `<div class="field"><span>Thinking</span><div class="seg" role="group" aria-label="Thinking"><button type="button" class="${startThinking ? 'on' : ''}" data-act="startThinking" data-to="1" aria-pressed="${startThinking}">On</button><button type="button" class="${startThinking ? '' : 'on'}" data-act="startThinking" data-to="" aria-pressed="${!startThinking}">Off</button></div></div>
           <label><span>Temperature <i>optional</i></span><input name="temperature" type="number" min="0" max="2" step="0.05" data-keep="start-temperature" value="${esc(last.temperature ?? '')}" placeholder="The model's own"></label>`}
       ${terminalApp() && lifecycleCap(on === 'local' ? 'claude' : on, 'attach') ? `<label class="wide tick"><input type="checkbox" name="terminal" ${startDraft.terminal ? 'checked' : ''}><span>Open it in ${esc(terminalApp().name)} once it has started</span></label>` : ''}
-      ${on === 'opencode' && startAttempt && !launching ? '<div class="none wide">Retrying unchanged options reuses the same request ID. <button type="button" class="btn" data-act="startReset">Prepare a new session</button> to intentionally create a separate conversation.</div>' : ''}
+      ${on === 'opencode' && startAttempt && !launching ? '<div class="none wide">Retrying unchanged options reuses the same request ID. <button type="button" class="btn" data-act="startReset">Prepare a New Session</button> to intentionally create a separate conversation.</div>' : ''}
       <div class="mfoot wide"><span>${on === 'local' ? `Starts a Claude Code session in the background that runs on ${esc(local)}` : `Starts a ${on === 'opencode' ? 'OpenCode' : 'Claude Code'} session in the background`}${real ? `, filed under ${esc(e.name)}` : ''}.</span>
-        <span class="bar"><button type="button" class="btn" data-act="modalClose">Cancel</button><button class="btn go" ${launching || startProblem() ? 'disabled' : ''} title="${esc(startProblem())}">${launching ? 'Starting…' : 'Start session'}</button></span></div>
+        <span class="bar"><button type="button" class="btn" data-act="modalClose">Cancel</button><button class="btn go" ${launching || startProblem() ? 'disabled' : ''} title="${esc(startProblem())}">${launching ? 'Starting…' : 'Start Session'}</button></span></div>
     </form>
   </div></div>`;
 }
@@ -1850,7 +1850,7 @@ function effortTabs(parts) {
 const manage = sec => `<button class="btn" data-act="kbGo" data-s="${sec}">Manage</button>`;
 /* What the user has left undecided about an effort: each with a box to tick once it is settled, and a place to write another. */
 function effortQuestions(e, qs) {
-  return ['questions', 'Open questions', qs.length, `${qs.length ? `<div class="rows plain">${qs.map(q => `<div class="srow"><input type="checkbox" data-change="kbResolve" data-id="${q.id}" title="Mark resolved" aria-label="Mark resolved">
+  return ['questions', 'Open Questions', qs.length, `${qs.length ? `<div class="rows plain">${qs.map(q => `<div class="srow"><input type="checkbox" data-change="kbResolve" data-id="${q.id}" title="Mark resolved" aria-label="Mark resolved">
         <div class="body">${esc(q.text)}${q.origin ? `<div class="sub">${esc(q.origin)}</div>` : ''}</div><span class="side">${ago(q.at ? minsSince(q.at) : q.age)}</span></div>`).join('')}</div>` : ''}
       <form class="add" data-form="questions"><input name="text" data-keep="eq-text-${e.id}" placeholder="Something about this you haven't decided yet" required aria-label="An open question">
         <input type="hidden" name="effort" value="${e.id}"><button class="btn go">Add</button></form>`, manage('questions')];
@@ -1859,9 +1859,9 @@ function effortQuestions(e, qs) {
 const NEEDS_SHOWN = 3;
 function effortNeeds(e, needs) {
   const all = state.expanded['needs:' + e.id], more = needs.length > NEEDS_SHOWN;
-  return `<div class="sec"><div class="label"><span>Needs you (${needs.length})</span></div>
+  return `<div class="sec"><div class="label"><span>Needs You (${needs.length})</span></div>
       ${needs.length ? `<div style="margin:0 -18px">${(all ? needs : needs.slice(0, NEEDS_SHOWN)).map(i => rowHtml(i, 'openItem')).join('')}</div>` : '<div class="none">Nothing.</div>'}
-      ${more ? `<button class="link" style="margin-top:8px;font-size:12.5px" data-act="expand" data-id="needs:${e.id}" aria-expanded="${!!all}">${all ? 'Show fewer' : `Show all ${num(needs.length)}`}</button>` : ''}</div>`;
+      ${more ? `<button class="link" style="margin-top:8px;font-size:12.5px" data-act="expand" data-id="needs:${e.id}" aria-expanded="${!!all}">${all ? 'Show Fewer' : `Show All ${cap(num(needs.length))}`}</button>` : ''}</div>`;
 }
 /* The pull requests filed under an effort, each a way to its page and to be dragged onto another effort. There is no such part while there is nowhere for them to come from. */
 function effortPulls(e) {
@@ -1876,7 +1876,7 @@ function effortDays(e, days) {
   const shown = state.expanded['days:' + e.id] ? days : days.slice(0, 2), more = days.length - shown.length;
   return ['journal', 'Journal', days.length, days.length ? `<div class="jr">
       ${shown.map(d => `<div class="jday"><h3><button data-act="journalOpen" data-id="${esc(d.day)}">${esc(dayName(d.day))} ›</button></h3>${journalPart(d)}</div>`).join('')}
-      ${more > 0 ? `<button class="link" style="margin-top:14px;font-size:12.5px" data-act="expand" data-id="days:${e.id}">Show ${num(more)} earlier day${more === 1 ? '' : 's'}</button>` : ''}</div>`
+      ${more > 0 ? `<button class="link" style="margin-top:14px;font-size:12.5px" data-act="expand" data-id="days:${e.id}">Show ${cap(num(more))} Earlier Day${more === 1 ? '' : 's'}</button>` : ''}</div>`
     : `<div class="none">The journal has nothing on this effort yet. A day is written when you wrap it up${modelless() ? ', which needs a local model' : ', or the day after'}.</div>`];
 }
 /* The sessions filed under an effort that have closed, the latest first: a few of them, and the rest behind
@@ -1886,7 +1886,7 @@ function effortClosed(e, past) {
   const shown = state.expanded['closed:' + e.id] ? past.closed : past.closed.slice(0, 4), more = past.closed.length - shown.length;
   return `<div class="label">Closed (${past.closedCount})</div>
       <div class="rows">${shown.map(a => closedRow(a, archive.some(x => x.id === a.id) ? 'journalSession' : '')).join('')}</div>
-      ${more > 0 ? `<button class="link" style="margin-top:8px;font-size:12.5px" data-act="expand" data-id="closed:${e.id}">Show ${num(more)} more</button>`
+      ${more > 0 ? `<button class="link" style="margin-top:8px;font-size:12.5px" data-act="expand" data-id="closed:${e.id}">Show ${cap(num(more))} More</button>`
         : past.closedCount > past.closed.length ? `<div class="none">The latest ${num(past.closed.length)} are listed.</div>` : ''}`;
 }
 /* What an effort's sessions have used between them, open and closed. */
@@ -1896,8 +1896,8 @@ function effortUsage(sess, past) {
   if (!open[0] && !closed[0]) return '';
   const said = ([n, usd]) => n ? `${usd ? `≈${money(usd)} · ` : ''}${tokens(n)} tokens` : 'nothing recorded';
   const about = 'New tokens sent and written by the model, in the sessions and their subagents. What was read back from the cache is left out.';
-  return `<div class="sec"><div class="label"><span title="${about}">What it has used</span></div>
-      <dl class="facts"><dt>In all</dt><dd><b>${said([open[0] + closed[0], open[1] + closed[1]])}</b></dd>
+  return `<div class="sec"><div class="label"><span title="${about}">What It Has Used</span></div>
+      <dl class="facts"><dt>In All</dt><dd><b>${said([open[0] + closed[0], open[1] + closed[1]])}</b></dd>
         <dt>${plural(sess.length, 'open session')}</dt><dd>${said(open)}</dd>
         ${past?.closedCount ? `<dt>${plural(past.closedCount, 'closed session')}</dt><dd>${said(closed)}</dd>` : ''}</dl></div>`;
 }
@@ -1915,9 +1915,9 @@ function effortDetailLive(e) {
   if (real) fetchPast(e.id);
   const past = real ? pasts[e.id] : null;
   const others = openEfforts().filter(x => x.id !== e.id).map(x => [x.id, x.name]);
-  const menu = real ? actsMenu(e.id, 'Rename, shelve, merge or delete', `<button data-act="effortEdit" data-id="${e.id}">Rename or describe</button>
-      <button data-act="effortShelve" data-id="${e.id}" data-to="${e.shelved ? 0 : 1}">${e.shelved ? 'Bring it back' : 'Shelve it'}</button>
-      ${others.length ? menuPart('merge', 'Merge into', menuTo('effortMergeTo', e.id, others)) : ''}
+  const menu = real ? actsMenu(e.id, 'Rename, shelve, merge or delete', `<button data-act="effortEdit" data-id="${e.id}">Rename or Describe</button>
+      <button data-act="effortShelve" data-id="${e.id}" data-to="${e.shelved ? 0 : 1}">${e.shelved ? 'Bring It Back' : 'Shelve It'}</button>
+      ${others.length ? menuPart('merge', 'Merge Into', menuTo('effortMergeTo', e.id, others)) : ''}
       <button data-act="effortDelete" data-id="${e.id}">Delete…</button>`) : '';
   const head = editing === e.id ? `<form class="eedit" data-form="effortEdit" data-id="${e.id}">
       <input class="nm" name="name" data-keep="eedit-name-${e.id}" value="${esc(e.name)}" maxlength="80" required aria-label="Name of the effort">
@@ -1933,8 +1933,8 @@ function effortDetailLive(e) {
   return `<div class="epage"><div>
     <div class="crumb"><span class="mono">${esc(e.raw)}</span></div>
     ${head}
-    ${e.shelved ? `<div class="shelved"><span>Shelved. It is off the board and the model files nothing new here. Everything filed under it is kept.</span><button class="btn" data-act="effortShelve" data-id="${e.id}" data-to="0">Bring it back</button></div>` : ''}
-    <div class="sec"><div class="label"><span>${real && e.stands && sess.length ? spark : ''}Where this stands</span></div><p class="prose">${esc(stands)}</p></div>
+    ${e.shelved ? `<div class="shelved"><span>Shelved. It is off the board and the model files nothing new here. Everything filed under it is kept.</span><button class="btn" data-act="effortShelve" data-id="${e.id}" data-to="0">Bring It Back</button></div>` : ''}
+    <div class="sec"><div class="label"><span>${real && e.stands && sess.length ? spark : ''}Where This Stands</span></div><p class="prose">${esc(stands)}</p></div>
     ${effortNeeds(e, needs)}
     ${effortTabs([
       ['sessions', 'Sessions', sess.length, `${sess.length ? `<div class="rows plain">${sess.map(x => `<div class="srow" ${dragsFrom(x.id, e.id)}><span class="dot ${statusOf(x)[0]}"></span>
@@ -1949,7 +1949,7 @@ function effortDetailLive(e) {
     ])}
   </div>${real ? `<aside>
     ${effortUsage(sess, past)}
-    <div class="sec"><div class="label"><span>Directories filed here automatically</span></div>
+    <div class="sec"><div class="label"><span>Directories Filed Here Automatically</span></div>
       ${e.dirs.length ? e.dirs.map(d => `<div class="srow"><div class="body mono">${esc(tilde(d))}</div><button class="x" data-act="dirRemove" data-id="${e.id}" data-dir="${esc(d)}" title="Stop filing sessions in this directory here" aria-label="Stop filing ${esc(tilde(d))} here">×</button></div>`).join('')
         : '<div class="none">None yet. Move a session here and choose to remember its directory.</div>'}</div>
   </aside>` : ''}</div>`;
@@ -1970,7 +1970,7 @@ function mergeModal() {
       <li>${esc(e.name)} itself is removed: its name, its description, and what the model wrote of where it stands.</li></ul>
     <p class="prose" style="margin-top:14px">This cannot be undone.</p>
     <div class="mfoot"><button class="btn" data-act="modalClose">Cancel</button>
-      <span class="bar"><button class="btn go" data-act="effortMergeYes" data-id="${e.id}" data-to="${into.id}">Merge them</button></span></div>
+      <span class="bar"><button class="btn go" data-act="effortMergeYes" data-id="${e.id}" data-to="${into.id}">Merge Them</button></span></div>
   </div></div>`;
 }
 
@@ -1993,7 +1993,7 @@ function deleteModal() {
     <ul>${goes.map(g => `<li>${g}</li>`).join('')}</ul>
     <p class="prose" style="margin-top:14px">This cannot be undone.${e.shelved ? '' : ' Shelving it takes it off the board and keeps all of this.'}</p>
     <div class="mfoot"><button class="btn" data-act="modalClose">Cancel</button>
-      <span class="bar">${e.shelved ? '' : `<button class="btn" data-act="effortShelve" data-id="${e.id}" data-to="1">Shelve it instead</button>`}<button class="btn danger" data-act="effortDeleteYes" data-id="${e.id}">Delete it</button></span></div>
+      <span class="bar">${e.shelved ? '' : `<button class="btn" data-act="effortShelve" data-id="${e.id}" data-to="1">Shelve It Instead</button>`}<button class="btn danger" data-act="effortDeleteYes" data-id="${e.id}">Delete It</button></span></div>
   </div></div>`;
 }
 
@@ -2042,7 +2042,7 @@ const shownEfforts = () => cardEfforts().filter(e => !state.hideEmpty || !emptyE
 /* The switch that hides empty efforts, with how many it is hiding. There is none while no effort is empty. */
 function hideEmptyToggle() {
   const n = cardEfforts().filter(emptyEffort).length;
-  return n ? `<label class="opt"><input type="checkbox" data-change="hideEmpty" ${state.hideEmpty ? 'checked' : ''}>Hide empty Efforts${state.hideEmpty ? `<span class="n">${n} hidden</span>` : ''}</label>` : '';
+  return n ? `<label class="opt"><input type="checkbox" data-change="hideEmpty" ${state.hideEmpty ? 'checked' : ''}>Hide Empty Efforts${state.hideEmpty ? `<span class="n">${n} hidden</span>` : ''}</label>` : '';
 }
 /* The name a card keeps on the board and in the column. */
 const cardName = e => `view-transition-name:effort-${e.id}`;
@@ -2072,10 +2072,10 @@ function effortCard(e, mini, sel) {
 }
 
 const newEffortCard = () => `<form class="ecard new" data-form="effort">
-      <span class="label">New effort</span>
+      <span class="label">New Effort</span>
       <input name="name" data-keep="effort-name" placeholder="Name, e.g. Snapshot store" required aria-label="Name of the effort">
       <input name="about" data-keep="effort-about" placeholder="One line on what it covers" aria-label="What it covers">
-      <button class="btn go">Add effort</button>
+      <button class="btn go">Add Effort</button>
       ${modelless() ? `<p class="none">${NO_MODEL}, so sessions are filed by an effort's directories or by you.</p>` : ''}
     </form>`;
 
@@ -2085,7 +2085,7 @@ const newEffortMini = () => adding ? `<form class="ecard mini new" data-form="ef
       <input name="name" data-keep="effort-name" placeholder="Name of the effort" required aria-label="Name of the effort">
       <input name="about" data-keep="effort-about" placeholder="One line on what it covers" aria-label="What it covers">
       <span class="send"><button type="button" class="btn" data-act="effortAddCancel">Cancel</button><button class="btn go">Add</button></span>
-    </form>` : '<button class="ecard mini new" data-act="effortAdd">+ New effort</button>';
+    </form>` : '<button class="ecard mini new" data-act="effortAdd">+ New Effort</button>';
 /* What makes a row one that can be dragged onto an effort, from the effort it is filed under: a session's,
    a pull request's, or that of a thing that needs the user, which goes by its session, by the pull request
    it is about or else by its repository, and, in the demo, by itself. */
@@ -2098,7 +2098,7 @@ const dragsItem = (it, from) => !it.live ? `draggable="true" data-item="${esc(it
 function unsortedTray() {
   const list = live ? live.filter(s => !s.effort).map(s => [s.id, statusOf(s), s.label]) : SESSIONS.filter(s => sessEffort(s) === 'unsorted').map(s => [s.id, [s.status, STATUS[s.status]], s.title || s.name]);
   if (!list.length || state.effortSel === 'unsorted') return '';
-  return `<div class="tray"><div class="label">Unsorted sessions</div>
+  return `<div class="tray"><div class="label">Unsorted Sessions</div>
     ${list.map(([id, [dot, word], label]) => `<div class="trow" ${dragsFrom(id, 'unsorted')}><span class="dot ${dot}" title="${word}"></span>${live ? `<button data-act="openSession" data-id="${esc(id)}">${esc(clip(label, 60))}</button>` : `<span>${esc(clip(label, 60))}</span>`}</div>`).join('')}</div>`;
 }
 /* Files a session under an effort, or under none when given Unsorted, as the menu on a session does. */
@@ -2149,7 +2149,7 @@ function viewEfforts() {
   if (live && !all.includes(LIVE_UNSORTED)) all.push(LIVE_UNSORTED);
   if (!all.some(x => x.id === e.id)) all.push(e);
   return `<div class="split efx">
-    <section class="pane estack" data-scroll="eff-stack"><button class="back" data-act="effortBoard" title="Back to the board (Esc)">‹ All efforts</button>
+    <section class="pane estack" data-scroll="eff-stack"><button class="back" data-act="effortBoard" title="Back to the board (Esc)">‹ All Efforts</button>
       ${all.map(x => effortCard(x, true, x.id === e.id)).join('')}${live ? newEffortMini() : ''}${hideEmptyToggle()}${unsortedTray()}</section>
     <section class="pane detail" data-scroll="eff-${e.id}"><div class="ebig ${e.id === 'unsorted' ? 'loose' : ''}">${live ? effortDetailLive(e) : effortDetail(e)}</div></section>
   </div>`;
@@ -2280,8 +2280,8 @@ function viewSessions() {
     <div class="crumb"><button class="eff" data-act="effort" data-id="${sessEffort(s)}">${effortMark(effortById(sessEffort(s)), 's')}${esc(effortById(sessEffort(s)).name)} ›</button>${kindBadge(s.kind)}${stat(s.status, STATUS[s.status])}<span>active ${ago(s.last)}</span><span>started ${ago(s.started)}</span><span class="mono">${esc(s.where)}</span></div>
     <h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? s.title : s.raw)}</h1>
     ${state.fluent ? `<p class="subt">${spark}${esc(s.doing)}</p>` : ''}
-    ${it ? `<div class="need"><div class="label">${spark}What's needed from you</div><p class="ask">${esc(it.ask)}</p><div class="replies"><button class="btn go" data-act="openItem" data-id="${it.id}">Answer it on Home ›</button></div></div>` : ''}
-    <div class="sec"><div class="label"><span>Its last output, verbatim</span></div>${rawBlock(s.tail.map(t => ['last output', t]))}</div>
+    ${it ? `<div class="need"><div class="label">${spark}What's Needed From You</div><p class="ask">${esc(it.ask)}</p><div class="replies"><button class="btn go" data-act="openItem" data-id="${it.id}">Answer It on Home ›</button></div></div>` : ''}
+    <div class="sec"><div class="label"><span>Its Last Output, Verbatim</span></div>${rawBlock(s.tail.map(t => ['last output', t]))}</div>
   </div>`;
   return sessionsView([
     ['active', 'Active', active.length, `${spark}${cap(num(count('waiting')))} awaiting you, ${num(count('error'))} failed overnight, and the rest are getting on with it.`, active.map(row).join('')],
@@ -2401,18 +2401,18 @@ let opencodeBusy = '';
 function claudeNotice() {
   const p = plugins.claude;
   if (live && p && p.installed && p.enabled && p.latest && state.modPassed !== p.latest) return `<div><span>Version ${esc(p.latest)} of the Slorp mod for Claude Code is out. It has ${esc(p.version)}.</span>
-    <button class="btn go" data-act="updateMod" ${updating ? 'disabled' : ''}>${updating ? 'Updating…' : 'Update it'}</button><button class="btn" data-act="modPass" data-v="${esc(p.latest)}">Dismiss</button></div>`;
+    <button class="btn go" data-act="updateMod" ${updating ? 'disabled' : ''}>${updating ? 'Updating…' : 'Update It'}</button><button class="btn" data-act="modPass" data-v="${esc(p.latest)}">Dismiss</button></div>`;
   if (!live || !p || (p.installed && p.enabled)) return '';
   const off = p.installed;
   return `<div><span>${off ? 'The Slorp mod is turned off in Claude Code' : "Claude Code doesn't have the Slorp mod"}, so its sessions can be watched here but not answered.</span>
-    <button class="btn go" data-act="installMod" ${installing ? 'disabled' : ''}>${installing ? (off ? 'Turning it on…' : 'Installing…') : off ? 'Turn it on' : 'Install it'}</button></div>`;
+    <button class="btn go" data-act="installMod" ${installing ? 'disabled' : ''}>${installing ? (off ? 'Turning It On…' : 'Installing…') : off ? 'Turn It On' : 'Install It'}</button></div>`;
 }
 
 function modNotice() {
   const p = plugins.opencode;
   let notice = '';
   if (live && p && !p.error && p.source !== 'file' && (!p.installed || p.needsSetup || p.updateAvailable)) {
-    const label = p.updateAvailable ? 'Update' : p.installed ? 'Finish setup' : 'Install';
+    const label = p.updateAvailable ? 'Update' : p.installed ? 'Finish Setup' : 'Install';
     const why = p.updateAvailable ? 'This Slorp includes an updated OpenCode plugin.' : p.installed ? 'Complete the OpenCode V2 plugin setup to discover and control sessions.' : 'Install the Slorp plugin to see your OpenCode sessions here.';
     notice = `<div><span>${why}</span><button class="btn go" data-act="opencodePlugin" data-op="${p.updateAvailable ? 'update' : 'install'}" ${opencodeBusy ? 'disabled' : ''}>${opencodeBusy ? 'Working…' : label}</button></div>`;
   }
@@ -2427,7 +2427,7 @@ const upgradeButton = label => `<button class="btn go" data-act="upgrade" ${upgr
 function releaseNotice() {
   if (!live || !release.latest || (state.releasePassed === release.latest && !upgrading)) return '';
   return `<div><span>Slorp ${esc(release.latest)} is out. This is ${esc(release.version)}.</span>
-    ${release.manual ? '<button class="btn" data-act="setGo" data-s="general">How to upgrade</button>' : upgradeButton('Upgrade…')}<button class="btn" data-act="releasePass" data-v="${esc(release.latest)}">Dismiss</button></div>`;
+    ${release.manual ? '<button class="btn" data-act="setGo" data-s="general">How to Upgrade</button>' : upgradeButton('Upgrade…')}<button class="btn" data-act="releasePass" data-v="${esc(release.latest)}">Dismiss</button></div>`;
 }
 /* Asks before Slorp installs the newer release and restarts. */
 function upgradeModal() {
@@ -2438,7 +2438,7 @@ function upgradeModal() {
       <li>Slorp then restarts, and this page loads again once it is back.</li>
       <li>Any OpenCode sessions Slorp started are stopped.</li></ul>
     <div class="mfoot"><button class="btn" data-act="modalClose">Cancel</button>
-      <span class="bar"><button class="btn go" data-act="upgradeYes">Upgrade and restart</button></span></div>
+      <span class="bar"><button class="btn go" data-act="upgradeYes">Upgrade and Restart</button></span></div>
   </div></div>`;
 }
 function releaseSetting() {
@@ -2502,32 +2502,32 @@ const menuTo = (act, id, list) => list.map(([to, name]) => `<button data-act="${
 const actsMenu = (id, about, rows) => `<details class="menu acts" id="acts" data-id="${id}" ${actsFor === id ? 'open' : ''}><summary class="icon" title="${about}" aria-label="More to do with this">⋯</summary>
     <div class="pop">${rows}</div></details>`;
 function itemMenu(it, more) {
-  return actsMenu(it.id, 'Snooze, dismiss, move and more', `${menuPart('snooze', 'Snooze', `<button data-act="snooze" data-id="${it.id}" data-for="hour">For an hour</button><button data-act="snooze" data-id="${it.id}" data-for="tomorrow">Until tomorrow</button>`)}
+  return actsMenu(it.id, 'Snooze, dismiss, move and more', `${menuPart('snooze', 'Snooze', `<button data-act="snooze" data-id="${it.id}" data-for="hour">For an Hour</button><button data-act="snooze" data-id="${it.id}" data-for="tomorrow">Until Tomorrow</button>`)}
       <button data-act="dismiss" data-id="${it.id}">Dismiss</button>${more}`);
 }
 /* The user's efforts that are not shelved: the ones on the board, and the ones things can be filed under. */
 const openEfforts = () => liveEfforts.filter(e => !e.shelved);
 /* The efforts a live session or repository could be filed under other than cur. */
-const effortsBut = cur => openEfforts().concat(LIVE_UNSORTED).filter(e => e.id !== cur).map(e => [e.id, e.name]).concat([['__new', 'New effort…']]);
+const effortsBut = cur => openEfforts().concat(LIVE_UNSORTED).filter(e => e.id !== cur).map(e => [e.id, e.name]).concat([['__new', 'New Effort…']]);
 /* The parts of a menu that file something from a repository: the pull request it is about on its own, that
    pull request back with its repository once it has been filed apart, and everything from the repository. */
 function filingParts(pull, repo, effort, via) {
   const under = effort || 'unsorted';
-  return `${pull ? menuPart('move', 'Move to', menuTo('pullMoveTo', esc(pull), effortsBut(under))) : ''}
-    ${pull && via === 'you' ? `<button data-act="pullFollow" data-id="${esc(pull)}">File with ${esc(repo)} again</button>` : ''}
-    ${menuPart('repo', `File all of ${esc(repo)} under`, menuTo('repoMoveTo', esc(repo), effortsBut(via === 'you' ? '' : under)))}`;
+  return `${pull ? menuPart('move', 'Move To', menuTo('pullMoveTo', esc(pull), effortsBut(under))) : ''}
+    ${pull && via === 'you' ? `<button data-act="pullFollow" data-id="${esc(pull)}">File With ${esc(repo)} Again</button>` : ''}
+    ${menuPart('repo', `File All of ${esc(repo)} Under`, menuTo('repoMoveTo', esc(repo), effortsBut(via === 'you' ? '' : under)))}`;
 }
 /* The menu beside a session's title: what can be done with the session, after what can be done with its item, if it has one. */
 function sessionMenu(s, it) {
   const roles = knowledge.roles.filter(r => !(r.id === s.role && s.roleVia === 'you')).map(r => [r.id, r.name])
-    .concat(s.role || s.roleVia !== 'you' ? [['__none', 'No role']] : [], [['__new', 'New role…']]);
-  const rows = `${menuPart('move', 'Move to', menuTo('liveMoveTo', s.id, effortsBut(s.effort || 'unsorted')))}
-    ${menuPart('role', s.role && s.roleVia === 'you' ? 'Change role' : 'Role', menuTo('liveRoleTo', s.id, roles))}
-    ${s.agent === 'claude' && s.job ? `<button data-act="copyText" data-text="${esc(attachCommand(s))}" title="Copies the command that opens this background session in Claude Code, in a terminal. It keeps running when you leave it.">Copy attach command</button>` : ''}
+    .concat(s.role || s.roleVia !== 'you' ? [['__none', 'No Role']] : [], [['__new', 'New Role…']]);
+  const rows = `${menuPart('move', 'Move To', menuTo('liveMoveTo', s.id, effortsBut(s.effort || 'unsorted')))}
+    ${menuPart('role', s.role && s.roleVia === 'you' ? 'Change Role' : 'Role', menuTo('liveRoleTo', s.id, roles))}
+    ${s.agent === 'claude' && s.job ? `<button data-act="copyText" data-text="${esc(attachCommand(s))}" title="Copies the command that opens this background session in Claude Code, in a terminal. It keeps running when you leave it.">Copy Attach Command</button>` : ''}
     ${terminalButton(s)}
-    ${lifecycleCap(s.agent, 'resumeCommand') ? `<button data-act="copyResume" data-id="${esc(s.id)}" ${commandReading.has(s.id) ? 'disabled' : ''}>${commandReading.has(s.id) ? 'Fetching command…' : 'Copy resume command'}</button>` : ''}
-    ${canStop(s) ? `<button data-act="stop" data-id="${esc(s.id)}" title="Stops this background session. Its conversation is kept, and it can be reopened from the closed sessions under Sessions.">Stop session</button>` : ''}`;
-  return it ? itemMenu(it, `${s.pending ? '' : `<button data-act="livePark" data-id="${it.id}">Park as open question</button>`}${rows}`)
+    ${lifecycleCap(s.agent, 'resumeCommand') ? `<button data-act="copyResume" data-id="${esc(s.id)}" ${commandReading.has(s.id) ? 'disabled' : ''}>${commandReading.has(s.id) ? 'Fetching Command…' : 'Copy Resume Command'}</button>` : ''}
+    ${canStop(s) ? `<button data-act="stop" data-id="${esc(s.id)}" title="Stops this background session. Its conversation is kept, and it can be reopened from the closed sessions under Sessions.">Stop Session</button>` : ''}`;
+  return it ? itemMenu(it, `${s.pending ? '' : `<button data-act="livePark" data-id="${it.id}">Park as Open Question</button>`}${rows}`)
     : actsMenu(s.id, 'Move, give a role and more', rows);
 }
 /* The other sessions filed under an effort, as rows, and how many there are. */
@@ -2538,7 +2538,7 @@ const alsoRows = (effort, except) => {
         <span class="side">${kindBadge(x.agent)} · ${(LIVE_STATUS[x.status] || LIVE_STATUS.idle)[1]}</span></div>`).join('') : '<div class="none">No other sessions here.</div>' };
 };
 
-const alsoIn = (effort, except) => `<div class="sec"><div class="label"><span>Also going on in ${esc(effortById(effort).name)}</span></div>
+const alsoIn = (effort, except) => `<div class="sec"><div class="label"><span>Also Going On in ${esc(effortById(effort).name)}</span></div>
       ${alsoRows(effort, except).html}</div>`;
 
 /* The pull request an integration's item is about, if it is listed. */
@@ -2561,17 +2561,17 @@ function branchSessions(p) {
 /* A feed item: nothing to reply to, only somewhere to go. Moving it files the pull request it is about. */
 function feedItemDetail(it) {
   const real = it.effort !== 'unsorted', p = pullOfItem(it), point = p && it.point && (p.points || []).find(x => x.id === it.point);
-  const menu = itemMenu(it, `<button data-act="livePark" data-id="${it.id}">Park as open question</button>
+  const menu = itemMenu(it, `<button data-act="livePark" data-id="${it.id}">Park as Open Question</button>
     ${filingParts(it.pull, it.repo, it.effort, it.effortVia)}`);
   return `<div class="inner">
     <div class="crumb">${real ? `<button class="eff" data-act="effort" data-id="${it.effort}">${effortMark(effortById(it.effort), 's')}${esc(effortById(it.effort).name)} ›</button>` : '<span class="eff">Unsorted</span>'}${real && VIA_REPO[it.effortVia] ? `<span>${VIA_REPO[it.effortVia]}</span>` : ''}${kindBadge(it.kind, it.src)}<span>${ago(ageOf(it))}</span><span class="tag ${it.urgency}">${it.urgency}</span><span class="mono">${esc(it.repo)}</span></div>
     <div class="titled"><h1 class="${state.fluent ? '' : 'mono'}">${esc(state.fluent ? it.title : it.raw)}</h1>${menu}</div>
-    <div class="need"><div class="label">${it.point ? spark : ''}What's needed from you</div>${point ? pointHtml(p, point) : `<p class="ask">${esc(it.ask)}</p>`}
+    <div class="need"><div class="label">${it.point ? spark : ''}What's Needed From You</div>${point ? pointHtml(p, point) : `<p class="ask">${esc(it.ask)}</p>`}
       ${/^https:\/\//.test(it.url || '') ? `<div class="replies" ${point ? 'style="margin-top:14px"' : ''}>${point ? '' : `<a class="btn go" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">Open on ${esc(it.src)} ↗</a>`}
-        ${p ? `<button class="btn" data-act="pullOpen" data-id="${esc(pullKey(p))}">Its discussion, under PRs ›</button>` : ''}
+        ${p ? `<button class="btn" data-act="pullOpen" data-id="${esc(pullKey(p))}">Its Discussion, Under PRs ›</button>` : ''}
         <span class="none" style="align-self:center">Slorp only ever reads ${esc(it.src)}.</span></div>` : ''}</div>
     ${onBranch(it)}
-    ${it.point && p ? `<div class="sec"><div class="label"><span>${p.brief ? spark : ''}Where it stands</span></div>${pullStands(p)}
+    ${it.point && p ? `<div class="sec"><div class="label"><span>${p.brief ? spark : ''}Where It Stands</span></div>${pullStands(p)}
         <div class="none" style="margin-top:8px">${spark}The local model picked this out of the discussion of <span class="mono">${esc(it.pull)}</span>, as ${esc(it.src)} had it ${ago(minsSince(p.readAt || it.at))}.</div></div>`
       : `<div class="sec"><div class="label"><span>Recap</span></div><p class="prose">${esc(it.summary)}</p>
       <div class="none" style="margin-top:8px">As ${esc(it.src)} reported it ${ago(minsSince((feeds[it.source] || {}).at || it.at))}. No model wrote any of this.</div></div>`}
@@ -2720,10 +2720,10 @@ function subsBody(sessionId, list, closed, used) {
       const live = subRunning(a) && !closed;
       const said = !open ? '' : !doc ? '<div class="subdoc"><div class="none">Fetching what it was asked and reported…</div></div>'
         : doc.missing || doc.failed ? `<div class="subdoc"><div class="none">${doc.missing ? 'No record is available for this subagent.' : 'Could not load what this subagent was asked and reported. Try again.'}</div>
-            <button class="link" data-act="subRetry" data-id="${esc(cacheKey)}">Retry loading report</button></div>`
-        : `<div class="subdoc">${doc.prompt ? `<div class="said ${state.expanded['said:' + key] ? 'open' : ''}"><div class="label">What it was asked</div><div class="tx">${esc(doc.prompt)}</div>
-            <button class="link" data-act="expand" data-id="said:${esc(key)}" hidden>${state.expanded['said:' + key] ? 'Show less' : 'Show all of it'}</button></div>` : ''}
-          <div class="label" style="margin-bottom:6px">${doc.handed ? 'What it reported' : a.done || closed ? 'The last thing it said' : 'The last thing it has said'}</div>
+            <button class="link" data-act="subRetry" data-id="${esc(cacheKey)}">Retry Loading Report</button></div>`
+        : `<div class="subdoc">${doc.prompt ? `<div class="said ${state.expanded['said:' + key] ? 'open' : ''}"><div class="label">What It Was Asked</div><div class="tx">${esc(doc.prompt)}</div>
+            <button class="link" data-act="expand" data-id="said:${esc(key)}" hidden>${state.expanded['said:' + key] ? 'Show Less' : 'Show All of It'}</button></div>` : ''}
+          <div class="label" style="margin-bottom:6px">${doc.handed ? 'What It Reported' : a.done || closed ? 'The Last Thing It Said' : 'The Last Thing It Has Said'}</div>
           ${doc.report ? md(doc.report) : '<div class="none">Nothing yet.</div>'}</div>`;
       return `<button class="lane ${open ? 'open' : ''}" data-act="expand" data-id="${esc(key)}" style="${a.depth > 1 ? `padding-left:${(a.depth - 1) * 16}px` : ''}" aria-expanded="${!!open}">
           <span class="what"><span class="t">${esc(a.description || a.type || a.id)}</span>${live && a.doing ? `<span class="doing" title="What it says it is doing">${esc(a.doing)}</span>` : ''}<span class="m">${about}</span></span>
@@ -2743,7 +2743,7 @@ const factList = (facts, cls = '') => `<dl class="facts ${cls}">${facts.filter(B
 const vitals = s => factList([
   s.contextTokens && ['Context', contextUse(s)],
   s.model && ['Model', runsOn(s)],
-  ['Last active', `<span title="${esc(new Date(s.activeAt).toLocaleString())}">${ago(minsSince(s.activeAt))}</span>`],
+  ['Last Active', `<span title="${esc(new Date(s.activeAt).toLocaleString())}">${ago(minsSince(s.activeAt))}</span>`],
 ], 'vitals');
 /* What else Slorp knows of a session, folded away until asked for, and what was sent to it from here. */
 function aboutSession(s) {
@@ -2759,7 +2759,7 @@ function aboutSession(s) {
     fresh + out > 0 && ['Used', `<span title="Tokens sent for the first time, tokens the model wrote, and tokens read back from the cache.">${tokens(fresh)} new, ${tokens(out)} written${read ? `, ${tokens(read)} cached` : ''}</span>`],
     s.costUsd && ['Cost', `<span title="What its agent puts its use at, at list prices.">about ${money(s.costUsd)}</span>`],
     theirs && ['Subagents', `${num(subs.length)}, using ${tokens(theirs)} of the new tokens`],
-    ['Filed under', `${esc(effortById(s.effort || 'unsorted').name)}${s.effort && VIA[s.effortVia] ? `, ${VIA[s.effortVia]}` : ''}`],
+    ['Filed Under', `${esc(effortById(s.effort || 'unsorted').name)}${s.effort && VIA[s.effortVia] ? `, ${VIA[s.effortVia]}` : ''}`],
     s.role && roleById(s.role) && ['Role', `${esc(roleById(s.role).name)}, ${s.roleVia === 'guess' ? 'guessed by the model' : 'given by you'}`],
     ['Session', `<span class="mono">${esc(s.id)}</span> <button class="link" data-act="copyText" data-text="${esc(s.id)}">copy</button>`],
     s.agent === 'claude' && s.job && ['Attach', `<span class="mono">${esc(attachCommand(s))}</span> <button class="link" data-act="copyText" data-text="${esc(attachCommand(s))}" title="Copy the command that opens this background session in Claude Code, in a terminal">copy</button>`],
@@ -2767,7 +2767,7 @@ function aboutSession(s) {
   const sent = (s.replies || []).map(r => `<div><b>${esc(r.state)}</b> · ${esc(r.text)}</div>`).join('');
   const open = !!state.aboutOpen;
   return `<div class="tlhead ${open ? '' : 'shut'}"><button class="label" data-act="aboutOpen" aria-expanded="${open}"><span class="chev ${open ? '' : 'shut'}">▼</span> Details</button></div>${open ? factList(facts) : ''}
-    ${sent ? `<div class="label" style="margin-top:22px">Sent from here</div><div class="livebox"><div class="sent">${sent}</div></div>` : ''}`;
+    ${sent ? `<div class="label" style="margin-top:22px">Sent From Here</div><div class="livebox"><div class="sent">${sent}</div></div>` : ''}`;
 }
 
 /* The tabs under a session: the latest of its conversation, rendered or as it
@@ -2778,8 +2778,8 @@ function detailTabs(s) {
   const tab = (key, name) => `<button class="label ${on === key ? 'on' : ''}" data-act="detailTab" data-t="${key}">${name}</button>`;
   const shown = state.sourceRaw ? `<div class="rawblock"><div class="tx">${esc(s.lastReply)}</div></div>` : md(s.lastReply);
   const open = state.expanded['said:' + s.id];
-  const source = () => `${s.lastPrompt ? `<div class="said ${open ? 'open' : ''}"><div class="label">You said</div><div class="tx">${esc(s.lastPrompt)}</div>
-      <button class="link" data-act="expand" data-id="said:${s.id}" hidden>${open ? 'Show less' : 'Show all of it'}</button></div>` : ''}
+  const source = () => `${s.lastPrompt ? `<div class="said ${open ? 'open' : ''}"><div class="label">You Said</div><div class="tx">${esc(s.lastPrompt)}</div>
+      <button class="link" data-act="expand" data-id="said:${s.id}" hidden>${open ? 'Show Less' : 'Show All of It'}</button></div>` : ''}
     ${s.lastReply ? shown : '<div class="none">No response found for this session.</div>'}
     <div class="none mono" style="margin-top:12px">${esc(rawOf(s))}</div>`;
   return `<div class="tabs" role="tablist">${tab('source', 'Conversation')}${subs.length ? tab('subs', `Subagents<span class="n">${subs.length}</span>`) : ''}${tab('also', `Also In ${esc(effortById(effort).name)}<span class="n">${others.count}</span>`)}
@@ -2807,8 +2807,8 @@ function timeline(s, open) {
   const fill = !(open && capabilities[s.agent]?.history) ? ''
     : historyReading.has(s.id) ? '<span class="none">Reading earlier history…</span>'
     : s.backfilling ? `<span class="none">${spark}Filling in ${plural(s.backfilling, 'earlier exchange')}…</span>`
-    : modelless() ? `<button class="link off" disabled title="${NO_MODEL} to say how earlier exchanges came out.">Fill in earlier history</button>`
-    : `<button class="link" data-act="backfill" data-id="${s.id}" title="Reads this session's transcript and has the local model say how up to forty earlier exchanges came out. It happens only when you ask.">Fill in earlier history</button>`;
+    : modelless() ? `<button class="link off" disabled title="${NO_MODEL} to say how earlier exchanges came out.">Fill In Earlier History</button>`
+    : `<button class="link" data-act="backfill" data-id="${s.id}" title="Reads this session's transcript and has the local model say how up to forty earlier exchanges came out. It happens only when you ask.">Fill In Earlier History</button>`;
   if (!moments.length && !fill) return '';
   return `<div class="label tlhead"><span>Timeline</span>${fill}</div>${moments.length ? (modelless() && moments.some(m => !m.line) ? `<div class="none">${NO_MODEL}, so new entries are only what you said.</div>` : '') : '<div class="none">Nothing has been said in it since Slorp began watching.</div>'}<ol class="tl">${moments.map(m => `<li class="${m.compacted ? 'mark' : ''}"><span class="when" title="${esc(new Date(m.at).toLocaleString())}">${minsSince(m.at) < 1 ? 'now' : span(minsSince(m.at))}</span>
     <div>${m.compacted ? `<div class="you" title="Its agent replaced the conversation up to here with a summary of it, to make room in its context.">${compactedLine(m.compacted)}</div>`
@@ -2841,9 +2841,9 @@ function pageHead(effort, name, filed, chips, stands) {
 function sessionPage(s, it, stands) {
   const subtitle = it ? it.subtitle : s.status !== 'working' && s.insight?.title;
   const summary = it ? it.summary : s.insight?.summary;
-  const needs = it ? `<div class="label">${it.summary ? spark : ''}What's needed from you</div><p class="ask">${esc(it.ask)}</p>`
-    : s.pending ? `<div class="label" style="margin-bottom:10px">${s.pending.question || askedQuestions(s.pending) ? 'Waiting for your answer' : 'Waiting for your permission'}</div>`
-    : s.canReply ? '<div class="label">Say something to it</div>' : '';
+  const needs = it ? `<div class="label">${it.summary ? spark : ''}What's Needed From You</div><p class="ask">${esc(it.ask)}</p>`
+    : s.pending ? `<div class="label" style="margin-bottom:10px">${s.pending.question || askedQuestions(s.pending) ? 'Waiting for Your Answer' : 'Waiting for Your Permission'}</div>`
+    : s.canReply ? '<div class="label">Say Something to It</div>' : '';
   return `<div class="inner">
     ${pageHead(s.effort, s.label, `${s.effortVia === 'guess' ? `<span>${spark}filed by the model</span>` : ''}`, `${kindBadge(s.agent)}${roleChip(s)}${pullChip(s, true)}`, `${s.model ? `<span>${runsOn(s)}</span>` : ''}${contextUse(s)}${stands}`)}
     <div class="titled">${renaming === s.id
@@ -2928,7 +2928,7 @@ function promptBox(s) {
   if (qs && p.answerable) {
     const ready = selectionsFor(p, qs).every(a => a.length);
     return `${questionBox(qs, p)}<div class="replies" style="margin-top:12px">
-      <button class="btn go" data-act="liveAnswer" data-id="${p.id}" ${ready ? '' : 'disabled'}>Send answer</button>
+      <button class="btn go" data-act="liveAnswer" data-id="${p.id}" ${ready ? '' : 'disabled'}>Send Answer</button>
       ${p.ordered ? `<button class="btn" data-act="livePermit" data-id="${p.id}" data-behavior="deny">Dismiss</button>` : ''}
       <span class="none" style="align-self:center">${ready ? 'The terminal is asking too; whichever you answer first decides.' : `Answer ${qs.length === 1 ? 'the question' : 'each question'}${p.ordered && qs.some(q => q.custom) ? ' using the options or your own text.' : '. To type something else, answer in the terminal.'}`}</span></div>`;
   }
@@ -2937,7 +2937,7 @@ function promptBox(s) {
   const what = `<div class="rawblock" style="margin-bottom:10px;max-height:280px;overflow:auto"><div class="who" style="margin-bottom:4px">${esc(p.tool)}</div><div class="tx">${esc(p.input || p.summary)}</div></div>`;
   if (!p.answerable) return `${what}<div class="none">Answer this one in the session's terminal.</div>`;
   return `${what}<div class="replies">
-      <button class="btn go" data-act="livePermit" data-id="${p.id}" data-behavior="allow">Allow once</button>
+      <button class="btn go" data-act="livePermit" data-id="${p.id}" data-behavior="allow">Allow Once</button>
       <button class="btn" data-act="livePermit" data-id="${p.id}" data-behavior="deny">Deny</button>
       <span class="none" style="align-self:center">The terminal is asking too; whichever you answer first decides.</span></div>
     <textarea data-keep="deny-${p.id}" placeholder="If you deny, you can tell it why…" style="display:block;width:100%;min-height:44px;margin-top:10px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);resize:vertical"></textarea>`;
@@ -3079,12 +3079,12 @@ function closedPage(a) {
     ${pageHead(a.effort, a.label, '', a.agent ? kindBadge(a.agent) : '', `${stat('done', `closed ${ago(minsSince(a.endedAt))}`)}${ran}${a.cwd ? `<span class="mono" title="${esc(a.cwd)}">${esc(shortPath(a.cwd))}</span>` : ''}`)}
     <h1>${esc(a.label)}</h1>
     ${a.title && state.fluent ? `<p class="subt">${spark}${esc(a.title)}</p>` : ''}
-    ${lifecycleCap(a.agent, 'resume') || lifecycleCap(a.agent, 'resumeCommand') ? `<div class="need"><div class="label">Pick it back up</div>
-      ${lifecycleCap(a.agent, 'resumeCommand') ? `<div class="cmd">${cmd ? `<span class="mono">${esc(cmd)}</span>` : ''}${terminalButton(a, 'btn')}<button class="btn" data-act="copyResume" data-id="${esc(a.id)}" ${commandReading.has(a.id) ? 'disabled' : ''}>${commandReading.has(a.id) ? 'Fetching command…' : 'Copy resume command'}</button></div>` : ''}
+    ${lifecycleCap(a.agent, 'resume') || lifecycleCap(a.agent, 'resumeCommand') ? `<div class="need"><div class="label">Pick It Back Up</div>
+      ${lifecycleCap(a.agent, 'resumeCommand') ? `<div class="cmd">${cmd ? `<span class="mono">${esc(cmd)}</span>` : ''}${terminalButton(a, 'btn')}<button class="btn" data-act="copyResume" data-id="${esc(a.id)}" ${commandReading.has(a.id) ? 'disabled' : ''}>${commandReading.has(a.id) ? 'Fetching Command…' : 'Copy Resume Command'}</button></div>` : ''}
       ${lifecycleCap(a.agent, 'resume') ? `<label><span>Prompt <i>optional</i></span><textarea data-keep="resume-${esc(a.id)}" placeholder="What should it do next?" aria-label="Reopen prompt">${esc(resumeAttempts.get(a.id)?.body.prompt || '')}</textarea></label>
-      <div class="replies"><button class="btn go" data-act="reopen" data-id="${esc(a.id)}" ${reopening.has(a.id) ? 'disabled' : ''}>${reopening.has(a.id) ? 'Reopening…' : 'Reopen in the background'}</button>
+      <div class="replies"><button class="btn go" data-act="reopen" data-id="${esc(a.id)}" ${reopening.has(a.id) ? 'disabled' : ''}>${reopening.has(a.id) ? 'Reopening…' : 'Reopen in the Background'}</button>
         <span class="none" style="align-self:center">Its conversation is kept. Without a prompt, it waits for a message.</span></div>` : ''}</div>` : ''}
-    <div class="sec"><div class="label"><span>${a.summary ? spark : ''}How it stood</span></div>
+    <div class="sec"><div class="label"><span>${a.summary ? spark : ''}How It Stood</span></div>
       <p class="prose">${a.summary ? esc(a.summary) : `<span class="none">${modelless() ? `${NO_MODEL}, so it was not summarized.` : 'The model wrote nothing about it before it closed.'}</span>`}</p></div>
     ${doc && (doc.subagents || []).length ? `<div class="sec"><div class="label"><span>Subagents (${doc.subagents.length})</span></div>${subsBody(a.id, doc.subagents, true)}</div>` : ''}
     ${doc ? timeline(doc) || '<div class="label tlhead"><span>Timeline</span></div><div class="none">Nothing was said in it while Slorp was watching.</div>' : '<div class="none" style="margin-top:28px">Fetching its timeline…</div>'}
@@ -3112,7 +3112,7 @@ function viewSessionsLive() {
     side = sessionSide(sel, it ? it.summary : sel.insight?.summary, stale, 'act-side');
   } else if (sel) detail = closedPage(sel);
   return sessionsView([
-    needing.length ? ['needs', 'Needs you', needing.length, '', needing.map(sessionRowLive).join('')] : null,
+    needing.length ? ['needs', 'Needs You', needing.length, '', needing.map(sessionRowLive).join('')] : null,
     ['active', 'Active', rest.length, line, rest.map(sessionRowLive).join('')],
     ['closed', 'Closed', closed.length, closed.length ? '' : 'Sessions are kept here once they close.', closed.map(a => closedRow(a)).join('')],
   ], detail, side);
@@ -3175,7 +3175,7 @@ const MOCK_DISCUSSIONS = {
       { path: 'projection/loop.go', line: 203, resolved: true, comments: [saidBy('you', 600, 'This updates the gauge for every event. Once per batch is plenty.'), saidBy('tomas', 82, 'Done in the next commit.')] }],
     commits: [{ id: '1d9e3aa', headline: 'Export projection lag per partition', author: 'tomas', at: minsAgo(1300) }, { id: '6f2b9c0', headline: 'Update the gauge once per batch', author: 'tomas', at: minsAgo(80) }] },
 };
-const PULL_FILTERS = [['all', 'Everything', () => true], ['mine', 'Yours', p => p.mine], ['review', 'To review', p => !p.mine && !p.reviewed], ['reviewed', 'Reviewed', p => p.reviewed]];
+const PULL_FILTERS = [['all', 'Everything', () => true], ['mine', 'Yours', p => p.mine], ['review', 'To Review', p => !p.mine && !p.reviewed], ['reviewed', 'Reviewed', p => p.reviewed]];
 const plural = (n, one, many = one + 's') => `${num(n)} ${n === 1 ? one : many}`;
 
 /* What the model takes a point of a discussion for, as its tag says it and how loudly. */
@@ -3203,7 +3203,7 @@ const discussionOf = p => live ? pullDocs[pullKey(p)] : MOCK_DISCUSSIONS[pullKey
 /* The pull requests as their list shows them: those where the next move is the user's, those waiting on someone else, and drafts. */
 function pullGroups() {
   const test = (PULL_FILTERS.find(([k]) => k === state.pullFilter) || PULL_FILTERS[0])[2], shown = allPulls().filter(test);
-  return [['you', 'Your move', shown.filter(yourMove)], ['others', 'Waiting on others', shown.filter(p => !yourMove(p) && !p.draft)], ['drafts', 'Drafts', shown.filter(p => !yourMove(p) && p.draft)]];
+  return [['you', 'Your Move', shown.filter(yourMove)], ['others', 'Waiting on Others', shown.filter(p => !yourMove(p) && !p.draft)], ['drafts', 'Drafts', shown.filter(p => !yourMove(p) && p.draft)]];
 }
 const pullsShown = () => pullGroups().flatMap(([key, , list]) => state.collapsed['pr:' + key] ? [] : list);
 
@@ -3222,7 +3222,7 @@ function pointHtml(p, x) {
   const [word, tone] = SORTS[x.sort] || [], open = state.expanded['pt:' + x.id], where = fileLine(x);
   return `<div class="pt">
     <div class="pth">${word ? `<span class="tag ${tone}">${word}</span>` : ''}<span class="ptl">${x.gist ? spark + esc(x.gist) : `${esc(x.who)} ${where ? `on ${esc(where)}` : POINT_KINDS[x.kind] || 'spoke last'}`}</span></div>
-    <div class="said ${open ? 'open' : ''}"><div class="tx">${esc(x.text)}</div><button class="link" data-act="expand" data-id="pt:${esc(x.id)}" hidden>${open ? 'Show less' : 'Show all of it'}</button></div>
+    <div class="said ${open ? 'open' : ''}"><div class="tx">${esc(x.text)}</div><button class="link" data-act="expand" data-id="pt:${esc(x.id)}" hidden>${open ? 'Show Less' : 'Show All of It'}</button></div>
     <div class="ptm"><span>${esc(x.who)}</span>${where ? `<span class="mono" title="${esc(x.path)}">${esc(where)}</span>` : `<span>${POINT_KINDS[x.kind] || ''}</span>`}<span title="${esc(new Date(x.at).toLocaleString())}">${ago(minsSince(x.at))}</span>
       ${/^https:\/\//.test(x.url || '') ? `<a class="link" href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">Answer on GitHub ↗</a>` : ''}</div>
   </div>`;
@@ -3233,7 +3233,7 @@ function pullNeeds(p) {
   const open = openPoints(p), rest = (p.points || []).filter(x => x.sort === 'settled'), more = state.expanded['settled:' + pullKey(p)];
   const sorted = (p.points || []).some(x => x.sort), link = /^https:\/\//.test(p.url || '') ? `<a class="btn ${open.length ? '' : 'go'}" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">Open on GitHub ↗</a>` : '';
   const reading = live && !p.readAt ? '<div class="none">Reading its discussion…</div>' : '';
-  return `<div class="need"><div class="label">${open.length ? `${sorted ? spark : ''}Open for you (${open.length})` : p.onYou ? "What's needed from you" : 'Nothing is waiting on you'}</div>
+  return `<div class="need"><div class="label">${open.length ? `${sorted ? spark : ''}Open for You (${open.length})` : p.onYou ? "What's Needed From You" : 'Nothing Is Waiting on You'}</div>
     ${open.length ? '' : `<p class="ask">${esc(p.needs)}</p>`}${open.map(x => pointHtml(p, x)).join('')}${reading}
     ${open.length && !sorted ? `<div class="none">${modelless() ? `${NO_MODEL}, so these are everything where someone else spoke last, unsorted.` : 'Not sorted by the model yet: these are everything where someone else spoke last.'}</div>` : ''}
     ${rest.length ? `<button class="link" data-act="expand" data-id="settled:${esc(pullKey(p))}">${more ? 'Hide' : 'Show'} ${plural(rest.length, 'more')} the model reads as needing nothing</button>${more ? rest.map(x => pointHtml(p, x)).join('') : ''}` : ''}
@@ -3278,12 +3278,12 @@ function pullSince(p, d) {
   if (!c) return '';
   const lines = c.files.reduce((n, f) => [n[0] + f.additions, n[1] + f.deletions], [0, 0]), open = state.expanded['since:' + pullKey(p)];
   const files = c.files.map(f => `<div class="srow"><div class="body"><span class="mono" style="font-size:12px">${esc(f.path)}</span></div><span class="side">${f.status === 'modified' ? '' : `${esc(f.status)} · `}+${f.additions} −${f.deletions}</span></div>`).join('');
-  return `<div class="sec"><div class="label"><span>${told ? spark : ''}Since you reviewed</span></div>
+  return `<div class="sec"><div class="label"><span>${told ? spark : ''}Since You Reviewed</span></div>
     <p class="prose">${told ? esc(told) : `<span class="none">${modelless() ? `${NO_MODEL}, so what was pushed is not summarized.` : 'Not summarized yet.'}</span>`}</p>
     ${c.rebuilt ? '<div class="none" style="margin-top:8px">The branch was rebuilt since, so this covers everything it now changes, not only what is new.</div>' : ''}
     <div class="none" style="margin-top:8px">${cap(plural(c.commits, 'commit'))} since <span class="mono">${esc(c.from)}</span>, changing ${plural(c.files.length + (c.more || 0), 'file')} of the pull request${c.files.length ? ` by +${lines[0]} −${lines[1]}` : ''}.
-      ${c.files.length ? `<button class="link" data-act="expand" data-id="since:${esc(pullKey(p))}">${open ? 'Hide them' : 'List them'}</button>` : ''}
-      ${/^https:\/\//.test(c.url || '') ? `<a class="link" href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">See the changes on GitHub ↗</a>` : ''}</div>
+      ${c.files.length ? `<button class="link" data-act="expand" data-id="since:${esc(pullKey(p))}">${open ? 'Hide Them' : 'List Them'}</button>` : ''}
+      ${/^https:\/\//.test(c.url || '') ? `<a class="link" href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">See the Changes on GitHub ↗</a>` : ''}</div>
     ${open ? `${files}${c.more ? `<div class="none">And ${plural(c.more, 'more')}.</div>` : ''}` : ''}</div>`;
 }
 
@@ -3300,7 +3300,7 @@ function aboutPull(p, d) {
     ['Checks', `<span class="${p.checks === 'failing' ? 'bad' : ''}">${esc(p.checks)}</span>${d && d.failing.length ? `: ${esc(listOf(d.failing))}` : ''}`],
     ['Merge', p.conflicts ? '<span class="bad">conflicts with its base</span>' : p.draft ? 'a draft' : 'no conflicts reported'],
     d && ['Size', `+${d.additions} −${d.deletions} in ${plural(d.files, 'file')}, ${plural(d.commitCount, 'commit')}`],
-    ['Filed under', real ? `<button class="link" data-act="effort" data-id="${p.effort}">${esc(effortById(p.effort).name)}</button>` : 'Unsorted'],
+    ['Filed Under', real ? `<button class="link" data-act="effort" data-id="${p.effort}">${esc(effortById(p.effort).name)}</button>` : 'Unsorted'],
     on.length && ['Sessions', on.map(s => `<button class="link" data-act="openSession" data-id="${s.id}">${esc(clip(s.label, 40))}</button>`).join(', ')],
     ['Changed', `<span title="${esc(p.at ? new Date(p.at).toLocaleString() : '')}">${ago(pullAt(p))}</span>`],
     p.readAt && ['Read', `<span title="When Slorp last read its discussion from GitHub">${ago(minsSince(p.readAt))}</span>`],
@@ -3331,7 +3331,7 @@ function pullPage(p, d) {
     ${pullNeeds(p)}
     ${pullSince(p, d)}
     ${on.length ? branchSessions(p) : ''}
-    <div class="sec going"><div class="label"><span>${p.brief ? spark : ''}Where it stands</span></div>${pullStands(p)}</div>
+    <div class="sec going"><div class="label"><span>${p.brief ? spark : ''}Where It Stands</span></div>${pullStands(p)}</div>
     ${pullTabs(p, d)}
     <div class="going">${aboutPull(p, d)}${pullTimeline(d)}</div>
   </div>`;
@@ -3343,8 +3343,8 @@ function viewPulls() {
   const sel = all.find(p => pullKey(p) === state.pullSel), d = sel && discussionOf(sel);
   if (sel) fetchPull(sel);
   const off = live && !github.available;
-  const status = off ? `Pull requests come from GitHub, which is turned on but unavailable. <button class="link" data-act="setGo" data-s="integrations">Open integrations ›</button>`
-    : live ? `${!feed ? 'Checking GitHub now…' : feed.error ? `The last check, ${ago(minsSince(feed.at))}, failed: ${esc(feed.error)}` : `As GitHub listed them ${ago(minsSince(feed.at))}.`} <button class="link" data-act="feedCheck">Check now</button>` : '';
+  const status = off ? `Pull requests come from GitHub, which is turned on but unavailable. <button class="link" data-act="setGo" data-s="integrations">Open Integrations ›</button>`
+    : live ? `${!feed ? 'Checking GitHub now…' : feed.error ? `The last check, ${ago(minsSince(feed.at))}, failed: ${esc(feed.error)}` : `As GitHub listed them ${ago(minsSince(feed.at))}.`} <button class="link" data-act="feedCheck">Check Now</button>` : '';
   const chips = PULL_FILTERS.map(([k, name, t]) => `<button class="chip ${state.pullFilter === k ? 'on' : ''}" data-act="pullFilter" data-f="${k}">${name} <span class="n">${all.filter(t).length}</span></button>`).join('');
   const rows = ['long', 'short'].map(as => `<button class="${(state.rows || 'long') === as ? 'on' : ''}" data-act="rows" data-as="${as}">${cap(as)}</button>`).join('');
   const points = all.reduce((n, p) => n + openPoints(p).length, 0), blocking = all.filter(p => p.urgency === 'blocking').length;
@@ -3355,11 +3355,11 @@ function viewPulls() {
       ${shut ? '' : `${lines[key] ? `<div class="gline">${lines[key]}</div>` : ''}${items.map(p => pullRow(p)).join('') || (key === 'you' ? '<div class="gline">Nothing here is yours to move.</div>' : '')}`}`;
   }).join('');
   const side = !sel ? '' : state.sideShut
-    ? `<aside class="pane side"><button class="rail" data-act="side" title="Show where it stands" aria-expanded="false"><span>‹</span><span class="label">${sel.brief ? spark : ''}Where it stands</span></button></aside>`
-    : `<aside class="pane side" data-scroll="pr-side"><div class="head"><span class="label">${sel.brief ? spark : ''}Where it stands</span><button data-act="side" title="Hide this panel" aria-expanded="true">›</button></div>${pullStands(sel)}${aboutPull(sel, d)}${pullTimeline(d)}</aside>`;
+    ? `<aside class="pane side"><button class="rail" data-act="side" title="Show where it stands" aria-expanded="false"><span>‹</span><span class="label">${sel.brief ? spark : ''}Where It Stands</span></button></aside>`
+    : `<aside class="pane side" data-scroll="pr-side"><div class="head"><span class="label">${sel.brief ? spark : ''}Where It Stands</span><button data-act="side" title="Hide this panel" aria-expanded="true">›</button></div>${pullStands(sel)}${aboutPull(sel, d)}${pullTimeline(d)}</aside>`;
   return `<div class="split ${side ? 'sided' : ''} ${side && state.sideShut ? 'shut' : ''}">
     <section class="pane list" data-scroll="pr-list">
-      <div class="listbar"><span class="label">Pull requests</span><span class="segs"><span class="seg" role="group" aria-label="How much each row shows">${rows}</span></span></div>
+      <div class="listbar"><span class="label">Pull Requests</span><span class="segs"><span class="seg" role="group" aria-label="How much each row shows">${rows}</span></span></div>
       <div class="chips">${chips}</div>
       ${status ? `<div class="gline" style="padding-top:8px">${status}</div>` : ''}
       ${off ? '' : list}
@@ -3485,7 +3485,7 @@ function journalPart(e) {
   const about = [(e.pulls || []).length ? `<span>${(e.pulls || []).map(journalPull).join(' ')}</span>` : '', (e.sessions || []).length ? `<span>${plural(e.sessions.length, 'session')}: ${e.sessions.map(journalSession).join(', ')}</span>` : ''].join('');
   return `${e.summary ? `<p class="prose">${esc(e.summary)}</p>` : ''}
     ${(e.points || []).length ? `<ul>${e.points.map(point).join('')}</ul>` : ''}
-    ${(e.open || []).length ? `<div class="label" style="margin-top:12px">Still open</div><ul class="open">${e.open.map(p => `<li>${esc(p)}</li>`).join('')}</ul>` : ''}
+    ${(e.open || []).length ? `<div class="label" style="margin-top:12px">Still Open</div><ul class="open">${e.open.map(p => `<li>${esc(p)}</li>`).join('')}</ul>` : ''}
     ${about ? `<div class="jmeta">${about}</div>` : ''}`;
 }
 function journalEffort(e) {
@@ -3505,7 +3505,7 @@ function journalPage(d) {
   else if (d.state === 'pending') note = `<p class="prose thinking">Writing up what moved in each effort over the day.</p><p class="prose thinking" style="margin-top:8px">One line for each thing done.</p>
       <p class="none" style="margin-top:12px">${writer ? `${esc(writer)} is writing it from ${from}.` : 'Waiting for a local model to be loaded.'}</p>`;
   else if (d.state === 'failed') note = `<p class="none"><b>It could not be written${has ? ' again, so this is what was written before' : ''}.</b> ${esc(w.error || '')}</p>`;
-  const write = live && d.state !== 'pending' ? `<button class="btn ${d.state ? '' : 'go'}" data-act="wrapAsk" data-day="${d.day}" ${modelless() ? `disabled title="${NO_MODEL} to write it."` : ''}>${d.state ? 'Write it again' : 'Write it'}</button>` : '';
+  const write = live && d.state !== 'pending' ? `<button class="btn ${d.state ? '' : 'go'}" data-act="wrapAsk" data-day="${d.day}" ${modelless() ? `disabled title="${NO_MODEL} to write it."` : ''}>${d.state ? 'Write It Again' : 'Write It'}</button>` : '';
   return `<div class="inner jr">
     <div class="crumb"><span class="eff">Journal</span><span>${d.day === dayKey(0) ? 'today' : d.day === dayKey(1) ? 'yesterday' : ago(minsSince(dayDate(d.day)))}</span>
       ${has && d.state === 'ready' ? `<span>${live ? spark : ''}written ${ago(minsSince(w.at))} from ${from}</span>` : ''}</div>
@@ -3539,7 +3539,7 @@ function viewJournal() {
   if (sel && sel.state) fetchEntry(sel);
   const more = state.expanded.jtags, few = 10;
   const chips = counts.slice(0, more ? counts.length : few).map(([name, n]) => `<button class="chip ${journalTag === name ? 'on' : ''}" data-act="journalTag" data-tag="${esc(name)}">${esc(name)} <span class="n">${n}</span></button>`).join('')
-    + (counts.length > few ? `<button class="link" data-act="expand" data-id="jtags" style="font-size:12.5px">${more ? 'Fewer' : `${counts.length - few} more`}</button>` : '');
+    + (counts.length > few ? `<button class="link" data-act="expand" data-id="jtags" style="font-size:12.5px">${more ? 'Fewer' : `${counts.length - few} More`}</button>` : '');
   const rows = ['long', 'short'].map(as => `<button class="${(state.rows || 'long') === as ? 'on' : ''}" data-act="rows" data-as="${as}">${cap(as)}</button>`).join('');
   const months = [];
   shown.forEach(d => {
@@ -3549,7 +3549,7 @@ function viewJournal() {
   });
   const list = months.map(([name, days]) => `<div class="ghead"><span class="name">${name}</span><span class="n">${days.length}</span></div>${days.map(journalRow).join('')}`).join('');
   const n = shown.length;
-  const status = narrowed ? `${n ? cap(num(n)) : 'None'} of ${plural(all.length, 'day')} ${[journalFound ? `${n === 1 ? 'matches' : 'match'} the search` : '', journalTag ? `${n === 1 ? 'is' : 'are'} tagged “${esc(journalTag)}”` : ''].filter(Boolean).join(' and ')}. <button class="link" data-act="journalClear">Show every day</button>`
+  const status = narrowed ? `${n ? cap(num(n)) : 'None'} of ${plural(all.length, 'day')} ${[journalFound ? `${n === 1 ? 'matches' : 'match'} the search` : '', journalTag ? `${n === 1 ? 'is' : 'are'} tagged “${esc(journalTag)}”` : ''].filter(Boolean).join(' and ')}. <button class="link" data-act="journalClear">Show Every Day</button>`
     : live && !all.length ? 'A day is written when you ask for it, and the day after if you did not.' : '';
   return `<div class="split">
     <section class="pane list" data-scroll="journal-list">
@@ -3565,7 +3565,7 @@ function viewJournal() {
 
 /* ───────────────────────── Knowledge base ───────────────────────── */
 
-const effortOptions = () => (live ? '<option value="">No effort</option>' : '') + (live ? openEfforts() : EFFORTS).map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join('');
+const effortOptions = () => (live ? '<option value="">No Effort</option>' : '') + (live ? openEfforts() : EFFORTS).map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join('');
 
 const KB_LIVE_LEDE = {
   questions: 'Things you have not decided yet. They show under their effort, and the model reads them when it writes that effort\'s status.',
@@ -3583,7 +3583,7 @@ const KB_UNREAD = {
 };
 const kbUnread = k => modelless() && KB_UNREAD[k] ? `<p class="none" style="margin:-6px 0 14px">${NO_MODEL}, ${KB_UNREAD[k]}</p>` : '';
 const kbData = () => live ? knowledge : state.kb;
-const kbSections = () => live ? { ...KB_SECTIONS, roles: { name: 'Session roles' }, workspaces: { name: 'Workspaces' } } : KB_SECTIONS;
+const kbSections = () => live ? { ...KB_SECTIONS, roles: { name: 'Session Roles' }, workspaces: { name: 'Workspaces' } } : KB_SECTIONS;
 const kbCount = k => kbData()[k].length;
 
 function integrationsBody() {
@@ -3593,7 +3593,7 @@ function integrationsBody() {
     const status = !f ? 'Checking now…'
       : f.error ? `The last check, ${ago(minsSince(f.at))}, failed: ${f.error}${f.count ? ` Showing what it found before.` : ''}`
       : `Checked ${ago(minsSince(f.at))}: ${f.count ? `${num(f.count)} thing${f.count === 1 ? '' : 's'}` : 'nothing'} for you.`;
-    return `<div class="meta" style="align-items:center"><span>${esc(status)}</span><button class="link" data-act="feedCheck">Check now</button></div>`;
+    return `<div class="meta" style="align-items:center"><span>${esc(status)}</span><button class="link" data-act="feedCheck">Check Now</button></div>`;
   };
   const cards = integrations.map(i => `<div class="card"><span class="glyph">${esc(i.name[0])}</span>
       <div class="body"><div class="nm">${esc(i.name)} <span class="tag ${i.enabled && i.available ? 'blocking' : 'whenever'}">${i.enabled ? (i.available ? 'on' : 'on, but unavailable') : 'off'}</span></div>
@@ -3602,11 +3602,11 @@ function integrationsBody() {
       ${(i.watches || []).length ? `<div class="seen">While it is on, Slorp lists on Home:</div>${i.watches.map(l => `<div class="seen">· ${esc(l)}</div>`).join('')}${checked(i)}` : ''}
       ${i.lookups.length ? `<div class="seen">While it is on, the model may:</div>` : ''}
       ${i.lookups.map(l => `<div class="seen">· ${esc(l)}</div>`).join('')}</div>
-      <button class="btn ${i.enabled ? '' : 'go'}" data-act="integrationToggle" data-id="${i.id}" data-on="${i.enabled ? '0' : '1'}" ${!i.enabled && !i.available ? 'disabled' : ''}>${i.enabled ? 'Turn off' : 'Turn on'}</button></div>`).join('');
+      <button class="btn ${i.enabled ? '' : 'go'}" data-act="integrationToggle" data-id="${i.id}" data-on="${i.enabled ? '0' : '1'}" ${!i.enabled && !i.available ? 'disabled' : ''}>${i.enabled ? 'Turn Off' : 'Turn On'}</button></div>`).join('');
   const recent = lookups.slice().reverse().map(l => `<div class="srow"><span class="dot ${l.ok ? 'done' : 'error'}"></span>
       <div class="body"><div class="ttl">${esc(l.what)}${l.ok ? '' : ' · failed'}</div><div class="sub mono" style="font-size:12px">${esc(clip(l.detail, 260))}</div></div>
       <span class="side">${esc(clip(l.session, 28))} · ${ago(minsSince(l.at))}</span></div>`).join('');
-  return `${cards}<div class="sec"><div class="label"><span>What the model looked up recently</span></div>
+  return `${cards}<div class="sec"><div class="label"><span>What the Model Looked Up Recently</span></div>
     ${recent || '<div class="none">Nothing yet. Lookups appear here as the model makes them, and are forgotten when the service restarts.</div>'}</div>`;
 }
 
@@ -3629,7 +3629,7 @@ const dirChoice = (dir, typing) => (!typing && workspaceAt(dir)?.id) || (dir || 
 /* The options of the list a workspace is chosen from: what stands for no choice, each workspace by its name
    and where it is, and the way to type a directory. */
 const workspaceChoices = (chosen, none) => `${none}${knowledge.workspaces.map(w => `<option value="${esc(w.id)}" ${w.id === chosen ? 'selected' : ''}>${esc(w.name)} — ${esc(tilde(w.dir))}</option>`).join('')}
-  <option value="${OTHER_DIR}" ${chosen === OTHER_DIR ? 'selected' : ''}>Another directory…</option>`;
+  <option value="${OTHER_DIR}" ${chosen === OTHER_DIR ? 'selected' : ''}>Another Directory…</option>`;
 /* The directories suggested while one is typed: those in use that are not workspaces. */
 const dirOptions = dirs => dirs.filter(d => !workspaceAt(d)).map(d => `<option value="${esc(d)}"></option>`).join('');
 /* Adds a workspace, and says why when the service would not have it. */
@@ -3692,7 +3692,7 @@ function viewKnowledge() {
   if (!kbSections()[state.kbSel]) state.kbSel = 'questions';
   const s = kbSections()[state.kbSel];
   return `<div class="split narrow">
-    <section class="pane list kbnav"><div class="label">Knowledge base</div>${nav}</section>
+    <section class="pane list kbnav"><div class="label">Knowledge Base</div>${nav}</section>
     <section class="pane detail" data-scroll="kb-${state.kbSel}"><div class="inner"><h1>${s.name}</h1><p class="lede">${live ? KB_LIVE_LEDE[state.kbSel] : s.lede}</p>${kbUnread(state.kbSel)}${kbBody(state.kbSel)}</div></section>
   </div>`;
 }
@@ -3700,8 +3700,8 @@ function viewKnowledge() {
 /* ───────────────────────── What the local model has done ───────────────────────── */
 
 /* The kinds of work the local model does: what its page calls each, and what an action of that kind is tagged. */
-const ACT_KINDS = { describe: ['Descriptions', 'described'], file: ['Filings', 'filed'], role: ['Role guesses', 'role'], note: ['Effort notes', 'note'],
-  brief: ['Pull request briefs', 'briefed'], wrapup: ['Wrap-ups', 'wrapped up'], backfill: ['Earlier history', 'filled in'] };
+const ACT_KINDS = { describe: ['Descriptions', 'described'], file: ['Filings', 'filed'], role: ['Role Guesses', 'role'], note: ['Effort Notes', 'note'],
+  brief: ['Pull Request Briefs', 'briefed'], wrapup: ['Wrap-ups', 'wrapped up'], backfill: ['Earlier History', 'filled in'] };
 const MOCK_ACTS = [
   { id: 'd1', kind: 'describe', at: minsAgo(6), millis: 2140, model: 'qwen3:14b', outcome: 'Wants to run the integration suite against your local Postgres',
     sessions: [{ id: 's4', name: 'Bringing the work fork up to v0.14' }], efforts: [{ id: 'fork', name: 'Work fork catch-up' }] },
@@ -3753,9 +3753,9 @@ function didRow(a) {
 function workedMenu(open, says, title) {
   const last = (live ? acted : MOCK_ACTS).slice(0, 5);
   return `<details class="menu worked" id="worked" ${open ? 'open' : ''}><summary class="model" title="${esc(title || 'What the local model did last')}">${says}</summary>
-    <div class="pop"><p>What the local model did last</p>
+    <div class="pop"><p>What the Local Model Did Last</p>
       ${last.map(didRow).join('') || `<div class="none">${modelless() ? `${NO_MODEL}, so nothing has been done.` : 'Nothing yet. What the local model does for Slorp is listed here as it does it.'}</div>`}
-      ${last.length ? '<button data-act="view" data-view="log">See everything it has done</button>' : ''}</div></details>`;
+      ${last.length ? '<button data-act="view" data-view="log">See Everything It Has Done</button>' : ''}</div></details>`;
 }
 /* An action as its page lists it. */
 function actRow(a) {
@@ -3774,17 +3774,17 @@ function viewLog() {
   const list = of(state.logKind), shown = list.slice(0, logShown), left = list.length - shown.length;
   const none = all.length ? 'Nothing of this kind is in the log.' : modelless() ? `${NO_MODEL}, so nothing has been done.` : 'Nothing yet. What the local model does for Slorp is listed here as it does it.';
   return `<div class="split narrow">
-    <section class="pane list kbnav"><div class="label">Local model</div>${pick('all', 'Everything')}${Object.entries(ACT_KINDS).map(([k, [name]]) => pick(k, name)).join('')}${pick('failed', 'Failed')}</section>
-    <section class="pane detail" data-scroll="log"><div class="inner"><h1>What the local model has done</h1>
+    <section class="pane list kbnav"><div class="label">Local Model</div>${pick('all', 'Everything')}${Object.entries(ACT_KINDS).map(([k, [name]]) => pick(k, name)).join('')}${pick('failed', 'Failed')}</section>
+    <section class="pane detail" data-scroll="log"><div class="inner"><h1>What the Local Model Has Done</h1>
       <p class="lede">Each piece of work the local model did for Slorp, the latest first, with the sessions, efforts, pull requests and workspaces it was about. Slorp keeps the last thousand.</p>
       ${shown.map(actRow).join('') || `<div class="none">${none}</div>`}
-      ${left > 0 ? `<button class="btn" data-act="logMore" style="margin-top:14px">Show ${Math.min(LOG_PAGE, left)} more</button>` : ''}</div></section>
+      ${left > 0 ? `<button class="btn" data-act="logMore" style="margin-top:14px">Show ${Math.min(LOG_PAGE, left)} More</button>` : ''}</div></section>
   </div>`;
 }
 
 /* ───────────────────────── Settings ───────────────────────── */
 
-const SETTINGS = { general: 'General', start: 'Session profiles', integrations: 'Integrations', model: 'Local model', keys: 'Keyboard' };
+const SETTINGS = { general: 'General', start: 'Session Profiles', integrations: 'Integrations', model: 'Local Model', keys: 'Keyboard' };
 /* One setting: what it is called, what it does, and what changes it. */
 const setting = (name, about, control) => `<div class="card set"><div class="body"><div class="nm">${name}</div><div class="why">${about}</div></div>${control}</div>`;
 const choice = (act, cur, options, about) => `<span class="seg" role="group" aria-label="${about}">${options.map(([to, name]) => `<button class="${to === cur ? 'on' : ''}" data-act="${act}" data-to="${to}">${name}</button>`).join('')}</span>`;
@@ -3793,15 +3793,15 @@ function generalBody() {
   const blocked = window.Notification?.permission === 'denied';
   return `${setting('Theme', `How Slorp looks.${state.look === 'slorp' ? '' : ` ${LOOKS[state.look]} comes one way only, with no light or dark to it.`}`, choice('lookTo', state.look, Object.entries(LOOKS), 'Theme'))}
     ${state.look === 'slorp' ? setting('Appearance', 'Light, dark, or whichever this computer is set to.', choice('themeTo', state.theme, [['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']], 'Appearance')) : ''}
-    ${live && window.Notification ? setting('Desktop notifications', `Tells you when something new needs you while this page is out of sight. This browser keeps the choice.${blocked ? ' <b>The browser is blocking notifications for this page.</b>' : ''}`,
-      choice('notifyTo', canNotify() ? 'on' : 'off', [['on', 'On'], ['off', 'Off']], 'Desktop notifications')) : ''}
-    ${live ? setting('Permission prompts', 'Where a session\'s permission prompt can be answered. Its terminal always asks; with Slorp or terminal, this page can answer too, and whichever you answer first decides.',
-      choice('holdTo', settings.answerPermissions ? 'both' : 'terminal', [['both', 'Slorp or terminal'], ['terminal', 'Terminal only']], 'Where permission prompts can be answered')) : ''}
+    ${live && window.Notification ? setting('Desktop Notifications', `Tells you when something new needs you while this page is out of sight. This browser keeps the choice.${blocked ? ' <b>The browser is blocking notifications for this page.</b>' : ''}`,
+      choice('notifyTo', canNotify() ? 'on' : 'off', [['on', 'On'], ['off', 'Off']], 'Desktop Notifications')) : ''}
+    ${live ? setting('Permission Prompts', 'Where a session\'s permission prompt can be answered. Its terminal always asks; with Slorp or Terminal, this page can answer too, and whichever you answer first decides.',
+      choice('holdTo', settings.answerPermissions ? 'both' : 'terminal', [['both', 'Slorp or Terminal'], ['terminal', 'Terminal Only']], 'Where permission prompts can be answered')) : ''}
     ${live && terminal.apps.length ? setting('Terminal', 'Where a session is opened when you ask for it in a terminal, out of those Slorp found on this machine. The first time, macOS may ask whether Slorp may control it.',
       `<select class="btn" data-change="terminalApp" aria-label="Terminal">${terminal.apps.map(a => `<option value="${esc(a.id)}" ${a === terminalApp() ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>`) : ''}
-    ${setting('Show legacy Attention view', 'Adds the Attention tab beside Home: what needs you, grouped by effort, urgency or source.', choice('attentionTo', state.legacyAttention ? 'on' : 'off', [['on', 'On'], ['off', 'Off']], 'Show legacy Attention view'))}
+    ${setting('Show Legacy Attention View', 'Adds the Attention tab beside Home: what needs you, grouped by effort, urgency or source.', choice('attentionTo', state.legacyAttention ? 'on' : 'off', [['on', 'On'], ['off', 'Off']], 'Show Legacy Attention View'))}
     ${live ? releaseSetting() : ''}
-    ${setting('This page', 'Forgets what this browser keeps for the page: what you dismissed or snoozed, what was selected, and choices such as how lists are grouped.',
+    ${setting('This Page', 'Forgets what this browser keeps for the page: what you dismissed or snoozed, what was selected, and choices such as how lists are grouped.',
       `<button class="btn" data-act="reset">Reset</button>`)}`;
 }
 
@@ -3875,14 +3875,14 @@ function profileEdit(p) {
   return `<div class="pedit">
     ${setting('Name', 'What the profile is called where it is chosen.', `<input data-change="profileSet" ${at} data-key="name" data-keep="profile-${p.id}-name" value="${esc(p.name)}" maxlength="60" required autocomplete="off" aria-label="Profile name">`)}
     ${setting('Default', 'Whether the New Session dialog opens with this profile. Only one profile is the default.', onOff('default', 'Default profile'))}
-    ${setting('Runs on', 'What a session runs on.', seg('engine', p.engine, [['claude', 'Claude Code'], ['opencode', 'OpenCode'], ['local', local || 'Local model']], 'What a session runs on'))}
+    ${setting('Runs On', 'What a session runs on.', seg('engine', p.engine, [['claude', 'Claude Code'], ['opencode', 'OpenCode'], ['local', local || 'Local Model']], 'What a session runs on'))}
     ${setting('Directory', 'Where a session starts, unless it is started from an effort that has a directory of its own. Left open, it is chosen when the session is started.', knowledge.workspaces.length
-      ? `<span class="pick"><select class="btn" data-change="profileSpace" ${at} aria-label="Profile workspace">${workspaceChoices(choice, `<option value="" ${choice ? '' : 'selected'}>Left open</option>`)}</select>${choice === OTHER_DIR ? typed : ''}</span>` : typed)}
-    ${setting('Effort', 'The effort a session is filed under, unless it is started from another.', pick('effort', 'Profile effort', [['', 'No effort']].concat(openEfforts().map(e => [e.id, e.name]))))}
-    ${knowledge.roles.length ? setting('Slorp role', 'The role a session is given.', pick('role', 'Profile role', [['', 'No role']].concat(knowledge.roles.map(r => [r.id, r.name])))) : ''}
-    ${terminalApp() ? setting('Open in terminal', `Whether a session is also opened in ${esc(terminalApp().name)} once it has started.`, onOff('terminal', 'Open in terminal')) : ''}
+      ? `<span class="pick"><select class="btn" data-change="profileSpace" ${at} aria-label="Profile workspace">${workspaceChoices(choice, `<option value="" ${choice ? '' : 'selected'}>Left Open</option>`)}</select>${choice === OTHER_DIR ? typed : ''}</span>` : typed)}
+    ${setting('Effort', 'The effort a session is filed under, unless it is started from another.', pick('effort', 'Profile effort', [['', 'No Effort']].concat(openEfforts().map(e => [e.id, e.name]))))}
+    ${knowledge.roles.length ? setting('Slorp Role', 'The role a session is given.', pick('role', 'Profile role', [['', 'No Role']].concat(knowledge.roles.map(r => [r.id, r.name])))) : ''}
+    ${terminalApp() ? setting('Open in Terminal', `Whether a session is also opened in ${esc(terminalApp().name)} once it has started.`, onOff('terminal', 'Open in Terminal')) : ''}
     ${p.engine === 'claude' ? setting('Model', 'The model the session runs on. Default leaves it to Claude Code.', pick('model', 'Profile model', START_MODELS))
-        + setting('Effort level', 'How hard it thinks. Default leaves it to Claude Code.', pick('effortLevel', 'Profile effort level', START_EFFORTS))
+        + setting('Effort Level', 'How hard it thinks. Default leaves it to Claude Code.', pick('effortLevel', 'Profile effort level', START_EFFORTS))
       : p.engine === 'local' ? setting('Thinking', 'Whether the local model thinks before it answers.', onOff('thinking', 'Thinking'))
         + setting('Temperature', 'From 0 to 2. Left empty, it is the model\'s own.', `<input type="number" min="0" max="2" step="0.05" data-change="profileSet" ${at} data-key="temperature" data-keep="profile-${p.id}-temperature" value="${esc(p.temperature ?? '')}" placeholder="The model's own" aria-label="Profile temperature">`)
       : profileOpenCode(p, at)}
@@ -3905,10 +3905,10 @@ function profileOpenCode(p, at) {
   loadProfileCatalog(dir);
   const c = profileCatalog, choices = openCodeChoices(c.data, { agentName: p.opencodeAgent || '', model: p.opencodeModel || '', variant: p.opencodeVariant || '' });
   const pick = (key, from, name, about) => setting(name, about, `<select class="btn" data-change="profileSet" ${at} data-key="${key}" aria-label="Profile ${name}">${choices[from]}</select>`);
-  return pick('opencodeAgent', 'agentName', 'OpenCode agent', 'The agent the session runs as. Native default leaves it to OpenCode.')
-    + pick('opencodeModel', 'model', 'OpenCode model', 'The model the session runs on. Native default leaves it to OpenCode.')
-    + pick('opencodeVariant', 'variant', 'OpenCode variant', 'The variant of that model, where it has any.')
-    + `<div class="none" role="status">${c.loading ? 'Loading what OpenCode offers…' : c.error ? `${esc(c.error)} <button type="button" class="btn" data-act="profileCatalogRetry" data-dir="${esc(dir)}">Retry launch options</button>`
+  return pick('opencodeAgent', 'agentName', 'OpenCode Agent', 'The agent the session runs as. Native Default leaves it to OpenCode.')
+    + pick('opencodeModel', 'model', 'OpenCode Model', 'The model the session runs on. Native Default leaves it to OpenCode.')
+    + pick('opencodeVariant', 'variant', 'OpenCode Variant', 'The variant of that model, where it has any.')
+    + `<div class="none" role="status">${c.loading ? 'Loading what OpenCode offers…' : c.error ? `${esc(c.error)} <button type="button" class="btn" data-act="profileCatalogRetry" data-dir="${esc(dir)}">Retry Launch Options</button>`
       : `These are what OpenCode offers in ${p.dir ? `<span class="mono">${esc(dir)}</span>` : 'your home directory'}. A session started elsewhere may be offered others.`}</div>`;
 }
 function profilesBody() {
@@ -3921,7 +3921,7 @@ function profilesBody() {
       <button class="x" data-act="profileRemove" data-id="${p.id}" title="Remove" aria-label="Remove">×</button></div>${open ? profileEdit(p) : ''}`;
   }).join('');
   return `${cards || '<div class="none">No profiles yet. Without one, the New Session dialog opens with nothing chosen.</div>'}
-    <form class="add" data-form="profiles"><input name="name" data-keep="profiles-name" placeholder="Name, such as Reviews" maxlength="60" required autocomplete="off" aria-label="Name"><button class="btn go">Add profile</button></form>`;
+    <form class="add" data-form="profiles"><input name="name" data-keep="profiles-name" placeholder="Name, such as Reviews" maxlength="60" required autocomplete="off" aria-label="Name"><button class="btn go">Add Profile</button></form>`;
 }
 
 /* The agents Slorp watches, each with the plugin that lets it be answered from here. */
@@ -3935,7 +3935,7 @@ function agentsBody() {
       <div class="why">The Slorp mod for Claude Code. With it you can reply to a session and answer its permission prompts from here, and Slorp is told each session's context window, cost and usage limits. Without it sessions are listed and can only be watched.</div>
       <div class="meta">${p && p.version ? `<span>version ${esc(p.version)}</span>` : ''}${p && p.latest ? `<span>${esc(p.latest)} is out</span>` : ''}<span>${running('claude')}</span></div>
       <div class="seen">Sessions already open take up a change after <span class="mono">/reload-plugins</span> or a restart.</div></div>
-      <span class="does">${p && !(p.installed && p.enabled) ? `<button class="btn go" data-act="installMod" ${busy ? 'disabled' : ''}>${installing ? (p.installed ? 'Turning it on…' : 'Installing…') : p.installed ? 'Turn on' : 'Install'}</button>` : ''}
+      <span class="does">${p && !(p.installed && p.enabled) ? `<button class="btn go" data-act="installMod" ${busy ? 'disabled' : ''}>${installing ? (p.installed ? 'Turning It On…' : 'Installing…') : p.installed ? 'Turn On' : 'Install'}</button>` : ''}
         ${p && p.installed && p.latest ? `<button class="btn go" data-act="updateMod" ${busy ? 'disabled' : ''}>${updating ? 'Updating…' : 'Update'}</button>` : ''}
         ${p && p.installed ? `<button class="btn" data-act="uninstallMod" ${busy ? 'disabled' : ''}>${removing ? 'Uninstalling…' : 'Uninstall'}</button>` : ''}</span></div>`;
   const oc = plugins.opencode, connected = open('opencode').filter(s => s.canReply);
@@ -3948,7 +3948,7 @@ function agentsBody() {
       <div class="meta">${oc?.version ? `<span>version ${esc(oc.version)}</span>` : ''}<span>${running('opencode')}</span>${oc?.source ? `<span>${oc.source === 'managed' ? 'bundled with Slorp' : oc.source === 'file' ? 'single-file installation' : 'local package'}</span>` : ''}</div>
       ${oc?.path ? `<div class="seen mono">${esc(oc.path)}</div>` : ''}
       <div class="seen">${oc?.error ? esc(oc.error) : oc?.source === 'file' ? 'Remove the old single-file plugin from OpenCode before installing this package.' : 'Requires OpenCode 2.x. Configuration reloads automatically; use /reload if needed. No Slorp checkout required.'}</div></div>
-      <span class="does">${oc && !oc.error ? `${!oc.installed || oc.needsSetup && oc.source !== 'file' ? ocButton('install', oc.installed ? 'Finish setup' : 'Install') : ''}${oc.source === 'managed' && oc.updateAvailable ? ocButton('update', 'Update') : ''}${oc.source === 'managed' && oc.installed ? ocButton('uninstall', 'Uninstall') : ''}` : ''}</span></div>`;
+      <span class="does">${oc && !oc.error ? `${!oc.installed || oc.needsSetup && oc.source !== 'file' ? ocButton('install', oc.installed ? 'Finish Setup' : 'Install') : ''}${oc.source === 'managed' && oc.updateAvailable ? ocButton('update', 'Update') : ''}${oc.source === 'managed' && oc.installed ? ocButton('uninstall', 'Uninstall') : ''}` : ''}</span></div>`;
   return claude + opencode;
 }
 
@@ -3987,17 +3987,17 @@ function checkResult() {
 function modelBody() {
   const m = settings.model || {}, s = summarizer, off = !!s.off, saved = JSON.stringify([m.url, m.name]);
   if (saved !== modelSaved) { modelSaved = saved; modelRev++; }
-  const [dot, word] = off ? ['idle', 'Off'] : s.model ? ['running', 'Connected'] : s.error ? ['error', 'Not connected'] : ['idle', 'Looking…'];
+  const [dot, word] = off ? ['idle', 'Off'] : s.model ? ['running', 'Connected'] : s.error ? ['error', 'Not Connected'] : ['idle', 'Looking…'];
   const why = off ? (s.fixedUrl ? 'Slorp was started with -llm "", so it runs without a local model.' : 'Slorp is running without a local model.')
     : s.model ? `Using ${s.model}${s.named ? ', which you named' : ', the one the server has loaded'}.`
     : s.error ? (/unreachable/.test(s.error) ? `Nothing answered at ${s.url}.` : `The server at ${s.url} answered, but ${s.error.replace(/^it /, '')}.`) : 'Slorp has not looked yet.';
   const listed = [...new Set((modelCheck?.models || []).concat(s.model || []))];
   const far = !off && s.url && !local(s.url);
   return `<div class="card set"><div class="body"><div class="nm"><span class="stat"><span class="dot ${dot}"></span>${word}</span></div><div class="why">${esc(why)}${off ? '' : ` Slorp looks again every half minute, and at once when these settings change.`}</div></div>
-      <button class="btn" data-act="modelCheck" ${modelChecking || off ? 'disabled' : ''}>${modelChecking ? 'Checking…' : 'Check now'}</button></div>
+      <button class="btn" data-act="modelCheck" ${modelChecking || off ? 'disabled' : ''}>${modelChecking ? 'Checking…' : 'Check Now'}</button></div>
     ${checkResult()}
-    ${setting('Local model', s.fixedUrl ? 'Slorp was started with <span class="mono">-llm</span>, which decides this until it is started without.' : 'Off, sessions are shown as they are: no summaries, suggested replies, automatic filing or wrap-ups.',
-      s.fixedUrl ? `<span class="none">${off ? 'off' : 'on'}</span>` : choice('modelOff', m.off ? 'off' : 'on', [['on', 'On'], ['off', 'Off']], 'Local model'))}
+    ${setting('Local Model', s.fixedUrl ? 'Slorp was started with <span class="mono">-llm</span>, which decides this until it is started without.' : 'Off, sessions are shown as they are: no summaries, suggested replies, automatic filing or wrap-ups.',
+      s.fixedUrl ? `<span class="none">${off ? 'off' : 'on'}</span>` : choice('modelOff', m.off ? 'off' : 'on', [['on', 'On'], ['off', 'Off']], 'Local Model'))}
     <form class="add model" data-form="model">
       <label><span class="nm">Server</span><span class="why">An OpenAI-compatible server, such as LM Studio, Ollama or llama.cpp.${s.fixedUrl ? ' Given with <span class="mono">-llm</span> when Slorp started.' : ''}</span>
         <input name="url" class="mono" data-keep="model-url-${modelRev}" value="${esc(s.fixedUrl ? s.url || '' : m.url || '')}" placeholder="http://localhost:1234" spellcheck="false" autocomplete="off" ${s.fixedUrl ? 'disabled' : ''}></label>
@@ -4006,10 +4006,10 @@ function modelBody() {
         <datalist id="model-names">${listed.map(id => `<option value="${esc(id)}"></option>`).join('')}</datalist></label>
       ${far ? `<p class="none warn">${esc(s.url)} is not on this machine. What your sessions say is sent there to be summarized.</p>` : ''}
       <div class="send"><span>Saving takes effect at once.</span>
-        <span><button type="button" class="btn" data-act="modelTry" ${modelChecking ? 'disabled' : ''} title="Checks the server and model typed here without saving them">Try without saving</button>
+        <span><button type="button" class="btn" data-act="modelTry" ${modelChecking ? 'disabled' : ''} title="Checks the server and model typed here without saving them">Try Without Saving</button>
         <button class="btn go" ${s.fixedUrl && s.fixedModel ? 'disabled' : ''}>Save</button></span></div>
     </form>
-    ${setting('What it has done', 'Each piece of work the local model did for Slorp, with the sessions, efforts, pull requests and workspaces it was about.', '<button class="btn" data-act="view" data-view="log">See the log</button>')}`;
+    ${setting('What It Has Done', 'Each piece of work the local model did for Slorp, with the sessions, efforts, pull requests and workspaces it was about.', '<button class="btn" data-act="view" data-view="log">See the Log</button>')}`;
 }
 
 const keys = () => [[`1 – ${nav().length}`, nav().map(v => VIEW_NAMES[v] || cap(v)).join(', ')], [',', 'Settings'], ['j  k', `Next and previous in the ${listOf(['Home', 'Sessions'].concat(pullsOff() ? [] : 'PRs', 'Journal'))} lists`], ['e', 'Dismiss the selected item'], ['s', 'Snooze the selected item for an hour'],
@@ -4136,9 +4136,9 @@ function draw() {
     ${state.look === 'slorp' ? '<button class="icon" data-act="theme" title="Light or dark" aria-label="Toggle theme">◐</button>' : ''}
     <button class="icon ${state.view === 'settings' ? 'on' : ''}" data-act="view" data-view="settings" title="Settings (,)" aria-label="Settings">${ICONS.settings}</button>
     ${live ? '' : `<details class="menu" id="menu" ${menuOpen ? 'open' : ''}><summary class="icon" title="Demo controls" aria-label="Demo controls">⋯</summary>
-      <div class="pop"><p>Demo controls</p>
-        <button data-act="simulate">Simulate an incoming item</button>
-        <button data-act="reset">Reset the demo</button></div></details>`}`;
+      <div class="pop"><p>Demo Controls</p>
+        <button data-act="simulate">Simulate an Incoming Item</button>
+        <button data-act="reset">Reset the Demo</button></div></details>`}`;
   $('#provider-limits')?.scrollTo(limitsScroll, 0);
   const notices = [modNotice(), modelNotice(), releaseNotice()].filter(Boolean);
   document.documentElement.style.setProperty('--notice', `${44 * notices.length}px`);

@@ -37,7 +37,7 @@ async function world(t) {
   page.on('pageerror', error => errors.push(error.message))
   t.after(() => assert.deepEqual(errors, []))
   await page.goto(`http://127.0.0.1:${server.address().port}/#sessions`)
-  const button = () => page.getByRole('button', { name: 'Fill in earlier history', exact: true })
+  const button = () => page.getByRole('button', { name: 'Fill In Earlier History', exact: true })
   await button().first().waitFor()
   return { page, session, data, button, reading, calls: () => calls, release: () => release(), fail: why => { failure = why } }
 }
