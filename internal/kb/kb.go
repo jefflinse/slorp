@@ -37,6 +37,7 @@ var Colors = []string{"red", "orange", "olive", "green", "teal", "blue", "violet
 // Changes are what Edit gives an effort; whatever is nil is left alone.
 type Changes struct {
 	Name, About, Color, Glyph *string
+	Shelved                   *bool
 }
 
 // How a session, or something from a repository, came to be filed under an
@@ -161,8 +162,9 @@ func (s *Store) Create(name, about string) (Effort, error) {
 	return e, nil
 }
 
-// Edit gives an effort another name, description, colour or glyph. Its ID
-// stays as it was made.
+// Edit gives an effort another name, description, colour or glyph, or
+// shelves it or brings it back, all in one change or none. Its ID stays as
+// it was made.
 func (s *Store) Edit(id string, c Changes) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -190,7 +192,10 @@ func (s *Store) Edit(id string, c Changes) error {
 				return errors.New("a glyph is a character or two")
 			}
 		}
-		if e.Name != f.Efforts[i].Name || e.About != f.Efforts[i].About {
+		if c.Shelved != nil {
+			e.Shelved = *c.Shelved
+		}
+		if e.Name != f.Efforts[i].Name || e.About != f.Efforts[i].About || e.Shelved != f.Efforts[i].Shelved {
 			f.Revision++
 		}
 		f.Efforts[i] = e
@@ -226,20 +231,7 @@ func (s *Store) Merge(from, into string) error {
 
 // Shelve puts an effort aside, or brings it back.
 func (s *Store) Shelve(id string, shelved bool) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	i := s.f.index(id)
-	if i < 0 {
-		return errors.New("no such effort")
-	}
-	if s.f.Efforts[i].Shelved == shelved {
-		return nil
-	}
-	return s.update(func(f *file) error {
-		f.Efforts[i].Shelved = shelved
-		f.Revision++
-		return nil
-	})
+	return s.Edit(id, Changes{Shelved: &shelved})
 }
 
 // Active reports whether id is an effort the model may file under: one that

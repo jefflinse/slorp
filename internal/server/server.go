@@ -682,11 +682,8 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		}
 		id := r.PathValue("id")
 		var err error
-		if in.Name != nil || in.About != nil || in.Color != nil || in.Glyph != nil {
-			err = k.Edit(id, kb.Changes{Name: in.Name, About: in.About, Color: in.Color, Glyph: in.Glyph})
-		}
-		if err == nil && in.Shelved != nil {
-			err = k.Shelve(id, *in.Shelved)
+		if in.Name != nil || in.About != nil || in.Color != nil || in.Glyph != nil || in.Shelved != nil {
+			err = k.Edit(id, kb.Changes{Name: in.Name, About: in.About, Color: in.Color, Glyph: in.Glyph, Shelved: in.Shelved})
 		}
 		if err == nil && !k.Has(id) {
 			err = errors.New("no such effort")
