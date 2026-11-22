@@ -1426,7 +1426,10 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			return
 		}
 		m.Recheck()
-		h.SetIntegration(r.PathValue("id"), in.Enabled)
+		if err := h.SetIntegration(r.PathValue("id"), in.Enabled); err != nil {
+			http.Error(w, err.Error(), editFailed(err))
+			return
+		}
 		feeds.Check()
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -1455,7 +1458,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			return err
 		})
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, err.Error(), editFailed(err))
 			return
 		}
 		if len(behind) > 0 {
@@ -1483,7 +1486,10 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 				return
 			}
 		}
-		h.Rewrite(in.Tasks...)
+		if err := h.Rewrite(in.Tasks...); err != nil {
+			http.Error(w, err.Error(), editFailed(err))
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 
@@ -1568,10 +1574,11 @@ func replyCut(kept string) bool {
 	return len(utf16.Encode([]rune(kept))) >= claude.ReplyLimit
 }
 
-// editFailed is the status for a knowledge base edit that failed: the
-// server's fault when it could not be saved, and otherwise the request's.
+// editFailed is the status for an edit to the knowledge base or settings
+// that failed: the server's fault when it could not be saved, and otherwise
+// the request's.
 func editFailed(err error) int {
-	if errors.Is(err, kb.ErrNotSaved) {
+	if errors.Is(err, kb.ErrNotSaved) || errors.Is(err, hub.ErrNotSaved) {
 		return http.StatusInternalServerError
 	}
 	return http.StatusBadRequest

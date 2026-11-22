@@ -10,6 +10,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"maps"
 	"slices"
@@ -1371,21 +1373,23 @@ func (h *Hub) UpdateSettings(change func(*Settings) error) ([]string, error) {
 	if err := change(&s); err != nil {
 		return nil, err
 	}
-	s.Integrations, s.IntegrationsRevision, s.Rewritten = h.settings.Integrations, h.settings.IntegrationsRevision, h.settings.Rewritten
+	kept := h.settings.clone()
+	s.Integrations, s.IntegrationsRevision, s.Rewritten = kept.Integrations, kept.IntegrationsRevision, kept.Rewritten
 	s.Prompts.Tasks = maps.Clone(s.Prompts.Tasks)
 	if s.Prompts.Tasks == nil {
 		s.Prompts.Tasks = map[string]string{}
 	}
 	s.Prompts.Rewrite = cmp.Or(s.Prompts.Rewrite, RewriteAsk)
 	behind := h.settings.Prompts.behind(s.Prompts)
-	h.settings = s
 	if s.Prompts.Rewrite == RewriteAlways {
 		for _, t := range behind {
-			h.settings.Rewritten[t]++
+			s.Rewritten[t]++
 		}
 		behind = nil
 	}
-	h.saveSettings()
+	if err := h.keepSettings(s); err != nil {
+		return nil, err
+	}
 	return behind, nil
 }
 
@@ -1393,16 +1397,17 @@ func (h *Hub) UpdateSettings(change func(*Settings) error) ([]string, error) {
 // for every task: its descriptions of open sessions with their filings,
 // roles and effort notes, and its briefs of pull requests. Days of the
 // journal and earlier history are written only when asked for.
-func (h *Hub) Rewrite(tasks ...string) {
+func (h *Hub) Rewrite(tasks ...string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if len(tasks) == 0 {
 		tasks = []string{ActDescribe, ActBrief}
 	}
+	s := h.settings.clone()
 	for _, t := range leading(tasks) {
-		h.settings.Rewritten[t]++
+		s.Rewritten[t]++
 	}
-	h.saveSettings()
+	return h.keepSettings(s)
 }
 
 // rewritten marks the times the model has been asked to write again for
@@ -1416,21 +1421,32 @@ func (h *Hub) rewritten(task string) string {
 
 // SetIntegration turns one integration on or off. Every session is then
 // described again, since what the model can look up has changed.
-func (h *Hub) SetIntegration(id string, on bool) {
+func (h *Hub) SetIntegration(id string, on bool) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.settings.Integrations[id] == on {
-		return
+		return nil
 	}
-	h.settings.Integrations[id] = on
-	h.settings.IntegrationsRevision++
-	h.saveSettings()
+	s := h.settings.clone()
+	s.Integrations[id] = on
+	s.IntegrationsRevision++
+	return h.keepSettings(s)
 }
 
-func (h *Hub) saveSettings() {
-	h.warn(h.cache.Put("setting", "main", h.settings))
+// ErrNotSaved is wrapped by the error of a change to the settings that could
+// not be saved, which is then not made.
+var ErrNotSaved = errors.New("the settings could not be saved")
+
+// keepSettings saves s, and only then makes it the user's preferences. s
+// shares nothing with the settings it replaces.
+func (h *Hub) keepSettings(s Settings) error {
+	if err := h.cache.Put("setting", "main", s); err != nil {
+		return fmt.Errorf("%w: %w", ErrNotSaved, err)
+	}
+	h.settings = s
 	h.last = ""
 	h.changed()
+	return nil
 }
 
 // Looked records a lookup for the user to see.
