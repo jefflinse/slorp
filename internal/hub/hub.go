@@ -647,7 +647,19 @@ type Settings struct {
 	Terminal string `json:"terminal,omitempty"`
 	// Prompts is what the user has the local model told.
 	Prompts Prompts `json:"prompts"`
+	// Rewritten counts, by task, the times the model has been asked to
+	// write again what it wrote for it.
+	Rewritten map[string]int `json:"rewritten"`
 }
+
+// Whether what the model wrote is written again when its instructions
+// change, as a Prompts' Rewrite.
+const (
+	// RewriteAsk leaves it to be asked of the user.
+	RewriteAsk    = "ask"
+	RewriteAlways = "always"
+	RewriteNever  = "never"
+)
 
 // PromptLookup is the task of choosing what to look up before a session is
 // described. The other tasks go by the Kind of the Action they end in.
@@ -661,6 +673,41 @@ type Prompts struct {
 	// Tasks holds the instructions the user wrote for a task, by the task,
 	// in place of Slorp's own. A task with none goes by Slorp's.
 	Tasks map[string]string `json:"tasks"`
+	// Rewrite is whether what the model already wrote is written again
+	// when any of this changes.
+	Rewrite string `json:"rewrite"`
+}
+
+// behind lists the tasks for which what the model wrote was written under
+// instructions that differ between was and now, in the form Rewrite takes
+// them. The tasks done only when asked for leave nothing behind.
+func (was Prompts) behind(now Prompts) []string {
+	differs := func(tasks ...string) bool {
+		return slices.ContainsFunc(tasks, func(t string) bool { return was.Tasks[t] != now.Tasks[t] })
+	}
+	var out []string
+	for _, t := range []struct {
+		task    string
+		changed bool
+	}{
+		{ActDescribe, was.Global != now.Global || differs(ActDescribe, PromptLookup)},
+		{ActFile, differs(ActFile)}, {ActRole, differs(ActRole)}, {ActNote, differs(ActNote)},
+		{ActBrief, was.Global != now.Global || differs(ActBrief)},
+	} {
+		if t.changed {
+			out = append(out, t.task)
+		}
+	}
+	return leading(out)
+}
+
+// leading returns tasks without those that follow from another of them: a
+// session described again is then filed, given a role and noted again.
+func leading(tasks []string) []string {
+	if !slices.Contains(tasks, ActDescribe) {
+		return tasks
+	}
+	return slices.DeleteFunc(slices.Clone(tasks), func(t string) bool { return t == ActFile || t == ActRole || t == ActNote })
 }
 
 // Cache is where the hub keeps what should outlive a restart.
@@ -856,6 +903,10 @@ func New(k *kb.Store, c Cache) *Hub {
 	if h.settings.Prompts.Tasks == nil {
 		h.settings.Prompts.Tasks = map[string]string{}
 	}
+	if h.settings.Rewritten == nil {
+		h.settings.Rewritten = map[string]int{}
+	}
+	h.settings.Prompts.Rewrite = cmp.Or(h.settings.Prompts.Rewrite, RewriteAsk)
 	return h
 }
 
@@ -1289,40 +1340,59 @@ func (h *Hub) Settings() Settings {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	s := h.settings
-	s.Integrations, s.Prompts.Tasks = maps.Clone(s.Integrations), maps.Clone(s.Prompts.Tasks)
+	s.Integrations, s.Prompts.Tasks, s.Rewritten = maps.Clone(s.Integrations), maps.Clone(s.Prompts.Tasks), maps.Clone(s.Rewritten)
 	return s
 }
 
 // SetSettings replaces the user's preferences, leaving which integrations
-// are on to SetIntegration. Whatever the local model wrote under
-// instructions that have changed is then written again.
-func (h *Hub) SetSettings(s Settings) {
+// are on to SetIntegration and what is written again to Rewrite. It returns
+// the tasks for which what the model wrote is left behind its instructions,
+// which is none of them where the user has such writing always written
+// again.
+func (h *Hub) SetSettings(s Settings) []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	s.Integrations, s.IntegrationsRevision = h.settings.Integrations, h.settings.IntegrationsRevision
+	s.Integrations, s.IntegrationsRevision, s.Rewritten = h.settings.Integrations, h.settings.IntegrationsRevision, h.settings.Rewritten
 	s.Prompts.Tasks = maps.Clone(s.Prompts.Tasks)
 	if s.Prompts.Tasks == nil {
 		s.Prompts.Tasks = map[string]string{}
 	}
+	s.Prompts.Rewrite = cmp.Or(s.Prompts.Rewrite, RewriteAsk)
+	behind := h.settings.Prompts.behind(s.Prompts)
 	h.settings = s
+	if s.Prompts.Rewrite == RewriteAlways {
+		for _, t := range behind {
+			h.settings.Rewritten[t]++
+		}
+		behind = nil
+	}
+	h.saveSettings()
+	return behind
+}
+
+// Rewrite has the model write again what it wrote for tasks, or with none
+// for every task: its descriptions of open sessions with their filings,
+// roles and effort notes, and its briefs of pull requests. Days of the
+// journal and earlier history are written only when asked for.
+func (h *Hub) Rewrite(tasks ...string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(tasks) == 0 {
+		tasks = []string{ActDescribe, ActBrief}
+	}
+	for _, t := range leading(tasks) {
+		h.settings.Rewritten[t]++
+	}
 	h.saveSettings()
 }
 
-// told marks what the user has the model told for tasks: empty while they
-// go by Slorp's own instructions alone, and otherwise different whenever
-// what the user wrote for any of them, or ahead of them all, changes.
-func (h *Hub) told(tasks ...string) string {
-	p := h.settings.Prompts
-	said, any := p.Global, p.Global != ""
-	for _, t := range tasks {
-		said += "\x00" + p.Tasks[t]
-		any = any || p.Tasks[t] != ""
+// rewritten marks the times the model has been asked to write again for
+// task: empty until it is, so that what was written before stands.
+func (h *Hub) rewritten(task string) string {
+	if n := h.settings.Rewritten[task]; n > 0 {
+		return "~" + strconv.Itoa(n)
 	}
-	if !any {
-		return ""
-	}
-	sum := sha1.Sum([]byte(said))
-	return "~" + hex.EncodeToString(sum[:6])
+	return ""
 }
 
 // SetIntegration turns one integration on or off. Every session is then
@@ -1701,7 +1771,7 @@ func (h *Hub) Touch() {
 
 // routeKey identifies what a model's filing guess was based on.
 func (h *Hub) routeKey(s *Session) string {
-	return s.insightKey + ":" + strconv.Itoa(h.kb.Revision()) + h.told(ActFile)
+	return s.insightKey + ":" + strconv.Itoa(h.kb.Revision()) + h.rewritten(ActFile)
 }
 
 // Unrouted lists described sessions that still need the model to guess an effort.
@@ -1749,7 +1819,7 @@ func (h *Hub) Unroled() []Unroled {
 		return out
 	}
 	for _, s := range h.sessions {
-		key := s.insightKey + ":" + strconv.Itoa(h.kb.RoleRevision()) + h.told(ActRole)
+		key := s.insightKey + ":" + strconv.Itoa(h.kb.RoleRevision()) + h.rewritten(ActRole)
 		if s.insightKey != s.key || s.roleKey == key {
 			continue
 		}
@@ -1784,12 +1854,7 @@ func (h *Hub) Unnoted() []Unnoted {
 	for _, e := range h.kb.Efforts() {
 		var members []Session
 		var questions []string
-		key := e.Name + "\x00" + e.About
-		// What the user has go ahead of every task is left out: a change to
-		// it has the sessions described again, and the note follows them.
-		if own := h.settings.Prompts.Tasks[ActNote]; own != "" {
-			key += "\x00!" + own
-		}
+		key := e.Name + "\x00" + e.About + h.rewritten(ActNote)
 		for _, q := range know.Questions {
 			if q.Effort == e.ID {
 				questions = append(questions, q.Text)
@@ -2204,7 +2269,7 @@ func (h *Hub) Subscribe() (<-chan struct{}, func()) {
 
 func (h *Hub) changed() {
 	now := time.Now()
-	context := ":" + strconv.Itoa(h.kb.ContextRevision()) + "." + strconv.Itoa(h.settings.IntegrationsRevision) + h.told(ActDescribe, PromptLookup)
+	context := ":" + strconv.Itoa(h.kb.ContextRevision()) + "." + strconv.Itoa(h.settings.IntegrationsRevision) + h.rewritten(ActDescribe)
 	for _, s := range h.sessions {
 		if k := contentKey(s) + context; k != s.key {
 			s.key, s.keySince = k, now

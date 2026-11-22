@@ -4083,6 +4083,8 @@ function modelBody() {
         <span><button type="button" class="btn" data-act="modelTry" ${modelChecking ? 'disabled' : ''} title="Checks the server and model typed here without saving them">Try Without Saving</button>
         <button class="btn go" ${s.fixedUrl && s.fixedModel ? 'disabled' : ''}>Save</button></span></div>
     </form>
+    ${setting('What It Has Written', 'Rewrite All has the model write again what it wrote for open sessions, efforts and pull requests: summaries, filings, role guesses, effort notes and briefs. Pages of the journal and earlier history are left as they are.',
+      `<button class="btn" data-act="rewriteAll" ${off ? 'disabled' : ''}>Rewrite All</button>`)}
     ${setting('What It Has Done', 'Each piece of work the local model did for Slorp, with the sessions, efforts, pull requests and workspaces it was about.', '<button class="btn" data-act="view" data-view="log">See the Log</button>')}`;
 }
 
@@ -4099,7 +4101,40 @@ const PROMPT_TASKS = [
   ['backfill', 'Earlier History', 'How each of a session\'s earlier exchanges came out.'],
 ];
 /* What the user has the local model told: ahead of every task, and in place of Slorp's own instructions for each. */
-const prompts = () => ({ global: settings.prompts?.global || '', tasks: settings.prompts?.tasks || {} });
+const prompts = () => ({ global: settings.prompts?.global || '', tasks: settings.prompts?.tasks || {}, rewrite: settings.prompts?.rewrite || 'ask' });
+/* What the model keeps written for each task it can be asked to write again for, as the dialog that asks names it. */
+const REWRITES = { describe: 'session summaries (and the filings, role guesses and effort notes that follow from them)', file: 'filings', role: 'role guesses', note: 'effort notes', brief: 'pull request briefs' };
+/* The tasks a save left what the model wrote behind for, while the user is asked whether it is to be written again. */
+let rewriteAsked = null;
+/* Saves a change to what the model is told, and says so with said. Where that leaves what the model wrote behind
+   its instructions, the user is asked whether to have it written again, if they have chosen to be asked. */
+function savePrompts(changes, said, done) {
+  fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompts: changes }) })
+    .then(async res => {
+      if (!res.ok) throw new Error((await res.text()).trim() || res.status);
+      const behind = res.status === 200 ? (await res.json()).behind || [] : [], how = prompts().rewrite;
+      done();
+      toast(behind.length && how === 'never' ? `${said}. What the model already wrote stays as it is.` : said);
+      if (behind.length && how === 'ask') { rewriteAsked = behind; modal = 'rewrite'; modalFocus = true; }
+    })
+    .catch(serviceSaid)
+    .finally(() => refresh(true));
+}
+/* Has the model write again what it wrote for tasks, or with none of them for every task. */
+function rewrite(tasks) {
+  ask('/api/model/rewrite', { tasks }, () => toast(modelless() ? 'It will be written again once a local model is running' : tasks.length ? 'The model is writing it again' : 'The model is writing it all again'));
+}
+function rewriteModal() {
+  if (!rewriteAsked?.length) { modal = null; return ''; }
+  return `<div class="veil" data-act="modalClose"><div class="modal" data-act="noop" role="alertdialog" aria-label="Rewrite what the model wrote">
+    <h2>Rewrite What the Model Wrote?</h2>
+    <ul><li>The change is saved, and the model goes by it from the next thing it writes.</li>
+      <li>What it already wrote stays as it is unless it is written again: its ${esc(listOf(rewriteAsked.map(t => REWRITES[t] || t)))}.</li></ul>
+    <p class="prose" style="margin-top:14px">When a Prompt Changes, under Prompts, decides whether you are asked.</p>
+    <div class="mfoot"><button class="btn" data-act="modalClose">Leave It</button>
+      <span class="bar"><button class="btn go" data-act="rewriteYes" data-first>Rewrite</button></span></div>
+  </div></div>`;
+}
 /* Slorp's own instructions for each task, read from the service the first time they are wanted. */
 let promptDefaults = null, promptsReading = false, promptsError = '';
 function loadPromptDefaults(retry = false) {
@@ -4139,6 +4174,8 @@ function promptsBody() {
     <div class="card set prompt" data-prompt="global"><div class="body"><div class="nm">Before Every Task${p.global ? ' <span class="tag whenever">Customized</span>' : ''}</div>
       <div class="why">Goes ahead of the instructions for every task below. Leave it empty to add nothing.</div></div></div>
     ${promptForm('global', 'Before Every Task')}
+    ${setting('When a Prompt Changes', 'Whether what the model already wrote for open sessions, efforts and pull requests is written again under its new instructions. Pages of the journal and earlier history are written again only when you ask for them. Rewrite All, under Local Model, does it whenever you like.',
+      choice('promptRewriteTo', p.rewrite, [['never', 'Do Nothing'], ['always', 'Rewrite'], ['ask', 'Ask']], 'When a Prompt Changes'))}
     <div class="label" style="margin-top:34px">Tasks</div>
     <p class="lede" style="margin-bottom:10px">Each task has instructions of Slorp's own, which you can replace with yours. Slorp holds the model to the shape of answer a task needs whatever its instructions say, so yours should ask for the same things.</p>
     ${tasks}`;
@@ -4152,7 +4189,7 @@ const SETTINGS_LEDE = {
   start: 'A profile is a named set of what a new session starts with: what it runs on, where, and how. The New Session dialog offers them and opens with the default one, when there is one. Whatever a profile sets can still be changed there before a session is started.',
   integrations: 'What Slorp is connected to: the agents whose sessions it watches, and the tools it reads.',
   model: 'Summaries, suggested replies, automatic filing and wrap-ups are written by a model on a server you choose, usually one running on this machine. What your sessions say is sent to that server and nowhere else.',
-  prompts: 'What the local model is told before each piece of work it does for Slorp. A change takes effect at once, and what the model wrote for open sessions, efforts and pull requests is written again under it. Pages of the journal and earlier history stay as they were written until you ask for them again.',
+  prompts: 'What the local model is told before each piece of work it does for Slorp. A change takes effect with the next thing the model writes.',
   keys: 'They work anywhere outside a text box; those with ⌘, ⌃ or Ctrl work inside one too.',
 };
 function settingsBody(sec) {
@@ -4279,7 +4316,7 @@ function draw() {
   document.documentElement.style.setProperty('--notice', `${44 * notices.length}px`);
   $('#notice').innerHTML = notices.join('');
   $('#main').innerHTML = main;
-  $('#modal').innerHTML = modal === 'search' ? searchModal() : modal === 'start' ? startModal() : modal === 'resumeError' ? retainedSessionModal(partialResume) : modal === 'effortDelete' ? deleteModal() : modal === 'effortMerge' ? mergeModal() : modal === 'upgrade' ? upgradeModal() : '';
+  $('#modal').innerHTML = modal === 'search' ? searchModal() : modal === 'start' ? startModal() : modal === 'resumeError' ? retainedSessionModal(partialResume) : modal === 'effortDelete' ? deleteModal() : modal === 'effortMerge' ? mergeModal() : modal === 'upgrade' ? upgradeModal() : modal === 'rewrite' ? rewriteModal() : '';
   if (modalFocus) { modalFocus = false; $('#q, #modal [data-first]')?.focus(); }
   // The toggle shows only where there is more of what the user said to see.
   document.querySelectorAll('.said').forEach(el => {
@@ -4356,9 +4393,12 @@ const actions = {
   promptSel: d => { state.promptSel = state.promptSel === d.id ? null : d.id; },
   promptsRetry: () => { loadPromptDefaults(true); return false; },
   promptReset: (d, el) => {
-    ask('/api/settings', { prompts: { tasks: { [d.id]: '' } } }, () => { el.closest('form').querySelector('textarea').removeAttribute('data-keep'); toast('Back to Slorp\'s own'); });
+    savePrompts({ tasks: { [d.id]: '' } }, 'Back to Slorp\'s own', () => el.closest('form')?.querySelector('textarea').removeAttribute('data-keep'));
     return false;
   },
+  promptRewriteTo: d => { api('POST', '/api/settings', { prompts: { rewrite: d.to } }); return false; },
+  rewriteYes: () => { const tasks = rewriteAsked; modal = rewriteAsked = null; rewrite(tasks); },
+  rewriteAll: () => { rewrite([]); return false; },
   modelTry: () => { checkModel(modelTyped()); return false; },
   modelOff: d => { api('POST', '/api/settings', { model: { off: d.to === 'off' } }, () => { modelCheck = null; }); return false; },
   setGo: d => { state.setSel = d.s; go('settings'); },
@@ -4779,7 +4819,7 @@ document.addEventListener('submit', e => {
   if (sec === 'tag') { tagDay(form.dataset.id, f.tag, true); clear(); if (!live) render(); return; }
   if (sec === 'prompt') {
     const box = form.querySelector('textarea'), task = form.dataset.id;
-    ask('/api/settings', { prompts: task === 'global' ? { global: box.value } : { tasks: { [task]: box.value } } }, () => { box.removeAttribute('data-keep'); toast('Saved'); });
+    savePrompts(task === 'global' ? { global: box.value } : { tasks: { [task]: box.value } }, 'Saved', () => box.removeAttribute('data-keep'));
     return;
   }
   if (sec === 'model') {

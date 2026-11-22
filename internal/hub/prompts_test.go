@@ -10,140 +10,184 @@ import (
 )
 
 // tell has the model told global ahead of every task, and tasks in place
-// of Slorp's own instructions for each.
-func tell(h *Hub, global string, tasks map[string]string) {
+// of Slorp's own instructions for each, and returns the tasks left behind.
+func tell(h *Hub, global string, tasks map[string]string) []string {
 	s := h.Settings()
-	s.Prompts = Prompts{Global: global, Tasks: tasks}
+	s.Prompts.Global, s.Prompts.Tasks = global, tasks
+	return h.SetSettings(s)
+}
+
+// rewriting sets whether what the model wrote is written again when its
+// instructions change.
+func rewriting(h *Hub, mode string) {
+	s := h.Settings()
+	s.Prompts.Rewrite = mode
 	h.SetSettings(s)
 }
 
 func TestPromptsPersistAndAreHandedOutAsACopy(t *testing.T) {
 	h, k, st := newHub(t)
-	if got := h.Settings().Prompts; got.Global != "" || got.Tasks == nil || len(got.Tasks) != 0 {
-		t.Fatalf("a new hub's prompts = %+v, want none, as an empty set", got)
+	if got := h.Settings(); got.Prompts.Global != "" || got.Prompts.Tasks == nil || len(got.Prompts.Tasks) != 0 || got.Prompts.Rewrite != RewriteAsk || got.Rewritten == nil {
+		t.Fatalf("a new hub's settings = %+v, want no prompts, as an empty set, and rewriting left to be asked", got)
 	}
+	h.SetSettings(Settings{})
+	if got := h.Settings().Prompts.Rewrite; got != RewriteAsk {
+		t.Errorf("settings that do not say whether to rewrite = %q, want it left to be asked", got)
+	}
+	rewriting(h, RewriteNever)
 	tell(h, "Write in British English.", map[string]string{ActNote: "Say where the effort stands."})
+	h.Rewrite(ActFile)
 
 	got := h.Settings()
 	got.Prompts.Tasks[ActNote] = "changed by the caller"
 	got.Integrations["github"] = true
-	if kept := h.Settings(); kept.Prompts.Tasks[ActNote] != "Say where the effort stands." || kept.Integrations["github"] {
+	got.Rewritten[ActFile] = 9
+	if kept := h.Settings(); kept.Prompts.Tasks[ActNote] != "Say where the effort stands." || kept.Integrations["github"] || kept.Rewritten[ActFile] != 1 {
 		t.Errorf("changing what Settings returned changed what the hub holds: %+v", kept)
 	}
-	if kept := New(k, st).Settings().Prompts; kept.Global != "Write in British English." || kept.Tasks[ActNote] != "Say where the effort stands." {
+	h.SetSettings(got)
+	if kept := h.Settings().Rewritten[ActFile]; kept != 1 {
+		t.Errorf("settings counted %d rewrites of filings, want the count left to Rewrite", kept)
+	}
+	if kept := New(k, st).Settings(); kept.Prompts.Global != "Write in British English." || kept.Prompts.Tasks[ActNote] != "changed by the caller" || kept.Prompts.Rewrite != RewriteNever || kept.Rewritten[ActFile] != 1 {
 		t.Errorf("after a restart: %+v", kept)
 	}
 }
 
-func TestChangedInstructionsHaveTheModelWriteAgain(t *testing.T) {
-	// settled is a hub in which the model has nothing left to write: a
-	// session filed by its directory and one filed by a guess, each
-	// described and given a role, and a note on the effort.
-	settled := func(t *testing.T) (*Hub, func() string) {
-		h, k, _ := newHub(t)
-		a := effort(t, k, "A")
-		must(t, k.AddDir(a, "/work/a"))
-		r := role(t, k, "Reviewer", "")
-		h.SetRoster(agent, []Session{idle("filed", "/work/a", "done"), idle("loose", "/w", "done")})
-		waiting := func() string {
-			for _, id := range []string{"filed", "loose"} {
-				quieten(h, id)
-			}
-			return fmt.Sprintf("describe %d, file %d, role %d, note %d", len(h.Undescribed()), len(h.Unrouted()), len(h.Unroled()), len(h.Unnoted()))
-		}
-		describe(h, "filed", KindReview)
-		describe(h, "loose", KindReview)
-		h.SetGuess("loose", h.Unrouted()[0].Key, "")
-		for _, w := range h.Unroled() {
-			h.SetRoleGuess(w.Session.ID, w.Key, r)
-		}
-		h.SetNote(a, h.Unnoted()[0].Key, Note{Line: "line"})
-		if got := waiting(); got != "describe 0, file 0, role 0, note 0" {
-			t.Fatalf("setup: %s is waiting on the model", got)
-		}
-		return h, waiting
-	}
-
-	tests := []struct {
-		name, global string
-		tasks        map[string]string
-		want         string
-	}{
-		{"a task that is only done when asked for", "", map[string]string{ActWrapup: "x", ActBackfill: "x"}, "describe 0, file 0, role 0, note 0"},
-		{"describing", "", map[string]string{ActDescribe: "x"}, "describe 2, file 0, role 0, note 0"},
-		{"choosing what to look up", "", map[string]string{PromptLookup: "x"}, "describe 2, file 0, role 0, note 0"},
-		{"filing", "", map[string]string{ActFile: "x"}, "describe 0, file 1, role 0, note 0"},
-		{"guessing roles", "", map[string]string{ActRole: "x"}, "describe 0, file 0, role 2, note 0"},
-		{"noting", "", map[string]string{ActNote: "x"}, "describe 0, file 0, role 0, note 1"},
-		{"what goes ahead of every task", "x", nil, "describe 2, file 0, role 0, note 0"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			h, waiting := settled(t)
-			tell(h, tt.global, tt.tasks)
-			if got := waiting(); got != tt.want {
-				t.Errorf("after the change: %s; want %s", got, tt.want)
-			}
-			if len(h.State().Items) != 2 {
-				t.Error("what was written before is gone while it waits to be written again")
-			}
-			tell(h, "", nil)
-			if got := waiting(); got != "describe 0, file 0, role 0, note 0" {
-				t.Errorf("back to Slorp's own instructions: %s; want what was written under them to stand", got)
-			}
-		})
-	}
-
-	t.Run("saving the same again", func(t *testing.T) {
-		h, waiting := settled(t)
-		tell(h, "x", map[string]string{ActFile: "y"})
-		if got := waiting(); got != "describe 2, file 0, role 0, note 0" {
-			t.Fatalf("after the change: %s", got)
-		}
-		describe(h, "filed", KindReview)
-		describe(h, "loose", KindReview)
-		before := waiting()
-		tell(h, "x", map[string]string{ActFile: "y"})
-		if got := waiting(); got != before || !strings.HasPrefix(got, "describe 0,") {
-			t.Errorf("after saving what was already there: %s, was %s; want nothing more to write", got, before)
-		}
-	})
-}
-
-func TestChangedInstructionsHaveABriefWrittenAgain(t *testing.T) {
-	h, _, _ := newHub(t)
+// settled is a hub in which the model has nothing left to write: a session
+// filed by its directory and one filed by a guess, each described and given
+// a role, a note on the effort, and a brief of a pull request. It returns
+// with it what is waiting on the model.
+func settled(t *testing.T) (*Hub, func() string) {
+	t.Helper()
+	h, k, _ := newHub(t)
+	a := effort(t, k, "A")
+	must(t, k.AddDir(a, "/work/a"))
+	r := role(t, k, "Reviewer", "")
+	h.SetRoster(agent, []Session{idle("filed", "/work/a", "done"), idle("loose", "/w", "done")})
 	at := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	mine := pull("acme/widgets", 1, false, at)
 	mine.Mine = true
 	h.SetFeed("github", nil, []integrations.PullRequest{mine}, nil)
 	h.SetDiscussion(h.Undiscussed(1)[0], talked(at, "why"), nil)
-	first := h.Unbriefed()[0]
-	h.SetBrief(first.Ref, PullBrief{Stands: "Under Slorp's own."}, nil)
-	if len(h.Unbriefed()) != 0 || listed(t, h, 1).Behind {
-		t.Fatal("setup: the pull request should be written about")
+	waiting := func() string {
+		for _, id := range []string{"filed", "loose"} {
+			quieten(h, id)
+		}
+		return fmt.Sprintf("describe %d, file %d, role %d, note %d, brief %d", len(h.Undescribed()), len(h.Unrouted()), len(h.Unroled()), len(h.Unnoted()), len(h.Unbriefed()))
 	}
+	describe(h, "filed", KindReview)
+	describe(h, "loose", KindReview)
+	h.SetGuess("loose", h.Unrouted()[0].Key, "")
+	for _, w := range h.Unroled() {
+		h.SetRoleGuess(w.Session.ID, w.Key, r)
+	}
+	h.SetNote(a, h.Unnoted()[0].Key, Note{Line: "line"})
+	h.SetBrief(h.Unbriefed()[0].Ref, PullBrief{Stands: "As first written."}, nil)
+	if got := waiting(); got != nothing {
+		t.Fatalf("setup: %s is waiting on the model", got)
+	}
+	return h, waiting
+}
 
-	tell(h, "", map[string]string{ActNote: "x"})
-	if len(h.Unbriefed()) != 0 {
-		t.Error("a change to another task's instructions has the brief written again")
+const nothing = "describe 0, file 0, role 0, note 0, brief 0"
+
+func TestChangedInstructionsLeaveWritingBehindUntilItIsRewritten(t *testing.T) {
+	tests := []struct {
+		name, global string
+		tasks        map[string]string
+		behind, want string
+	}{
+		{"tasks that are only done when asked for", "", map[string]string{ActWrapup: "x", ActBackfill: "x"}, "", nothing},
+		{"describing", "", map[string]string{ActDescribe: "x"}, "describe", "describe 2, file 0, role 0, note 0, brief 0"},
+		{"choosing what to look up", "", map[string]string{PromptLookup: "x"}, "describe", "describe 2, file 0, role 0, note 0, brief 0"},
+		{"filing", "", map[string]string{ActFile: "x"}, "file", "describe 0, file 1, role 0, note 0, brief 0"},
+		{"guessing roles", "", map[string]string{ActRole: "x"}, "role", "describe 0, file 0, role 2, note 0, brief 0"},
+		{"noting", "", map[string]string{ActNote: "x"}, "note", "describe 0, file 0, role 0, note 1, brief 0"},
+		{"briefing", "", map[string]string{ActBrief: "x"}, "brief", "describe 0, file 0, role 0, note 0, brief 1"},
+		{"filing and noting", "", map[string]string{ActFile: "x", ActNote: "x"}, "file note", "describe 0, file 1, role 0, note 1, brief 0"},
+		{"describing and what follows from it", "", map[string]string{ActDescribe: "x", ActFile: "x", ActNote: "x"}, "describe", "describe 2, file 0, role 0, note 0, brief 0"},
+		{"what goes ahead of every task", "x", nil, "describe brief", "describe 2, file 0, role 0, note 0, brief 1"},
 	}
-	for _, change := range []func(){
-		func() { tell(h, "", map[string]string{ActBrief: "x"}) },
-		func() { tell(h, "Write in British English.", map[string]string{ActBrief: "x"}) },
-	} {
-		change()
-		waiting := h.Unbriefed()
-		if p := listed(t, h, 1); len(waiting) != 1 || !p.Behind || p.Brief == nil {
-			t.Fatalf("after the change: %d waiting, %+v; want the brief kept, marked behind, and written again", len(waiting), p)
+	for _, tt := range tests {
+		for _, mode := range []string{RewriteAsk, RewriteNever} {
+			t.Run(tt.name+", with rewriting set to "+mode, func(t *testing.T) {
+				h, waiting := settled(t)
+				rewriting(h, mode)
+				behind := tell(h, tt.global, tt.tasks)
+				if got := strings.Join(behind, " "); got != tt.behind {
+					t.Errorf("left behind: %q, want %q", got, tt.behind)
+				}
+				if got := waiting(); got != nothing {
+					t.Errorf("after the change: %s; want what was written to stand until it is asked for again", got)
+				}
+				if again := tell(h, tt.global, tt.tasks); len(again) != 0 {
+					t.Errorf("saving the same again left %v behind", again)
+				}
+				if len(behind) == 0 {
+					return
+				}
+				h.Rewrite(behind...)
+				if got := waiting(); got != tt.want {
+					t.Errorf("once rewritten: %s; want %s", got, tt.want)
+				}
+				if len(h.State().Items) != 2 {
+					t.Error("what was written before is gone while it waits to be written again")
+				}
+			})
 		}
-		h.SetBrief(first.Ref, PullBrief{Stands: "Written under what the model was told before."}, nil)
-		if p := listed(t, h, 1); !p.Behind || strings.Contains(p.Brief.Stands, "before") {
-			t.Errorf("a brief written under the instructions before stood as current: %+v", p.Brief)
-		}
-		first = waiting[0]
-		h.SetBrief(first.Ref, PullBrief{Stands: "Under the user's."}, nil)
-		if p := listed(t, h, 1); len(h.Unbriefed()) != 0 || p.Behind || p.Brief.Stands != "Under the user's." {
-			t.Errorf("written again: %+v; want it current", p)
-		}
+		t.Run(tt.name+", with rewriting set to always", func(t *testing.T) {
+			h, waiting := settled(t)
+			rewriting(h, RewriteAlways)
+			if behind := tell(h, tt.global, tt.tasks); len(behind) != 0 {
+				t.Errorf("left behind: %v, want nothing, with it all written again", behind)
+			}
+			if got := waiting(); got != tt.want {
+				t.Errorf("after the change: %s; want %s", got, tt.want)
+			}
+			before := h.Settings().Rewritten
+			tell(h, tt.global, tt.tasks)
+			if after := h.Settings().Rewritten; fmt.Sprint(after) != fmt.Sprint(before) {
+				t.Errorf("saving the same again counted more rewrites: %v, was %v", after, before)
+			}
+		})
+	}
+}
+
+func TestRewriteAll(t *testing.T) {
+	h, waiting := settled(t)
+	if got := waiting(); got != nothing {
+		t.Fatal(got)
+	}
+	h.Rewrite()
+	if got := waiting(); got != "describe 2, file 0, role 0, note 0, brief 1" {
+		t.Fatalf("asked to rewrite it all: %s; want every session described again and the pull request briefed", got)
+	}
+	describe(h, "filed", KindReview)
+	describe(h, "loose", KindReview)
+	if got := waiting(); got != "describe 0, file 1, role 2, note 1, brief 1" {
+		t.Errorf("once described again: %s; want the filing, roles and note to follow", got)
+	}
+}
+
+func TestABriefWrittenBeforeARewriteWasAskedForDoesNotStand(t *testing.T) {
+	h, _ := settled(t)
+	h.Rewrite(ActNote)
+	if p := listed(t, h, 1); len(h.Unbriefed()) != 0 || p.Behind {
+		t.Fatalf("after another task was rewritten: %+v; want the brief to stand", p)
+	}
+	h.Rewrite(ActBrief)
+	waiting := h.Unbriefed()
+	if p := listed(t, h, 1); len(waiting) != 1 || !p.Behind || p.Brief == nil {
+		t.Fatalf("asked for again: %d waiting, %+v; want the brief kept, marked behind, and written again", len(waiting), p)
+	}
+	h.Rewrite(ActBrief)
+	h.SetBrief(waiting[0].Ref, PullBrief{Stands: "Asked for before the last rewrite."}, nil)
+	if p := listed(t, h, 1); !p.Behind || p.Brief.Stands != "As first written." {
+		t.Errorf("a brief asked for before the last rewrite stood as current: %+v", p.Brief)
+	}
+	h.SetBrief(h.Unbriefed()[0].Ref, PullBrief{Stands: "Written again."}, nil)
+	if p := listed(t, h, 1); len(h.Unbriefed()) != 0 || p.Behind || p.Brief.Stands != "Written again." {
+		t.Errorf("written again: %+v; want it current", p)
 	}
 }

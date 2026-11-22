@@ -10,14 +10,19 @@ const OWN = { describe: 'You write entries for a dashboard.\n\ntitle: at most 9 
   role: 'You sort sessions by kind.', note: 'You write the status of one effort.', brief: 'You brief a developer on one pull request.',
   wrapup: 'You write end-of-day notes.', backfill: 'Say where each exchange left things.' }
 
+/* The tasks a change to each prompt leaves what the model wrote behind for. */
+const BEHIND = { global: ['describe', 'brief'], describe: ['describe'], lookup: ['describe'], file: ['file'], role: ['role'], note: ['note'], brief: ['brief'] }
+
 /* A service that keeps what the local model is told as Slorp's does: trimmed, each save changing only what it
-   names, and nothing kept for a task left empty or given Slorp's own instructions. */
-async function world(t, { defaults = true } = {}) {
+   names, nothing kept for a task left empty or given Slorp's own instructions, and a save answered with what it
+   left the model's writing behind for, unless that is always written again. */
+async function world(t, { defaults = true, rewrite = 'never' } = {}) {
   const ready = { installed: true, enabled: true }
   const data = { sessions: [], items: [], efforts: [], knowledge: { questions: [], context: [], routing: [], roles: [], workspaces: [], profiles: [] }, journal: [],
     plugins: { claude: ready, opencode: ready }, summarizer: { model: 'lab/fixture-model' }, capabilities: {}, actions: [],
-    settings: { answerPermissions: true, model: {}, prompts: { global: '', tasks: {} } } }
-  const world = { data, saves: [], reads: 0, defaults }
+    settings: { answerPermissions: true, model: {}, prompts: { global: '', tasks: {}, rewrite } } }
+  const world = { data, saves: [], rewrites: [], reads: 0, defaults }
+  const told = () => JSON.stringify([data.settings.prompts.global, data.settings.prompts.tasks])
   const server = createServer((req, res) => {
     if (req.url === '/api/events') {
       res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write(': connected\n\n')
@@ -33,14 +38,21 @@ async function world(t, { defaults = true } = {}) {
       req.on('end', () => {
         const said = JSON.parse(body)
         world.saves.push(said)
-        const kept = data.settings.prompts
+        const kept = data.settings.prompts, before = told()
+        if (said.prompts?.rewrite) kept.rewrite = said.prompts.rewrite
         if (said.prompts?.global != null) kept.global = said.prompts.global.trim()
         for (const [task, text] of Object.entries(said.prompts?.tasks || {})) {
           if (text.trim() && text.trim() !== OWN[task]) kept.tasks[task] = text.trim()
           else delete kept.tasks[task]
         }
-        res.writeHead(204); res.end()
+        const behind = told() === before ? [] : [...new Set([said.prompts.global != null ? 'global' : null, ...Object.keys(said.prompts.tasks || {})].flatMap(p => BEHIND[p] || []))]
+        if (!behind.length || kept.rewrite === 'always') { res.writeHead(204); res.end(); return }
+        res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ behind }))
       })
+    } else if (req.url === '/api/model/rewrite' && req.method === 'POST') {
+      let body = ''
+      req.on('data', chunk => { body += chunk })
+      req.on('end', () => { world.rewrites.push(JSON.parse(body)); res.writeHead(204); res.end() })
     } else {
       res.setHeader('content-type', 'text/html'); res.end(readFileSync(join(__dirname, '..', 'index.html')))
     }
@@ -62,7 +74,7 @@ async function world(t, { defaults = true } = {}) {
   const box = id => page.locator(`#main form[data-id="${id}"] textarea`)
   const save = id => page.locator(`#main form[data-id="${id}"]`).getByRole('button', { name: 'Save' }).click()
   const saved = n => page.waitForFunction(n => typeof reads !== 'undefined' && document.querySelectorAll('#main .card.prompt .tag').length === n, n)
-  return Object.assign(world, { page, nav, row, box, save, saved })
+  return Object.assign(world, { page, nav, row, box, save, saved, toast: page.locator('#toast'), dialog: page.locator('#modal .modal') })
 }
 
 test('a task goes by Slorp\'s own instructions until others are saved for it, and back to them when reset', async t => {
@@ -126,7 +138,7 @@ test('what goes ahead of every task is saved on its own, and keeps what is typed
   await box('global').fill('')
   await w.save('global')
   await w.saved(1)
-  assert.deepEqual(w.data.settings.prompts, { global: '', tasks: { file: 'File it carefully.' } })
+  assert.deepEqual(w.data.settings.prompts, { global: '', tasks: { file: 'File it carefully.' }, rewrite: 'never' })
 })
 
 test('a task whose own instructions cannot be read says so and can be asked for again', async t => {
@@ -141,4 +153,81 @@ test('a task whose own instructions cannot be read says so and can be asked for 
   await retry.click()
   await box('wrapup').waitFor()
   assert.equal(await box('wrapup').inputValue(), OWN.wrapup)
+})
+
+test('with rewriting left to be asked, a save that leaves writing behind asks, and rewrites only on a yes', async t => {
+  const w = await world(t, { rewrite: 'ask' })
+  const { page, row, box, dialog } = w
+  const how = page.getByRole('group', { name: 'When a Prompt Changes' })
+  assert.equal(await how.locator('button.on').innerText(), 'Ask')
+
+  await row('wrapup').getByRole('button', { name: 'Edit' }).click()
+  await box('wrapup').fill('Write the day up.')
+  await w.save('wrapup')
+  await w.saved(1)
+  assert.equal(await dialog.count(), 0, 'nothing is kept written for a task done only when asked for')
+
+  await row('note').getByRole('button', { name: 'Edit' }).click()
+  await box('note').fill('Say where it stands.')
+  await w.save('note')
+  await dialog.waitFor()
+  assert.match(await dialog.innerText(), /Rewrite What the Model Wrote\?[\s\S]*its effort notes\./)
+  assert.equal(w.data.settings.prompts.tasks.note, 'Say where it stands.', 'the change is saved whatever is answered')
+  await dialog.getByRole('button', { name: 'Leave It' }).click()
+  assert.equal(await dialog.count(), 0)
+  assert.deepEqual(w.rewrites, [])
+
+  await w.save('note')
+  await page.waitForFunction(() => document.querySelector('#toast.show')?.innerText === 'Saved')
+  assert.equal(await dialog.count(), 0, 'a save that changes nothing leaves nothing behind')
+
+  await box('global').fill('Write in British English.')
+  await w.save('global')
+  await dialog.waitFor()
+  assert.match(await dialog.innerText(), /its session summaries \(and the filings, role guesses and effort notes that follow from them\) and pull request briefs\./)
+  await page.keyboard.press('Enter')
+  await page.waitForFunction(() => /writing it again/.test(document.querySelector('#toast.show')?.innerText || ''))
+  assert.deepEqual(w.rewrites, [{ tasks: ['describe', 'brief'] }])
+  assert.equal(await dialog.count(), 0)
+
+  await page.getByRole('button', { name: 'Reset to Default' }).click()
+  await dialog.waitFor()
+  assert.match(await dialog.innerText(), /its effort notes\./)
+  await page.keyboard.press('Escape')
+  assert.equal(await dialog.count(), 0)
+  assert.equal(w.rewrites.length, 1)
+})
+
+test('rewriting can be set to never or always, and then a save does not ask', async t => {
+  const w = await world(t, { rewrite: 'ask' })
+  const { page, row, box, dialog, toast } = w
+  const how = page.getByRole('group', { name: 'When a Prompt Changes' })
+  await how.getByRole('button', { name: 'Do Nothing' }).click()
+  await page.waitForFunction(() => document.querySelector('[aria-label="When a Prompt Changes"] button.on')?.innerText === 'Do Nothing')
+  assert.deepEqual(w.saves, [{ prompts: { rewrite: 'never' } }])
+
+  await row('file').getByRole('button', { name: 'Edit' }).click()
+  await box('file').fill('File it carefully.')
+  await w.save('file')
+  await w.saved(1)
+  assert.equal(await toast.innerText(), 'Saved. What the model already wrote stays as it is.')
+  assert.equal(await dialog.count(), 0)
+
+  await how.getByRole('button', { name: 'Rewrite', exact: true }).click()
+  await page.waitForFunction(() => document.querySelector('[aria-label="When a Prompt Changes"] button.on')?.innerText === 'Rewrite')
+  assert.deepEqual(w.saves[2], { prompts: { rewrite: 'always' } })
+  await box('file').fill('File it very carefully.')
+  await w.save('file')
+  await page.waitForFunction(() => document.querySelector('#toast.show')?.innerText === 'Saved')
+  assert.equal(await dialog.count(), 0)
+  assert.deepEqual(w.rewrites, [], 'the service rewrites of its own accord, unasked by the page')
+})
+
+test('Rewrite All, under Local Model, has everything written again', async t => {
+  const w = await world(t)
+  const { page } = w
+  await page.locator('#main .kbnav').getByRole('button', { name: /^Local Model/ }).click()
+  await page.getByRole('button', { name: 'Rewrite All' }).click()
+  await page.waitForFunction(() => document.querySelector('#toast.show')?.innerText === 'The model is writing it all again')
+  assert.deepEqual(w.rewrites, [{ tasks: [] }])
 })

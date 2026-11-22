@@ -34,6 +34,9 @@ import (
 // modelName is what an agent's name for one of its models looks like.
 var modelName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,99}$`)
 
+// rewritable are the tasks the local model can be asked to write again for.
+var rewritable = []string{hub.ActDescribe, hub.ActFile, hub.ActRole, hub.ActNote, hub.ActBrief}
+
 // agents are the agents a bridge may report for.
 var agents = map[string]bool{claude.Agent: true, opencode.Agent: true}
 
@@ -192,7 +195,8 @@ func modelURL(s string) (string, bool) {
 // prompts returns what the user has the local model told, in the form Slorp
 // keeps it: trimmed, and with nothing for a task whose instructions are
 // empty or Slorp's own. It is an error to name a task the model does not
-// do, or to write more than promptLimit.
+// do, to write more than promptLimit, or to say other than whether to
+// rewrite.
 func prompts(p hub.Prompts) (hub.Prompts, error) {
 	tidy := func(s string) (string, error) {
 		if s = strings.TrimSpace(strings.ReplaceAll(s, "\r\n", "\n")); utf8.RuneCountInString(s) > promptLimit {
@@ -201,7 +205,10 @@ func prompts(p hub.Prompts) (hub.Prompts, error) {
 		return s, nil
 	}
 	own := enrich.Defaults()
-	out := hub.Prompts{Tasks: map[string]string{}}
+	out := hub.Prompts{Tasks: map[string]string{}, Rewrite: p.Rewrite}
+	if !slices.Contains([]string{hub.RewriteAsk, hub.RewriteAlways, hub.RewriteNever}, p.Rewrite) {
+		return hub.Prompts{}, fmt.Errorf("whether to rewrite is %q, %q or %q", hub.RewriteAsk, hub.RewriteAlways, hub.RewriteNever)
+	}
 	var err error
 	if out.Global, err = tidy(p.Global); err != nil {
 		return hub.Prompts{}, err
@@ -1374,7 +1381,32 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		h.SetSettings(in)
+		if behind := h.SetSettings(in); len(behind) > 0 {
+			writeJSON(w, http.StatusOK, struct {
+				// Behind are the tasks for which what the model wrote was
+				// written under other instructions than it now has.
+				Behind []string `json:"behind"`
+			}{behind})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("POST /api/model/rewrite", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			// Tasks are those to write again for, none for all of them.
+			Tasks []string `json:"tasks"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		for _, t := range in.Tasks {
+			if !slices.Contains(rewritable, t) {
+				http.Error(w, fmt.Sprintf("the local model keeps nothing written for a task called %q", t), http.StatusBadRequest)
+				return
+			}
+		}
+		h.Rewrite(in.Tasks...)
 		w.WriteHeader(http.StatusNoContent)
 	})
 
