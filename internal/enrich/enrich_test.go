@@ -202,7 +202,9 @@ func TestStepFollowsTheUsersSettings(t *testing.T) {
 	choose := func(m hub.ModelSettings) {
 		s := h.Settings()
 		s.Model = m
-		h.SetSettings(s)
+		if _, err := h.SetSettings(s); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	if got := said(); got != (hub.Summarizer{Model: "warm", URL: first.BaseURL}) {

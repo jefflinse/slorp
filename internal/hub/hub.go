@@ -1354,13 +1354,12 @@ func (s Settings) clone() Settings {
 // are on to SetIntegration and what is written again to Rewrite. It returns
 // the tasks for which what the model wrote is left behind its instructions,
 // which is none of them where the user has such writing always written
-// again.
-func (h *Hub) SetSettings(s Settings) []string {
-	behind, _ := h.UpdateSettings(func(now *Settings) error {
+// again, or an error wrapping ErrNotSaved when nothing is changed.
+func (h *Hub) SetSettings(s Settings) ([]string, error) {
+	return h.UpdateSettings(func(now *Settings) error {
 		*now = s
 		return nil
 	})
-	return behind
 }
 
 // UpdateSettings has change edit a copy of the user's preferences as they

@@ -467,7 +467,9 @@ func TestSettingsPersist(t *testing.T) {
 	if !h.Settings().AnswerPermissions {
 		t.Fatal("answering permissions from Slorp should start on")
 	}
-	h.SetSettings(Settings{AnswerPermissions: false})
+	if _, err := h.SetSettings(Settings{AnswerPermissions: false}); err != nil {
+		t.Fatal(err)
+	}
 	if New(k, st).Settings().AnswerPermissions {
 		t.Error("the setting did not survive a restart")
 	}
@@ -498,7 +500,9 @@ func TestIntegrationSettings(t *testing.T) {
 		t.Error("setting an integration to what it already was queued everything again")
 	}
 
-	h.SetSettings(Settings{AnswerPermissions: false})
+	if _, err := h.SetSettings(Settings{AnswerPermissions: false}); err != nil {
+		t.Fatal(err)
+	}
 	if got := h.Settings(); !got.Integrations["github"] || got.AnswerPermissions {
 		t.Errorf("changing another setting disturbed the integrations: %+v", got)
 	}
@@ -638,7 +642,9 @@ func TestAQuestionIsAnsweredByPickingItsOptions(t *testing.T) {
 	if h.Answer(command.ID, map[string][]string{"Which soup?": {"Tomato"}, "Which sides?": {"Pickle"}}) {
 		t.Error("a permission prompt was answered as if it were a question")
 	}
-	h.SetSettings(Settings{AnswerPermissions: false})
+	if _, err := h.SetSettings(Settings{AnswerPermissions: false}); err != nil {
+		t.Fatal(err)
+	}
 	if p := h.Ask(agent, "s2", Pending{Tool: "AskUserQuestion", Input: sandwich, Question: true}, true); p.Answerable {
 		t.Error("the setting to keep prompts in the terminal was ignored for a question")
 	}
@@ -660,7 +666,9 @@ func TestAskDecidesWhoMayAnswer(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h, _, _ := newHub(t)
-			h.SetSettings(Settings{AnswerPermissions: tt.setting})
+			if _, err := h.SetSettings(Settings{AnswerPermissions: tt.setting}); err != nil {
+				t.Fatal(err)
+			}
 			p := h.Ask(agent, "s1", Pending{Tool: "Bash", Summary: "ls", Input: "ls"}, tt.canAnswer)
 			s := session(t, h, "s1")
 			if p.Answerable != tt.want || s.Pending == nil || s.Pending.Answerable != tt.want {

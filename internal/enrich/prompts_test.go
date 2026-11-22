@@ -45,7 +45,9 @@ func TestEachTaskIsToldWhatTheUserWroteForIt(t *testing.T) {
 	tell := func(global string, tasks map[string]string) {
 		s := h.Settings()
 		s.Prompts = hub.Prompts{Global: global, Tasks: tasks}
-		h.SetSettings(s)
+		if _, err := h.SetSettings(s); err != nil {
+			t.Fatal(err)
+		}
 	}
 	llm := &fakeLLM{content: insightJSON, calls: []call{{"tracker_item", `{"n":59}`}}}
 	e := llm.enricher(t)
@@ -113,7 +115,9 @@ func TestACheckSendsNothingTheUserWrote(t *testing.T) {
 	h := hub.New(testdb.KB(t, st), st)
 	s := h.Settings()
 	s.Prompts.Global = "Write in British English."
-	h.SetSettings(s)
+	if _, err := h.SetSettings(s); err != nil {
+		t.Fatal(err)
+	}
 	llm := &fakeLLM{models: `{"data":[{"id":"warm","type":"llm","state":"loaded"}]}`}
 	e := llm.enricher(t)
 	e.Hub = h

@@ -11,18 +11,24 @@ import (
 
 // tell has the model told global ahead of every task, and tasks in place
 // of Slorp's own instructions for each, and returns the tasks left behind.
-func tell(h *Hub, global string, tasks map[string]string) []string {
+func tell(t *testing.T, h *Hub, global string, tasks map[string]string) []string {
+	t.Helper()
 	s := h.Settings()
 	s.Prompts.Global, s.Prompts.Tasks = global, tasks
-	return h.SetSettings(s)
+	behind, err := h.SetSettings(s)
+	must(t, err)
+	return behind
 }
 
 // rewriting sets whether what the model wrote is written again when its
 // instructions change.
-func rewriting(h *Hub, mode string) {
+func rewriting(t *testing.T, h *Hub, mode string) {
+	t.Helper()
 	s := h.Settings()
 	s.Prompts.Rewrite = mode
-	h.SetSettings(s)
+	if _, err := h.SetSettings(s); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestPromptsPersistAndAreHandedOutAsACopy(t *testing.T) {
@@ -30,12 +36,14 @@ func TestPromptsPersistAndAreHandedOutAsACopy(t *testing.T) {
 	if got := h.Settings(); got.Prompts.Global != "" || got.Prompts.Tasks == nil || len(got.Prompts.Tasks) != 0 || got.Prompts.Rewrite != RewriteAsk || got.Rewritten == nil {
 		t.Fatalf("a new hub's settings = %+v, want no prompts, as an empty set, and rewriting left to be asked", got)
 	}
-	h.SetSettings(Settings{})
+	if _, err := h.SetSettings(Settings{}); err != nil {
+		t.Fatal(err)
+	}
 	if got := h.Settings().Prompts.Rewrite; got != RewriteAsk {
 		t.Errorf("settings that do not say whether to rewrite = %q, want it left to be asked", got)
 	}
-	rewriting(h, RewriteNever)
-	tell(h, "Write in British English.", map[string]string{ActNote: "Say where the effort stands."})
+	rewriting(t, h, RewriteNever)
+	tell(t, h, "Write in British English.", map[string]string{ActNote: "Say where the effort stands."})
 	must(t, h.Rewrite(ActFile))
 
 	got := h.Settings()
@@ -45,7 +53,9 @@ func TestPromptsPersistAndAreHandedOutAsACopy(t *testing.T) {
 	if kept := h.Settings(); kept.Prompts.Tasks[ActNote] != "Say where the effort stands." || kept.Integrations["github"] || kept.Rewritten[ActFile] != 1 {
 		t.Errorf("changing what Settings returned changed what the hub holds: %+v", kept)
 	}
-	h.SetSettings(got)
+	if _, err := h.SetSettings(got); err != nil {
+		t.Fatal(err)
+	}
 	if kept := h.Settings().Rewritten[ActFile]; kept != 1 {
 		t.Errorf("settings counted %d rewrites of filings, want the count left to Rewrite", kept)
 	}
@@ -113,15 +123,15 @@ func TestChangedInstructionsLeaveWritingBehindUntilItIsRewritten(t *testing.T) {
 		for _, mode := range []string{RewriteAsk, RewriteNever} {
 			t.Run(tt.name+", with rewriting set to "+mode, func(t *testing.T) {
 				h, waiting := settled(t)
-				rewriting(h, mode)
-				behind := tell(h, tt.global, tt.tasks)
+				rewriting(t, h, mode)
+				behind := tell(t, h, tt.global, tt.tasks)
 				if got := strings.Join(behind, " "); got != tt.behind {
 					t.Errorf("left behind: %q, want %q", got, tt.behind)
 				}
 				if got := waiting(); got != nothing {
 					t.Errorf("after the change: %s; want what was written to stand until it is asked for again", got)
 				}
-				if again := tell(h, tt.global, tt.tasks); len(again) != 0 {
+				if again := tell(t, h, tt.global, tt.tasks); len(again) != 0 {
 					t.Errorf("saving the same again left %v behind", again)
 				}
 				if len(behind) == 0 {
@@ -138,15 +148,15 @@ func TestChangedInstructionsLeaveWritingBehindUntilItIsRewritten(t *testing.T) {
 		}
 		t.Run(tt.name+", with rewriting set to always", func(t *testing.T) {
 			h, waiting := settled(t)
-			rewriting(h, RewriteAlways)
-			if behind := tell(h, tt.global, tt.tasks); len(behind) != 0 {
+			rewriting(t, h, RewriteAlways)
+			if behind := tell(t, h, tt.global, tt.tasks); len(behind) != 0 {
 				t.Errorf("left behind: %v, want nothing, with it all written again", behind)
 			}
 			if got := waiting(); got != tt.want {
 				t.Errorf("after the change: %s; want %s", got, tt.want)
 			}
 			before := h.Settings().Rewritten
-			tell(h, tt.global, tt.tasks)
+			tell(t, h, tt.global, tt.tasks)
 			if after := h.Settings().Rewritten; fmt.Sprint(after) != fmt.Sprint(before) {
 				t.Errorf("saving the same again counted more rewrites: %v, was %v", after, before)
 			}
