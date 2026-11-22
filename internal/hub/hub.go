@@ -1339,7 +1339,11 @@ func (h *Hub) Done(requestID string) {
 func (h *Hub) Settings() Settings {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	s := h.settings
+	return h.settings.clone()
+}
+
+// clone returns s sharing nothing the hub changes in place.
+func (s Settings) clone() Settings {
 	s.Integrations, s.Prompts.Tasks, s.Rewritten = maps.Clone(s.Integrations), maps.Clone(s.Prompts.Tasks), maps.Clone(s.Rewritten)
 	return s
 }
@@ -1687,7 +1691,7 @@ func (h *Hub) State() State {
 		feeds[id] = f.FeedStatus
 	}
 	return State{Sessions: sessions, Items: append(items(sessions), h.fed()...), Efforts: h.efforts(sessions), Summarizer: h.summ,
-		Settings: h.settings, Knowledge: h.kb.Knowledge(), Lookups: append([]Lookup{}, h.lookups...), Actions: h.acted(recentActions), Feeds: feeds, PullRequests: h.pulls(), Limits: h.limited(), ProviderLimits: h.providerLimited(time.Now()), Journal: h.journal(), Archive: h.archives(), Plugins: maps.Clone(h.plugins), Release: h.release}
+		Settings: h.settings.clone(), Knowledge: h.kb.Knowledge(), Lookups: append([]Lookup{}, h.lookups...), Actions: h.acted(recentActions), Feeds: feeds, PullRequests: h.pulls(), Limits: h.limited(), ProviderLimits: h.providerLimited(time.Now()), Journal: h.journal(), Archive: h.archives(), Plugins: maps.Clone(h.plugins), Release: h.release}
 }
 
 func (h *Hub) efforts(sessions []Session) []Effort {
@@ -1740,16 +1744,17 @@ func (h *Hub) MergeEfforts(from, into string) error {
 		}
 	}
 	for day, w := range h.wrapups {
-		moved := false
+		if !slices.ContainsFunc(w.Efforts, func(e WrapupEffort) bool { return e.ID == from }) {
+			continue
+		}
+		w.Efforts = slices.Clone(w.Efforts)
 		for i := range w.Efforts {
 			if w.Efforts[i].ID == from {
-				w.Efforts[i].ID, moved = into, true
+				w.Efforts[i].ID = into
 			}
 		}
-		if moved {
-			h.wrapups[day] = w
-			h.warn(h.cache.Put("wrapup", day, w))
-		}
+		h.wrapups[day] = w
+		h.warn(h.cache.Put("wrapup", day, w))
 	}
 	delete(h.notes, from)
 	h.warn(h.cache.Delete("note", from))

@@ -55,7 +55,7 @@ func (h *Hub) journal() []JournalDay {
 }
 
 // Wrapup returns the journal's entry for a day, and false when the day has
-// never been asked for.
+// never been asked for. The hub never changes an entry it has returned.
 func (h *Hub) Wrapup(day string) (Wrapup, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
