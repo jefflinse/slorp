@@ -589,7 +589,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 	// edited reports a knowledge-base change, republishing state on success.
 	edited := func(w http.ResponseWriter, err error) {
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, err.Error(), editFailed(err))
 			return
 		}
 		h.Touch()
@@ -789,7 +789,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			id, err = k.AddProfile(p)
 		}
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, err.Error(), editFailed(err))
 			return
 		}
 		h.Touch()
@@ -816,7 +816,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		}
 		id, err := k.AddHandoff(in)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, err.Error(), editFailed(err))
 			return
 		}
 		h.Touch()
@@ -1566,6 +1566,15 @@ func localOnly(next http.Handler) http.Handler {
 // UTF-16 units of it, and a transcript gives that many runes.
 func replyCut(kept string) bool {
 	return len(utf16.Encode([]rune(kept))) >= claude.ReplyLimit
+}
+
+// editFailed is the status for a knowledge base edit that failed: the
+// server's fault when it could not be saved, and otherwise the request's.
+func editFailed(err error) int {
+	if errors.Is(err, kb.ErrNotSaved) {
+		return http.StatusInternalServerError
+	}
+	return http.StatusBadRequest
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {

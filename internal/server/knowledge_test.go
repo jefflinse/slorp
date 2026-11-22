@@ -1,0 +1,102 @@
+package server
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/jefflinse/slorp/internal/hub"
+	"github.com/jefflinse/slorp/internal/integrations"
+	"github.com/jefflinse/slorp/internal/kb"
+	"github.com/jefflinse/slorp/internal/store"
+	"github.com/jefflinse/slorp/internal/testdb"
+)
+
+func TestARejectedProfileEditLeavesTheProfileAsItWas(t *testing.T) {
+	f := newFixture(t)
+	code, body := f.do(http.MethodPost, "/api/profiles", `{"name":"Local","engine":"local","temperature":0.5}`, nil)
+	if code != http.StatusOK {
+		t.Fatalf("adding a profile = %d %s", code, body)
+	}
+	before := f.state().Knowledge.Profiles
+
+	if code := f.post("/api/profiles/"+before[0].ID, `{"temperature":7}`); code != http.StatusBadRequest {
+		t.Fatalf("a temperature of 7 = %d, want 400", code)
+	}
+	for name, profiles := range map[string][]kb.Profile{"kept": f.kb.Knowledge().Profiles, "reopened": testdb.KB(t, f.store).Knowledge().Profiles} {
+		if got := profiles[0].Temperature; got == nil || *got != 0.5 {
+			t.Errorf("%s temperature after a rejected edit = %v, want 0.5", name, deref(got))
+		}
+	}
+}
+
+func deref(f *float64) any {
+	if f == nil {
+		return nil
+	}
+	return *f
+}
+
+// unsaved keeps the knowledge base in a store, but fails every write while
+// fail is set.
+type unsaved struct {
+	*store.Store
+	fail bool
+}
+
+func (p *unsaved) Put(kind, id string, v any) error {
+	if p.fail {
+		return errors.New("disk full")
+	}
+	return p.Store.Put(kind, id, v)
+}
+
+func TestAKnowledgeEditThatCannotBeSavedIsTheServersFault(t *testing.T) {
+	st := testdb.Open(t)
+	p := &unsaved{Store: st}
+	k, err := kb.Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(hub.New(k, st), k, integrations.NewManager(func() map[string]bool { return nil }), &asked{}, nil, nil, nil, nil, nil, nil, nil, Page(nil, "")))
+	t.Cleanup(srv.Close)
+	post := func(path, body string) int {
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		res, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+
+	p.fail = true
+	for path, body := range map[string]string{
+		"/api/efforts":  `{"name":"Widgets"}`,
+		"/api/profiles": `{"name":"Local"}`,
+		"/api/handoffs": `{"name":"Pass","text":"{{response}}"}`,
+	} {
+		if code := post(path, body); code != http.StatusInternalServerError {
+			t.Errorf("POST %s that cannot be saved = %d, want 500", path, code)
+		}
+	}
+	for path, body := range map[string]string{
+		"/api/efforts":  `{"name":""}`,
+		"/api/profiles": `{"name":""}`,
+		"/api/handoffs": `{"name":"Pass"}`,
+	} {
+		if code := post(path, body); code != http.StatusBadRequest {
+			t.Errorf("POST %s that is invalid = %d, want 400", path, code)
+		}
+	}
+	if len(k.Efforts()) != 0 || len(k.Knowledge().Profiles) != 0 || len(k.Knowledge().Handoffs) != 0 {
+		t.Errorf("the knowledge base kept what could not be saved: %+v", k.Knowledge())
+	}
+}

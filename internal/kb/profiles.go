@@ -54,15 +54,21 @@ func (s *Store) AddProfile(p Profile) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p.ID = ""
-	p, err := s.checked(p)
+	err := s.update(func(f *file) error {
+		var err error
+		if p, err = f.checked(p); err != nil {
+			return err
+		}
+		f.Seq++
+		p.ID = "p" + strconv.Itoa(f.Seq)
+		f.Knowledge.Profiles = append(f.Knowledge.Profiles, p)
+		f.soleDefault(p)
+		return nil
+	})
 	if err != nil {
 		return "", err
 	}
-	s.f.Seq++
-	p.ID = "p" + strconv.Itoa(s.f.Seq)
-	s.f.Knowledge.Profiles = append(s.f.Knowledge.Profiles, p)
-	s.soleDefault(p)
-	return p.ID, s.save()
+	return p.ID, nil
 }
 
 // EditProfile changes the profile with that ID as edit says, and keeps what
@@ -70,38 +76,42 @@ func (s *Store) AddProfile(p Profile) (string, error) {
 func (s *Store) EditProfile(id string, edit func(*Profile) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	i := slices.IndexFunc(s.f.Knowledge.Profiles, func(o Profile) bool { return o.ID == id })
-	if i < 0 {
-		return errors.New("no such profile")
-	}
-	p := s.f.Knowledge.Profiles[i]
-	if err := edit(&p); err != nil {
-		return err
-	}
-	p.ID = id
-	p, err := s.checked(p)
-	if err != nil {
-		return err
-	}
-	s.f.Knowledge.Profiles[i] = p
-	s.soleDefault(p)
-	return s.save()
+	return s.update(func(f *file) error {
+		i := slices.IndexFunc(f.Knowledge.Profiles, func(o Profile) bool { return o.ID == id })
+		if i < 0 {
+			return errors.New("no such profile")
+		}
+		p := f.Knowledge.Profiles[i]
+		if err := edit(&p); err != nil {
+			return err
+		}
+		p.ID = id
+		p, err := f.checked(p)
+		if err != nil {
+			return err
+		}
+		f.Knowledge.Profiles[i] = p
+		f.soleDefault(p)
+		return nil
+	})
 }
 
 // RemoveProfile deletes a profile.
 func (s *Store) RemoveProfile(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	kept, found := without(s.f.Knowledge.Profiles, func(p Profile) bool { return p.ID == id })
-	if !found {
-		return errors.New("no such profile")
-	}
-	s.f.Knowledge.Profiles = kept
-	return s.save()
+	return s.update(func(f *file) error {
+		kept, found := without(f.Knowledge.Profiles, func(p Profile) bool { return p.ID == id })
+		if !found {
+			return errors.New("no such profile")
+		}
+		f.Knowledge.Profiles = kept
+		return nil
+	})
 }
 
 // checked returns p as it is kept, or why it cannot be.
-func (s *Store) checked(p Profile) (Profile, error) {
+func (f *file) checked(p Profile) (Profile, error) {
 	p.Name = strings.TrimSpace(p.Name)
 	p.Engine = cmp.Or(p.Engine, EngineClaude)
 	p.Model, p.EffortLevel = strings.TrimSpace(p.Model), strings.TrimSpace(p.EffortLevel)
@@ -109,15 +119,15 @@ func (s *Store) checked(p Profile) (Profile, error) {
 	switch {
 	case p.Name == "":
 		return p, errors.New("a profile needs a name")
-	case slices.ContainsFunc(s.f.Knowledge.Profiles, func(o Profile) bool { return o.ID != p.ID && strings.EqualFold(o.Name, p.Name) }):
+	case slices.ContainsFunc(f.Knowledge.Profiles, func(o Profile) bool { return o.ID != p.ID && strings.EqualFold(o.Name, p.Name) }):
 		return p, errors.New("a profile already has that name")
 	case p.Engine != EngineClaude && p.Engine != EngineOpenCode && p.Engine != EngineLocal:
 		return p, errors.New("a profile runs on claude, opencode or local")
 	case p.Dir != "" && !filepath.IsAbs(p.Dir):
 		return p, errors.New("a profile's directory must be an absolute path")
-	case p.Effort != "" && s.index(p.Effort) < 0:
+	case p.Effort != "" && f.index(p.Effort) < 0:
 		return p, errors.New("no such effort")
-	case p.Role != "" && s.role(p.Role) == nil:
+	case p.Role != "" && f.role(p.Role) == nil:
 		return p, errors.New("no such role")
 	case p.Temperature != nil && (*p.Temperature < 0 || *p.Temperature > 2):
 		return p, errors.New("a profile's temperature is from 0 to 2")
@@ -125,15 +135,19 @@ func (s *Store) checked(p Profile) (Profile, error) {
 	if p.Dir != "" {
 		p.Dir = filepath.Clean(p.Dir)
 	}
+	if p.Temperature != nil {
+		t := *p.Temperature
+		p.Temperature = &t
+	}
 	return p, nil
 }
 
 // soleDefault leaves p the only default profile when it is one.
-func (s *Store) soleDefault(p Profile) {
+func (f *file) soleDefault(p Profile) {
 	if !p.Default {
 		return
 	}
-	for i := range s.f.Knowledge.Profiles {
-		s.f.Knowledge.Profiles[i].Default = s.f.Knowledge.Profiles[i].ID == p.ID
+	for i := range f.Knowledge.Profiles {
+		f.Knowledge.Profiles[i].Default = f.Knowledge.Profiles[i].ID == p.ID
 	}
 }

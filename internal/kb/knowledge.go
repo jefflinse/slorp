@@ -93,13 +93,20 @@ func (s *Store) Knowledge() Knowledge {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	k := s.f.Knowledge
+	profiles := append([]Profile{}, k.Profiles...)
+	for i, p := range profiles {
+		if p.Temperature != nil {
+			t := *p.Temperature
+			profiles[i].Temperature = &t
+		}
+	}
 	return Knowledge{
 		Questions:  append([]Question{}, k.Questions...),
 		Context:    append([]Fact{}, k.Context...),
 		Routing:    append([]Fact{}, k.Routing...),
 		Roles:      append([]Role{}, k.Roles...),
 		Workspaces: append([]Workspace{}, k.Workspaces...),
-		Profiles:   append([]Profile{}, k.Profiles...),
+		Profiles:   profiles,
 		Handoffs:   append([]Handoff{}, k.Handoffs...),
 	}
 }
@@ -120,14 +127,16 @@ func validAttention(a string) bool {
 func (s *Store) SetRole(sessionID, roleID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if roleID != "" && s.role(roleID) == nil {
-		return errors.New("no such role")
-	}
-	if s.f.SessionRoles == nil {
-		s.f.SessionRoles = map[string]string{}
-	}
-	s.f.SessionRoles[sessionID] = roleID
-	return s.save()
+	return s.update(func(f *file) error {
+		if roleID != "" && f.role(roleID) == nil {
+			return errors.New("no such role")
+		}
+		if f.SessionRoles == nil {
+			f.SessionRoles = map[string]string{}
+		}
+		f.SessionRoles[sessionID] = roleID
+		return nil
+	})
 }
 
 // RoleOf reports the role the user gave a session, empty for none. ok is
@@ -136,7 +145,7 @@ func (s *Store) RoleOf(sessionID string) (role Role, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	id, found := s.f.SessionRoles[sessionID]
-	if r := s.role(id); r != nil {
+	if r := s.f.role(id); r != nil {
 		return *r, true
 	}
 	return Role{}, found
@@ -147,47 +156,51 @@ func (s *Store) RoleOf(sessionID string) (role Role, ok bool) {
 func (s *Store) Carry(from, to string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	moved := false
-	for _, said := range []map[string]string{s.f.Assignments, s.f.SessionRoles} {
-		v, ok := said[from]
-		if !ok {
-			continue
-		}
-		if _, has := said[to]; !has {
-			said[to] = v
-		}
-		delete(said, from)
-		moved = true
-	}
-	if !moved {
+	_, filed := s.f.Assignments[from]
+	_, given := s.f.SessionRoles[from]
+	if !filed && !given {
 		return nil
 	}
-	return s.save()
+	return s.update(func(f *file) error {
+		for _, said := range []map[string]string{f.Assignments, f.SessionRoles} {
+			v, ok := said[from]
+			if !ok {
+				continue
+			}
+			if _, has := said[to]; !has {
+				said[to] = v
+			}
+			delete(said, from)
+		}
+		return nil
+	})
 }
 
 // HasRole reports whether a role with that ID exists.
 func (s *Store) HasRole(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.role(id) != nil
+	return s.f.role(id) != nil
 }
 
 // SetRoleAttention changes which of a role's sessions may ask for the user.
 func (s *Store) SetRoleAttention(roleID, attention string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	r := s.role(roleID)
-	if r == nil || !validAttention(attention) {
-		return errors.New("needs an existing role and an attention of all, stopped or none")
-	}
-	r.Attention = attention
-	return s.save()
+	return s.update(func(f *file) error {
+		r := f.role(roleID)
+		if r == nil || !validAttention(attention) {
+			return errors.New("needs an existing role and an attention of all, stopped or none")
+		}
+		r.Attention = attention
+		return nil
+	})
 }
 
-func (s *Store) role(id string) *Role {
-	for i := range s.f.Knowledge.Roles {
-		if s.f.Knowledge.Roles[i].ID == id {
-			return &s.f.Knowledge.Roles[i]
+func (f *file) role(id string) *Role {
+	for i := range f.Knowledge.Roles {
+		if f.Knowledge.Roles[i].ID == id {
+			return &f.Knowledge.Roles[i]
 		}
 	}
 	return nil
@@ -204,72 +217,76 @@ func (s *Store) ContextRevision() int {
 func (s *Store) Add(section string, e Entry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	text, name := strings.TrimSpace(e.Text), strings.TrimSpace(e.Name)
-	if e.Effort != "" && s.index(e.Effort) < 0 {
-		return errors.New("no such effort")
-	}
-	s.f.Seq++
-	id := section[:1] + strconv.Itoa(s.f.Seq)
-	k := &s.f.Knowledge
-	switch {
-	case section == SectionQuestions && text != "":
-		k.Questions = append(k.Questions, Question{ID: id, Text: text, Effort: e.Effort, Origin: strings.TrimSpace(e.Origin), At: time.Now()})
-	case section == SectionContext && text != "":
-		k.Context = append(k.Context, Fact{ID: id, Text: text})
-		s.f.ContextRevision++
-	case section == SectionRouting && text != "":
-		k.Routing = append(k.Routing, Fact{ID: id, Text: text})
-		s.f.Revision++
-	case section == SectionRoles && name != "" && (e.Type == "" || validAttention(e.Type)):
-		k.Roles = append(k.Roles, Role{ID: id, Name: name, About: text, Attention: cmp.Or(e.Type, AttentionAll)})
-		s.f.RoleRevision++
-	case section == SectionWorkspaces && name != "" && filepath.IsAbs(e.Dir):
-		dir := filepath.Clean(e.Dir)
-		if slices.ContainsFunc(k.Workspaces, func(w Workspace) bool { return w.Dir == dir }) {
-			return errors.New("a workspace already has that directory")
+	return s.update(func(f *file) error {
+		text, name := strings.TrimSpace(e.Text), strings.TrimSpace(e.Name)
+		if e.Effort != "" && f.index(e.Effort) < 0 {
+			return errors.New("no such effort")
 		}
-		k.Workspaces = append(k.Workspaces, Workspace{ID: id, Name: name, Dir: dir})
-	default:
-		return errors.New("that entry is missing something, or the section does not exist")
-	}
-	return s.save()
+		f.Seq++
+		id := section[:1] + strconv.Itoa(f.Seq)
+		k := &f.Knowledge
+		switch {
+		case section == SectionQuestions && text != "":
+			k.Questions = append(k.Questions, Question{ID: id, Text: text, Effort: e.Effort, Origin: strings.TrimSpace(e.Origin), At: time.Now()})
+		case section == SectionContext && text != "":
+			k.Context = append(k.Context, Fact{ID: id, Text: text})
+			f.ContextRevision++
+		case section == SectionRouting && text != "":
+			k.Routing = append(k.Routing, Fact{ID: id, Text: text})
+			f.Revision++
+		case section == SectionRoles && name != "" && (e.Type == "" || validAttention(e.Type)):
+			k.Roles = append(k.Roles, Role{ID: id, Name: name, About: text, Attention: cmp.Or(e.Type, AttentionAll)})
+			f.RoleRevision++
+		case section == SectionWorkspaces && name != "" && filepath.IsAbs(e.Dir):
+			dir := filepath.Clean(e.Dir)
+			if slices.ContainsFunc(k.Workspaces, func(w Workspace) bool { return w.Dir == dir }) {
+				return errors.New("a workspace already has that directory")
+			}
+			k.Workspaces = append(k.Workspaces, Workspace{ID: id, Name: name, Dir: dir})
+		default:
+			return errors.New("that entry is missing something, or the section does not exist")
+		}
+		return nil
+	})
 }
 
 // Remove deletes one entry from a section.
 func (s *Store) Remove(section, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k := &s.f.Knowledge
-	found := false
-	switch section {
-	case SectionQuestions:
-		k.Questions, found = without(k.Questions, func(q Question) bool { return q.ID == id })
-	case SectionContext:
-		k.Context, found = without(k.Context, func(f Fact) bool { return f.ID == id })
-		s.f.ContextRevision++
-	case SectionRouting:
-		k.Routing, found = without(k.Routing, func(f Fact) bool { return f.ID == id })
-		s.f.Revision++
-	case SectionRoles:
-		k.Roles, found = without(k.Roles, func(r Role) bool { return r.ID == id })
-		for i := range k.Profiles {
-			if k.Profiles[i].Role == id {
-				k.Profiles[i].Role = ""
+	return s.update(func(f *file) error {
+		k := &f.Knowledge
+		found := false
+		switch section {
+		case SectionQuestions:
+			k.Questions, found = without(k.Questions, func(q Question) bool { return q.ID == id })
+		case SectionContext:
+			k.Context, found = without(k.Context, func(f Fact) bool { return f.ID == id })
+			f.ContextRevision++
+		case SectionRouting:
+			k.Routing, found = without(k.Routing, func(f Fact) bool { return f.ID == id })
+			f.Revision++
+		case SectionRoles:
+			k.Roles, found = without(k.Roles, func(r Role) bool { return r.ID == id })
+			for i := range k.Profiles {
+				if k.Profiles[i].Role == id {
+					k.Profiles[i].Role = ""
+				}
 			}
-		}
-		for session, role := range s.f.SessionRoles {
-			if role == id {
-				delete(s.f.SessionRoles, session)
+			for session, role := range f.SessionRoles {
+				if role == id {
+					delete(f.SessionRoles, session)
+				}
 			}
+			f.RoleRevision++
+		case SectionWorkspaces:
+			k.Workspaces, found = without(k.Workspaces, func(w Workspace) bool { return w.ID == id })
 		}
-		s.f.RoleRevision++
-	case SectionWorkspaces:
-		k.Workspaces, found = without(k.Workspaces, func(w Workspace) bool { return w.ID == id })
-	}
-	if !found {
-		return errors.New("no such entry")
-	}
-	return s.save()
+		if !found {
+			return errors.New("no such entry")
+		}
+		return nil
+	})
 }
 
 // forget drops every reference to a deleted effort.
