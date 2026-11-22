@@ -183,8 +183,7 @@ func (s *Store) Edit(id string, c Changes) error {
 }
 
 // Merge moves everything filed under one effort to another and removes the
-// first: what the user filed, its directories, its open questions and what
-// it watches.
+// first: what the user filed, its directories and its open questions.
 func (s *Store) Merge(from, into string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

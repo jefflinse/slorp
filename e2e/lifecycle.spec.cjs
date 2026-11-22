@@ -27,7 +27,7 @@ async function world(t, hash = 'sessions') {
   const data = { sessions: [session('owned'), session('terminal', { kind: 'interactive', canStop: false, job: 'not-ownership' })],
     efforts: [{ id: 'project', name: 'Project', about: '', dirs: ['/work/project'] }], items: [],
     archive: [{ ...session('archived'), endedAt: at }], summarizer: { model: 'fixture' },
-    knowledge: { watch: [], questions: [], context: [], routing: [], roles: [{ id: 'reviewer', name: 'Reviewer', attention: 'all' }] },
+    knowledge: { questions: [], context: [], routing: [], roles: [{ id: 'reviewer', name: 'Reviewer', attention: 'all' }] },
     capabilities: { claude: { history: true, start: true, resume: true, resumeCommand: true, launchOptions: false },
       opencode: { history: true, start: true, resume: true, resumeCommand: true, launchOptions: true } } }
   const calls = [], events = new Set()

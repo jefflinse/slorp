@@ -22,7 +22,7 @@ async function world(t, hash, extra = {}, replies = {}) {
   const posts = [], reads = []
   /* Profiles are kept as the service keeps them, so that a change made in Settings is there to be read back. */
   const profiled = (method, id, sent) => {
-    const list = (data.knowledge ||= { watch: [], questions: [], context: [], routing: [], roles: [], workspaces: [] }).profiles ||= []
+    const list = (data.knowledge ||= { questions: [], context: [], routing: [], roles: [], workspaces: [] }).profiles ||= []
     const at = list.findIndex(p => p.id === id), kept = { ...sent, id: id || `p${list.length + 1}` }
     if (method === 'DELETE') { list.splice(at, 1); return {} }
     if (kept.default) list.forEach(p => { p.default = false })
@@ -192,7 +192,7 @@ test('a key opens the New Session dialog from anywhere, and only Escape or Cance
 
 /* What a profile in the fixture leaves unsaid. */
 const profile = (id, name, sets = {}) => ({ id, name, default: false, engine: 'claude', dir: '', effort: '', role: '', terminal: false, model: '', effortLevel: '', thinking: true, temperature: null, ...sets })
-const kept = profiles => ({ knowledge: { watch: [], questions: [], context: [], routing: [], roles: [], workspaces: [], profiles } })
+const kept = profiles => ({ knowledge: { questions: [], context: [], routing: [], roles: [], workspaces: [], profiles } })
 
 test('a profile is made and edited in Settings, with only one of them the default', async t => {
   const page = await world(t, 'settings')
@@ -584,7 +584,7 @@ test('a new session is opened in a terminal once it is running, when the dialog 
   assert.deepEqual(page.posts.filter(([url]) => url.endsWith('/terminal')), [['/api/sessions/bg/terminal', {}]])
 })
 
-const spaces = { knowledge: { watch: [], questions: [], context: [], routing: [], roles: [], workspaces: [{ id: 'w1', name: 'Pairing', dir: '/work/pair' }, { id: 'w2', name: 'Elsewhere', dir: '/work/elsewhere' }] } }
+const spaces = { knowledge: { questions: [], context: [], routing: [], roles: [], workspaces: [{ id: 'w1', name: 'Pairing', dir: '/work/pair' }, { id: 'w2', name: 'Elsewhere', dir: '/work/elsewhere' }] } }
 
 test('workspaces are kept under Knowledge, each saying where it files and leading to a session started there', async t => {
   const page = await world(t, 'knowledge', spaces)

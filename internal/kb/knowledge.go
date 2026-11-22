@@ -10,16 +10,6 @@ import (
 	"time"
 )
 
-// Watch is a Slack person, channel or DM worth checking for an effort.
-type Watch struct {
-	ID string `json:"id"`
-	// Type is "person", "channel" or "dm".
-	Type    string   `json:"type"`
-	Name    string   `json:"name"`
-	Why     string   `json:"why"`
-	Efforts []string `json:"efforts"`
-}
-
 // Question is something the user has not decided yet.
 type Question struct {
 	ID     string    `json:"id"`
@@ -64,7 +54,6 @@ const (
 
 // Knowledge is everything in the knowledge base besides the efforts.
 type Knowledge struct {
-	Watch     []Watch    `json:"watch"`
 	Questions []Question `json:"questions"`
 	// Context is read by the model before it describes any session.
 	Context []Fact `json:"context"`
@@ -79,7 +68,6 @@ type Knowledge struct {
 
 // Sections of the knowledge base, as Add and Remove name them.
 const (
-	SectionWatch      = "watch"
 	SectionQuestions  = "questions"
 	SectionContext    = "context"
 	SectionRouting    = "routing"
@@ -93,7 +81,6 @@ const (
 type Entry struct {
 	Type   string `json:"type"`
 	Name   string `json:"name"`
-	Why    string `json:"why"`
 	Effort string `json:"effort"`
 	Text   string `json:"text"`
 	Origin string `json:"origin"`
@@ -105,7 +92,6 @@ func (s *Store) Knowledge() Knowledge {
 	defer s.mu.Unlock()
 	k := s.f.Knowledge
 	return Knowledge{
-		Watch:      append([]Watch{}, k.Watch...),
 		Questions:  append([]Question{}, k.Questions...),
 		Context:    append([]Fact{}, k.Context...),
 		Routing:    append([]Fact{}, k.Routing...),
@@ -223,12 +209,6 @@ func (s *Store) Add(section string, e Entry) error {
 	id := section[:1] + strconv.Itoa(s.f.Seq)
 	k := &s.f.Knowledge
 	switch {
-	case section == SectionWatch && name != "" && (e.Type == "person" || e.Type == "channel" || e.Type == "dm"):
-		w := Watch{ID: id, Type: e.Type, Name: name, Why: strings.TrimSpace(e.Why), Efforts: []string{}}
-		if e.Effort != "" {
-			w.Efforts = []string{e.Effort}
-		}
-		k.Watch = append(k.Watch, w)
 	case section == SectionQuestions && text != "":
 		k.Questions = append(k.Questions, Question{ID: id, Text: text, Effort: e.Effort, Origin: strings.TrimSpace(e.Origin), At: time.Now()})
 	case section == SectionContext && text != "":
@@ -259,8 +239,6 @@ func (s *Store) Remove(section, id string) error {
 	k := &s.f.Knowledge
 	found := false
 	switch section {
-	case SectionWatch:
-		k.Watch, found = without(k.Watch, func(w Watch) bool { return w.ID == id })
 	case SectionQuestions:
 		k.Questions, found = without(k.Questions, func(q Question) bool { return q.ID == id })
 	case SectionContext:
@@ -298,9 +276,6 @@ func (k *Knowledge) forget(effortID string) {
 			k.Questions[i].Effort = ""
 		}
 	}
-	for i := range k.Watch {
-		k.Watch[i].Efforts, _ = without(k.Watch[i].Efforts, func(id string) bool { return id == effortID })
-	}
 	for i := range k.Profiles {
 		if k.Profiles[i].Effort == effortID {
 			k.Profiles[i].Effort = ""
@@ -313,14 +288,6 @@ func (k *Knowledge) move(from, into string) {
 	for i := range k.Questions {
 		if k.Questions[i].Effort == from {
 			k.Questions[i].Effort = into
-		}
-	}
-	for i := range k.Watch {
-		if kept, found := without(k.Watch[i].Efforts, func(id string) bool { return id == from }); found {
-			if !slices.Contains(kept, into) {
-				kept = append(kept, into)
-			}
-			k.Watch[i].Efforts = kept
 		}
 	}
 	for i := range k.Profiles {

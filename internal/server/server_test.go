@@ -532,7 +532,7 @@ func TestRefusesRequestsAWebPageElsewhereCouldCause(t *testing.T) {
 func TestStateIsShapedForTheUI(t *testing.T) {
 	f := newFixture(t)
 	_, body := f.do("GET", "/api/sessions", "", nil)
-	for _, field := range []string{`"sessions":[]`, `"items":[]`, `"efforts":[]`, `"watch":[]`, `"questions":[]`, `"context":[]`, `"routing":[]`, `"answerPermissions":true`, `"lookups":[]`, `"integrations":[{`, `"feeds":{}`, `"watches":[]`, `"plugins":{}`} {
+	for _, field := range []string{`"sessions":[]`, `"items":[]`, `"efforts":[]`, `"questions":[]`, `"context":[]`, `"routing":[]`, `"answerPermissions":true`, `"lookups":[]`, `"integrations":[{`, `"feeds":{}`, `"watches":[]`, `"plugins":{}`} {
 		if !strings.Contains(body, field) {
 			t.Errorf("empty state lacks %s, which the page reads without checking: %s", field, body)
 		}

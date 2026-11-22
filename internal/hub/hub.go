@@ -1604,8 +1604,8 @@ func (h *Hub) efforts(sessions []Session) []Effort {
 }
 
 // MergeEfforts moves everything filed under one effort to another and
-// removes the first: its filings, directories, questions and what it
-// watches, its closed sessions, and its part of each day of the journal.
+// removes the first: its filings, directories and questions, its closed
+// sessions, and its part of each day of the journal.
 // What the model wrote of where it stood is dropped.
 func (h *Hub) MergeEfforts(from, into string) error {
 	if err := h.kb.Merge(from, into); err != nil {

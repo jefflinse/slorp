@@ -26,7 +26,7 @@ const log = () => [
 async function world(t, all = log()) {
   const ready = { installed: true, enabled: true }
   const data = { sessions: [session('open', 'Retry the upload')], items: [], efforts: [{ id: 'widgets', name: 'Widgets', about: '', dirs: ['/w/widgets'] }],
-    knowledge: { watch: [], questions: [], context: [], routing: [], roles: [], workspaces: [{ id: 'w1', name: 'Widgets checkout', dir: '/w/widgets' }], profiles: [] },
+    knowledge: { questions: [], context: [], routing: [], roles: [], workspaces: [{ id: 'w1', name: 'Widgets checkout', dir: '/w/widgets' }], profiles: [] },
     journal: [{ day: '2026-11-20', state: 'ready', at: ago(4), headline: 'The upload retry landed.' }],
     plugins: { claude: ready, opencode: ready }, summarizer: { model: 'lab/fixture-model' }, capabilities: {}, actions: all.slice(0, 5) }
   const reads = []

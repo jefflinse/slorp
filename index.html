@@ -962,13 +962,6 @@ const POOL = [
 ];
 
 const KB_SEED = {
-  watch: [
-    { id: 'w1', type: 'person', name: 'Priya Raman', why: 'Leads the team that consumes the fork. Asks about release timing.', efforts: ['fork'], cadence: 'on every message', seen: 'Asked again for a date on the stream iterator.', seenAge: 38 },
-    { id: 'w2', type: 'channel', name: '#platform-eng', why: 'Where dependency and fork policy gets argued out.', efforts: ['fork'], cadence: 'twice a day', seen: 'A thread about pinning the fork for the quarter is still going.', seenAge: 170 },
-    { id: 'w3', type: 'dm', name: 'Marcus Oyelaran', why: 'Owns the outbox service. Decisions there change what the fork needs.', efforts: ['fork'], cadence: 'on every message', seen: 'Nothing new since Friday.', seenAge: 4200 },
-    { id: 'w4', type: 'channel', name: '#incidents', why: 'Only matters if the event store is named.', efforts: ['fork'], cadence: 'hourly', seen: 'Quiet. No mention of the event store this week.', seenAge: 55 },
-    { id: 'w5', type: 'channel', name: '#es-go (Gophers Slack)', why: 'Occasional Estoria questions from strangers.', efforts: ['snap', 'docs'], cadence: 'daily', seen: 'Someone asked whether snapshots are supported yet.', seenAge: 1300 },
-  ],
   questions: [
     { id: 'q1', text: 'Is keeping the newest three snapshots per stream the right default, or should retention be opt-in?', effort: 'snap', age: 12, origin: 'raised by a Claude session' },
     { id: 'q2', text: 'Do I want a bump window for the fork instead of ad hoc upgrades?', effort: 'fork', age: 170, origin: 'from the #platform-eng thread' },
@@ -988,7 +981,6 @@ const KB_SEED = {
   ],
 };
 const KB_SECTIONS = {
-  watch: { name: 'Slack watchlist', lede: 'People, channels and DMs worth checking now and then. The reason you give is what the model uses to decide whether a message is worth surfacing.' },
   questions: { name: 'Open questions', lede: 'Things you have not decided yet. They resurface on Home when something starts depending on the answer.' },
   context: { name: 'Standing context', lede: 'Facts the summarizer should always know. Plain sentences; it reads them before every pass.' },
   routing: { name: 'Routing hints', lede: 'How things get filed under efforts. Written in plain language, and added to whenever you correct a guess.' },
@@ -1003,7 +995,7 @@ const viewOn = v => VIEWS.includes(v) && (v !== 'attention' || state.legacyAtten
 /* The views the top bar names, in its order; Settings is reached by its own button, and what the local model has done from the model's name. Pull requests are named only while GitHub is turned on to list them. */
 const nav = () => VIEWS.filter(v => viewOn(v) && v !== 'settings' && v !== 'log' && !(v === 'pulls' && pullsOff()));
 const VIEW_NAMES = { pulls: 'PRs' };
-const fresh = () => ({ view: 'home', sel: null, effortSel: null, effortOrder: null, hideEmpty: true, kbSel: 'watch', setSel: 'general', logKind: 'all', profileSel: null, groupBy: 'effort', srcFilter: 'all', legacyAttention: false, pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', effortTab: 'sessions', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto', look: 'slorp',
+const fresh = () => ({ view: 'home', sel: null, effortSel: null, effortOrder: null, hideEmpty: true, kbSel: 'questions', setSel: 'general', logKind: 'all', profileSel: null, groupBy: 'effort', srcFilter: 'all', legacyAttention: false, pullFilter: 'all', notify: false, picks: {}, detailTab: 'source', effortTab: 'sessions', sourceRaw: false, sideShut: false, fluent: true, theme: 'auto', look: 'slorp',
   handled: {}, moved: {}, sessMoved: {}, extra: [], arrived: {}, collapsed: {}, left: {}, showHandled: false, variant: {}, rawOpen: {},
   actSel: null, pullSel: null, journalSel: null, pullTab: 'talk', expanded: {}, kb: structuredClone(KB_SEED), seq: 100 });
 let state = fresh();
@@ -1396,7 +1388,6 @@ function effortDetail(e) {
   const needs = activeMockItems().filter(i => effortOf(i) === e.id).sort(byUrgency);
   const sess = SESSIONS.filter(s => sessEffort(s) === e.id);
   const qs = state.kb.questions.filter(q => q.effort === e.id);
-  const watch = state.kb.watch.filter(w => w.efforts.includes(e.id));
   return `<div class="epage"><div>
     <div class="crumb"><span class="mono">${esc(e.raw)}</span></div>
     <div class="titled"><h1>${effortMark(e, 'l')}${esc(e.name)}</h1></div>
@@ -1409,8 +1400,6 @@ function effortDetail(e) {
       effortDays(e, pastOf(e).days),
     ])}
   </div><aside>
-    <div class="sec"><div class="label"><span>Watching</span><button data-act="kbGo" data-s="watch">Manage ›</button></div>
-      ${watch.length ? watch.map(w => `<div class="srow"><div class="body"><b>${esc(w.name)}</b><div class="sub">${esc(w.seen)}</div></div><span class="side">${ago(w.seenAge)}</span></div>`).join('') : '<div class="none">No people or channels tied to this effort.</div>'}</div>
     ${e.lately.length ? `<div class="sec"><div class="label"><span>${spark}Lately</span></div><div class="time">${e.lately.map(([a, x]) => `<span class="a">${ago(a)}</span><span class="what">${esc(x)}</span>`).join('')}</div></div>` : ''}
   </aside></div>`;
 }
@@ -1922,7 +1911,7 @@ function effortDetailLive(e) {
   const stands = !real ? `Nothing here is filed under an effort. Move a session to an effort and Slorp can remember its directory.${modelless() ? ` ${NO_MODEL}, so sessions are filed only by an effort's directories or by you.` : ''}`
     : !sess.length ? 'No open sessions are filed here right now.'
     : e.stands || (modelless() ? `${NO_MODEL} to write this.` : 'Not written yet.');
-  const qs = knowledge.questions.filter(q => q.effort === e.id), watch = knowledge.watch.filter(w => w.efforts.includes(e.id));
+  const qs = knowledge.questions.filter(q => q.effort === e.id);
   if (real) fetchPast(e.id);
   const past = real ? pasts[e.id] : null;
   const others = openEfforts().filter(x => x.id !== e.id).map(x => [x.id, x.name]);
@@ -1960,8 +1949,6 @@ function effortDetailLive(e) {
     ])}
   </div>${real ? `<aside>
     ${effortUsage(sess, past)}
-    ${watch.length ? `<div class="sec"><div class="label"><span>Watching</span><button data-act="kbGo" data-s="watch">Manage ›</button></div>
-      ${watch.map(w => `<div class="srow"><div class="body"><b>${esc(w.name)}</b><div class="sub">${esc(w.why)}</div></div></div>`).join('')}</div>` : ''}
     <div class="sec"><div class="label"><span>Directories filed here automatically</span></div>
       ${e.dirs.length ? e.dirs.map(d => `<div class="srow"><div class="body mono">${esc(tilde(d))}</div><button class="x" data-act="dirRemove" data-id="${e.id}" data-dir="${esc(d)}" title="Stop filing sessions in this directory here" aria-label="Stop filing ${esc(tilde(d))} here">×</button></div>`).join('')
         : '<div class="none">None yet. Move a session here and choose to remember its directory.</div>'}</div>
@@ -1974,9 +1961,9 @@ function mergeModal() {
   const e = liveEfforts.find(x => x.id === modalId), into = liveEfforts.find(x => x.id === modalInto);
   if (!e || !into) { modal = null; return ''; }
   const open = live.filter(s => s.effort === e.id).length, closed = pasts[e.id]?.closedCount || 0, days = pasts[e.id]?.days.length || 0;
-  const qs = knowledge.questions.filter(q => q.effort === e.id).length, watch = knowledge.watch.filter(w => w.efforts.includes(e.id)).length;
+  const qs = knowledge.questions.filter(q => q.effort === e.id).length;
   const moves = [open && plural(open, 'open session'), closed && plural(closed, 'closed session'), e.dirs.length && plural(e.dirs.length, 'directory', 'directories'),
-    qs && plural(qs, 'open question'), watch && plural(watch, 'thing', 'things') + ' it watches', days && `its part of ${plural(days, 'day')} of the journal`].filter(Boolean);
+    qs && plural(qs, 'open question'), days && `its part of ${plural(days, 'day')} of the journal`].filter(Boolean);
   return `<div class="veil" data-act="modalClose"><div class="modal" data-act="noop" role="alertdialog" aria-label="Merge this effort into another">
     <h2>Merge ${esc(e.name)} into ${esc(into.name)}?</h2>
     <ul><li>${moves.length ? `${cap(listOf(moves))} ${moves.length === 1 && /^one /.test(moves[0]) ? 'moves' : 'move'} to ${esc(into.name)}, with any repository you filed here.` : `Nothing is filed under ${esc(e.name)} yet, so nothing moves.`}</li>
@@ -1993,13 +1980,12 @@ function deleteModal() {
   const e = liveEfforts.find(x => x.id === modalId);
   if (!e) { modal = null; return ''; }
   const open = live.filter(s => s.effort === e.id).length, closed = pasts[e.id]?.closedCount || 0;
-  const qs = knowledge.questions.filter(q => q.effort === e.id).length, watch = knowledge.watch.filter(w => w.efforts.includes(e.id)).length;
+  const qs = knowledge.questions.filter(q => q.effort === e.id).length;
   const sessions = [open && plural(open, 'open session'), closed && plural(closed, 'closed session')].filter(Boolean);
   const goes = [
     sessions.length && `${cap(listOf(sessions))} filed here ${open + closed === 1 ? 'is' : 'are'} left unsorted.`,
     e.dirs.length && `${e.dirs.length === 1 ? 'Its directory stops' : `Its ${num(e.dirs.length)} directories stop`} filing sessions.`,
     qs && `${cap(plural(qs, 'open question'))} ${qs === 1 ? 'is' : 'are'} kept, under no effort.`,
-    watch && `${cap(plural(watch, 'thing'))} it watches ${watch === 1 ? 'loses its' : 'lose their'} tie to it.`,
     'Any repository you filed here is unsorted again, and what the model wrote of where it stands is dropped. The journal keeps what it says of it.',
   ].filter(Boolean);
   return `<div class="veil" data-act="modalClose"><div class="modal" data-act="noop" role="alertdialog" aria-label="Delete this effort">
@@ -2318,7 +2304,7 @@ let capabilities = {};
 let platform = '', terminal = { apps: [], default: '' };
 const onMac = () => platform ? platform === 'darwin' : /Mac/.test(navigator.platform);
 const historyReading = new Set();
-let knowledge = { watch: [], questions: [], context: [], routing: [], roles: [], workspaces: [], profiles: [] }, integrations = [], lookups = [], feeds = {}, pulls = [], limits = [], archive = [], plugins = {}, archiveDocs = {};
+let knowledge = { questions: [], context: [], routing: [], roles: [], workspaces: [], profiles: [] }, integrations = [], lookups = [], feeds = {}, pulls = [], limits = [], archive = [], plugins = {}, archiveDocs = {};
 let providerLimits = [];
 /* Fetches a closed session's timeline, once per time it closes. */
 const archiveAsked = {};
@@ -3580,10 +3566,8 @@ function viewJournal() {
 /* ───────────────────────── Knowledge base ───────────────────────── */
 
 const effortOptions = () => (live ? '<option value="">No effort</option>' : '') + (live ? openEfforts() : EFFORTS).map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join('');
-const GLYPH = { person: '@', channel: '#', dm: '✉' };
 
 const KB_LIVE_LEDE = {
-  watch: 'People, channels and DMs worth checking for each effort, and why. This list is saved, but nothing reads Slack yet, so it does not surface anything on its own.',
   questions: 'Things you have not decided yet. They show under their effort, and the model reads them when it writes that effort\'s status.',
   context: 'Facts the model should always know. It reads them before describing any session, so changing one re-describes everything.',
   routing: 'Plain-language notes on how to file things, read by the model when it guesses an effort. Directories that file automatically are listed under each effort.',
@@ -3694,13 +3678,6 @@ function kbBody(sec) {
   if (sec === 'workspaces') return workspacesBody();
   const list = kbData()[sec];
   const rm = id => `<button class="x" data-act="kbRemove" data-sec="${sec}" data-id="${id}" title="Remove" aria-label="Remove">×</button>`;
-  if (sec === 'watch') return list.map(w => `<div class="card"><span class="glyph">${GLYPH[w.type]}</span>
-      <div class="body"><div class="nm">${esc(w.name)}</div><div class="why">${esc(w.why)}</div>
-      ${w.seen ? `<div class="seen">${spark}${esc(w.seen)} <span class="dim" style="color:var(--ink3)">${ago(w.seenAge)}</span></div>` : ''}
-      <div class="meta">${w.cadence ? `<span>checked ${esc(w.cadence)}</span>` : ''}${w.efforts.map(id => `<button class="link" data-act="effort" data-id="${id}">${esc(effortById(id).name)}</button>`).join('')}</div></div>${rm(w.id)}</div>`).join('')
-    + `<form class="add" data-form="watch"><select name="type" data-keep="kb-watch-type" aria-label="Type"><option value="person">Person</option><option value="channel">Channel</option><option value="dm">DM</option></select>
-      <input name="name" data-keep="kb-watch-name" placeholder="Name or #channel" required><input name="why" data-keep="kb-watch-why" placeholder="Why it's worth watching" required>
-      <select name="effort" data-keep="kb-watch-effort" aria-label="Effort">${effortOptions()}</select><button class="btn go">Add</button></form>`;
   if (sec === 'questions') return list.map(q => `<div class="card"><input type="checkbox" data-change="kbResolve" data-id="${q.id}" aria-label="Mark resolved">
       <div class="body"><div class="q">${esc(q.text)}</div>
       <div class="meta">${q.effort ? `<button class="link" data-act="effort" data-id="${q.effort}">${esc(effortById(q.effort).name)}</button>` : '<span>no effort</span>'}<span>${ago(q.at ? minsSince(q.at) : q.age)}</span><span>${esc(q.origin)}</span></div></div>${rm(q.id)}</div>`).join('')
@@ -3712,7 +3689,7 @@ function kbBody(sec) {
 
 function viewKnowledge() {
   const nav = Object.entries(kbSections()).map(([k, s]) => `<button class="${state.kbSel === k ? 'on' : ''}" data-act="kbSel" data-s="${k}">${s.name}<span>${kbCount(k)}</span></button>`).join('');
-  if (!kbSections()[state.kbSel]) state.kbSel = 'watch';
+  if (!kbSections()[state.kbSel]) state.kbSel = 'questions';
   const s = kbSections()[state.kbSel];
   return `<div class="split narrow">
     <section class="pane list kbnav"><div class="label">Knowledge base</div>${nav}</section>
@@ -4700,8 +4677,7 @@ document.addEventListener('submit', e => {
   if (sec === 'workspaces') { addWorkspace(f.name.trim(), f.dir, clear); return; }
   if (sec === 'profiles') { addProfile({ name: f.name.trim() }, clear); return; }
   if (live) { api('POST', `/api/kb/${sec}`, { ...f, origin: 'you wrote this down' }); clear(); return; }
-  if (sec === 'watch') state.kb.watch.push({ id, type: f.type, name: f.name, why: f.why, efforts: [f.effort], cadence: 'daily', seen: '', seenAge: 0 });
-  else if (sec === 'questions') state.kb.questions.unshift({ id, text: f.text, effort: f.effort, age: 0, origin: 'you wrote this down' });
+  if (sec === 'questions') state.kb.questions.unshift({ id, text: f.text, effort: f.effort, age: 0, origin: 'you wrote this down' });
   else state.kb[sec].push({ id, text: f.text });
   save(); render();
 });

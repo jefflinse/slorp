@@ -296,7 +296,6 @@ func TestMergeMovesEverythingAcross(t *testing.T) {
 	must(t, k.Assign("s2", c))
 	must(t, k.AssignRepo("Org/Repo", a))
 	must(t, k.Add(kb.SectionQuestions, kb.Entry{Text: "about a?", Effort: a}))
-	must(t, k.Add(kb.SectionWatch, kb.Entry{Type: "channel", Name: "#a", Effort: a}))
 	revision := k.Revision()
 
 	must(t, k.Merge(a, b))
@@ -321,8 +320,8 @@ func TestMergeMovesEverythingAcross(t *testing.T) {
 			t.Error("merging two efforts moved what was filed under a third")
 		}
 		know := k.Knowledge()
-		if know.Questions[0].Effort != b || len(know.Watch[0].Efforts) != 1 || know.Watch[0].Efforts[0] != b {
-			t.Errorf("questions and watch entries were not moved: %+v, %+v", know.Questions, know.Watch)
+		if know.Questions[0].Effort != b {
+			t.Errorf("questions were not moved: %+v", know.Questions)
 		}
 	}
 	check(k)
@@ -342,7 +341,6 @@ func TestDeleteForgetsTheEffortEverywhere(t *testing.T) {
 	must(t, k.Assign("s1", a))
 	must(t, k.Assign("s2", b))
 	must(t, k.Add(kb.SectionQuestions, kb.Entry{Text: "about a?", Effort: a}))
-	must(t, k.Add(kb.SectionWatch, kb.Entry{Type: "channel", Name: "#a", Effort: a}))
 
 	must(t, k.Delete(a))
 
@@ -355,9 +353,6 @@ func TestDeleteForgetsTheEffortEverywhere(t *testing.T) {
 	know := k.Knowledge()
 	if know.Questions[0].Effort != "" || know.Questions[0].Text != "about a?" {
 		t.Errorf("question should outlive its effort, unfiled: %+v", know.Questions[0])
-	}
-	if len(know.Watch[0].Efforts) != 0 {
-		t.Errorf("watch entry still names the deleted effort: %+v", know.Watch[0])
 	}
 	if err := k.Delete(a); err == nil {
 		t.Error("deleting an unknown effort reported success")
@@ -386,7 +381,6 @@ func TestRevisionsTrackWhatTheModelReads(t *testing.T) {
 		{"routing hint", func() { must(t, k.Add(kb.SectionRouting, kb.Entry{Text: "hint"})) }, true, false},
 		{"standing context", func() { must(t, k.Add(kb.SectionContext, kb.Entry{Text: "fact"})) }, false, true},
 		{"open question", func() { must(t, k.Add(kb.SectionQuestions, kb.Entry{Text: "q", Effort: a})) }, false, false},
-		{"watch entry", func() { must(t, k.Add(kb.SectionWatch, kb.Entry{Type: "dm", Name: "x"})) }, false, false},
 		{"file a session", func() { must(t, k.Assign("s", a)) }, false, false},
 		{"directory rule", func() { must(t, k.AddDir(a, "/w")) }, false, false},
 		{"drop directory rule", func() { must(t, k.RemoveDir(a, "/w")) }, false, false},
@@ -421,8 +415,6 @@ func TestAddValidates(t *testing.T) {
 		{"unknown section", "nonsense", kb.Entry{Text: "x"}},
 		{"blank fact", kb.SectionContext, kb.Entry{Text: "  "}},
 		{"blank question", kb.SectionQuestions, kb.Entry{}},
-		{"watch without a name", kb.SectionWatch, kb.Entry{Type: "person"}},
-		{"watch of an unknown type", kb.SectionWatch, kb.Entry{Type: "robot", Name: "x"}},
 		{"question for an unknown effort", kb.SectionQuestions, kb.Entry{Text: "x", Effort: "nope"}},
 	}
 	for _, tt := range bad {
@@ -431,7 +423,7 @@ func TestAddValidates(t *testing.T) {
 		}
 	}
 	know := k.Knowledge()
-	if n := len(know.Watch) + len(know.Questions) + len(know.Context) + len(know.Routing); n != 0 {
+	if n := len(know.Questions) + len(know.Context) + len(know.Routing); n != 0 {
 		t.Errorf("%d rejected entries were stored", n)
 	}
 }
