@@ -1,7 +1,26 @@
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { after, before, test } from 'node:test'
 import { OpenCode } from '@opencode/client'
 import { Native, maxRelayInFlight, relayRequest, transcript, type NativeRequest } from './native.ts'
+
+// Each test chooses its own endpoint: one the caller set is put back after.
+const inheritedEndpoint = process.env.SLORP_OPENCODE_URL
+before(() => { delete process.env.SLORP_OPENCODE_URL })
+after(() => { if (inheritedEndpoint === undefined) delete process.env.SLORP_OPENCODE_URL; else process.env.SLORP_OPENCODE_URL = inheritedEndpoint })
+
+test('an endpoint set in the environment is used without discovery, unless one is given', async t => {
+  t.after(() => { delete process.env.SLORP_OPENCODE_URL })
+  process.env.SLORP_OPENCODE_URL = 'http://127.0.0.1:4097'
+  const calls: string[] = []
+  t.mock.method(globalThis, 'fetch', async (url: string) => { calls.push(url); return Response.json(url.endsWith('/api/info') ? { pid: process.pid } : { data: {} }) })
+  let discovered = 0
+  const discovery = async () => { discovered++; return { url: 'http://127.0.0.1:4096', auth: undefined } }
+  await new Native({} as any, undefined, discovery).active(new AbortController().signal)
+  await new Native({} as any, 'http://127.0.0.1:4098', discovery).active(new AbortController().signal)
+  assert.equal(discovered, 0)
+  assert.deepEqual(calls, ['http://127.0.0.1:4097/api/info', 'http://127.0.0.1:4097/api/session/active',
+    'http://127.0.0.1:4098/api/info', 'http://127.0.0.1:4098/api/session/active'])
+})
 
 test('explicit HTTP verifies the same PID before authenticated operations and disallows redirects', async t => {
   const calls: { url: string; init: RequestInit }[] = []

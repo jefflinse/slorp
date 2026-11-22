@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict'
-import { test, type TestContext } from 'node:test'
+import { after, before, test, type TestContext } from 'node:test'
 import { randomUUID } from 'node:crypto'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import plugin, { Slorp } from './slorp.ts'
 import { PRESENCE_PREFIX } from './presence.ts'
+
+// The harness chooses the native endpoint: one the caller set is put back after.
+const inheritedEndpoint = process.env.SLORP_OPENCODE_URL
+before(() => { delete process.env.SLORP_OPENCODE_URL })
+after(() => { if (inheritedEndpoint === undefined) delete process.env.SLORP_OPENCODE_URL; else process.env.SLORP_OPENCODE_URL = inheritedEndpoint })
 
 const SID = 'sesTop'
 const DIR = '/work/proj'
