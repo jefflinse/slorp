@@ -122,6 +122,35 @@ func validAttention(a string) bool {
 	return a == AttentionAll || a == AttentionStopped || a == AttentionNone
 }
 
+// File files a session under an effort and gives it a role on the user's
+// say-so, both in one change or neither. An empty effortID or roleID leaves
+// that as it is.
+func (s *Store) File(sessionID, effortID, roleID string) error {
+	if effortID == "" && roleID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.update(func(f *file) error {
+		if effortID != "" {
+			if f.index(effortID) < 0 {
+				return errors.New("no such effort")
+			}
+			f.Assignments[sessionID] = effortID
+		}
+		if roleID != "" {
+			if f.role(roleID) == nil {
+				return errors.New("no such role")
+			}
+			if f.SessionRoles == nil {
+				f.SessionRoles = map[string]string{}
+			}
+			f.SessionRoles[sessionID] = roleID
+		}
+		return nil
+	})
+}
+
 // SetRole gives a session a role on the user's say-so. An empty roleID
 // records that the user wants it to have none.
 func (s *Store) SetRole(sessionID, roleID string) error {

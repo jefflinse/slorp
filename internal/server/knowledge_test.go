@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -101,6 +102,62 @@ func TestAKnowledgeEditThatCannotBeSavedIsTheServersFault(t *testing.T) {
 	}
 	if len(k.Efforts()) != 0 || len(k.Knowledge().Profiles) != 0 || len(k.Knowledge().Handoffs) != 0 {
 		t.Errorf("the knowledge base kept what could not be saved: %+v", k.Knowledge())
+	}
+}
+
+func TestAStartedSessionIsFiledWholeOrNotAtAll(t *testing.T) {
+	st := testdb.Open(t)
+	p := &unsaved{Store: st}
+	k, err := kb.Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := k.Create("Widgets", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := k.Add(kb.SectionRoles, kb.Entry{Name: "Reviewer"}); err != nil {
+		t.Fatal(err)
+	}
+	role := k.Knowledge().Roles[0].ID
+	launch := &launcher{}
+	srv := httptest.NewServer(New(hub.New(k, st), k, integrations.NewManager(func() map[string]bool { return nil }), &asked{}, nil, map[string]Launcher{"claude": launch}, map[string]PluginManager{"claude": launch}, nil, nil, nil, nil, Page(nil, "")))
+	t.Cleanup(srv.Close)
+	start := func(id string) int {
+		t.Helper()
+		launch.id = id
+		body := `{"dir":` + strconv.Quote(t.TempDir()) + `,"prompt":"review it","effort":"` + e.ID + `","role":"` + role + `"}`
+		res, err := srv.Client().Post(srv.URL+"/api/sessions", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+	filed := func(k *kb.Store, id string) (effort, role bool) {
+		_, via, ok := k.Resolve(id, "/")
+		_, given := k.RoleOf(id)
+		return ok && via == kb.ViaUser, given
+	}
+
+	p.fail, p.puts = true, 0
+	if code := start("ses_unsaved"); code != http.StatusInternalServerError || p.puts != 1 {
+		t.Errorf("a start whose filing cannot be saved = %d after %d writes, want 500 after one", code, p.puts)
+	}
+	for name, k := range map[string]*kb.Store{"kept": k, "reopened": testdb.KB(t, st)} {
+		if effort, role := filed(k, "ses_unsaved"); effort || role {
+			t.Errorf("%s: a session whose filing was not saved has effort %v and role %v, want neither", name, effort, role)
+		}
+	}
+
+	p.fail, p.puts = false, 0
+	if code := start("ses_saved"); code != http.StatusAccepted || p.puts != 1 {
+		t.Errorf("a start = %d after %d writes, want 202 after one", code, p.puts)
+	}
+	for name, k := range map[string]*kb.Store{"kept": k, "reopened": testdb.KB(t, st)} {
+		if effort, role := filed(k, "ses_saved"); !effort || !role {
+			t.Errorf("%s: a started session has effort %v and role %v, want both", name, effort, role)
+		}
 	}
 }
 

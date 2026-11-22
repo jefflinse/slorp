@@ -465,11 +465,8 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		}
 		// Without an id there is nothing to file yet; the session still
 		// shows up, sorted the way any other would be.
-		if id != "" && in.Effort != "" {
-			err = k.Assign(id, in.Effort)
-		}
-		if id != "" && in.Role != "" && err == nil {
-			err = k.SetRole(id, in.Role)
+		if id != "" {
+			err = k.File(id, in.Effort, in.Role)
 		}
 		if err != nil {
 			if agent == opencode.Agent {
