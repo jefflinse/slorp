@@ -24,13 +24,20 @@ let costUsd = 0
 let rateLimits: object[] = []
 let measuredAt = 0
 let isPolling = false
+/** How each reply submitted went, by id, until Slorp takes it. */
+const acknowledgements = new Map<string, 'delivered' | 'dropped'>()
+let isAcknowledging = false
 
-async function post($: EngineInterface, path: string, body: object) {
-  const res = await $.http.fetch(base + path, {
+function send($: EngineInterface, path: string, body: object) {
+  return $.http.fetch(base + path, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   })
+}
+
+async function post($: EngineInterface, path: string, body: object) {
+  const res = await send($, path, body)
   return res.ok && res.text ? JSON.parse(res.text) : undefined
 }
 
@@ -49,8 +56,29 @@ function measured(usage: { context: { window: number }; cost?: { usd: number }; 
 
 async function deliver($: EngineInterface, reply: Reply) {
   const sent = await $.prompt.submit({ text: reply.text, asUser: true })
-  const state = sent.drop === undefined ? 'delivered' : 'dropped'
-  await post($, '/api/bridge/ack', { id: reply.id, state })
+  acknowledgements.set(reply.id, sent.drop === undefined ? 'delivered' : 'dropped')
+  await acknowledge($)
+}
+
+/**
+ * Tells Slorp how each submitted reply went, oldest first, stopping at one
+ * Slorp could not take; that one and those after it are told again on the
+ * next poll. One Slorp refuses outright is not told again.
+ */
+async function acknowledge($: EngineInterface) {
+  if (isAcknowledging) return
+  isAcknowledging = true
+  try {
+    for (const [id, state] of acknowledgements) {
+      const res = await send($, '/api/bridge/ack', { id, state })
+      if (!res.ok && (res.status < 400 || res.status >= 500)) return
+      acknowledgements.delete(id)
+    }
+  } catch {
+    // Slorp is not running; the next poll tries again.
+  } finally {
+    isAcknowledging = false
+  }
 }
 
 /**
@@ -78,6 +106,7 @@ async function subagents($: EngineInterface) {
 }
 
 async function poll($: EngineInterface) {
+  void acknowledge($)
   if (isPolling) return
   isPolling = true
   try {
@@ -134,7 +163,8 @@ async function askSlorp($: EngineInterface, tool: string, input: unknown, agentI
  * Bridges one Claude Code session to the Slorp service at the `url` option,
  * or at SLORP_URL when that is set. Every POLL_MS it
  * claims replies queued for this session and submits each as the user's own
- * prompt; alongside, it reports turn events. A permission prompt, a
+ * prompt, telling Slorp how each went until Slorp takes it, and never
+ * submitting one again; alongside, it reports turn events. A permission prompt, a
  * subagent's included, is offered
  * to Slorp as well as the terminal's own dialog, and whichever the user
  * answers first decides it; a question is answered there with the options
