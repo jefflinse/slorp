@@ -77,17 +77,16 @@ func TestManagedCompletedReferencesAreBoundedAndGenerationScoped(t *testing.T) {
 		}
 		last = p.ID
 		h.Done(p.ID)
-		r, ok := h.Enqueue("root", "reply")
-		if !ok {
-			t.Fatal("enqueue")
-		}
+		r, err := h.Enqueue("root", "reply")
+		must(t, err)
 		reply = r.ID
-		h.Claim("root")
+		_, err = h.Claim("root")
+		must(t, err)
 		state := Delivered
 		if i%2 == 1 {
 			state = Dropped
 		}
-		h.Ack(r.ID, state)
+		must(t, h.Ack(r.ID, state))
 	}
 	if len(h.permissionRoots) != 1 || len(h.waiters) != 1 || len(h.replyRuns) != 0 || len(h.runs["T1"].completed) != completedReferenceLimit {
 		t.Fatalf("unbounded completed references: roots=%d waiters=%d", len(h.permissionRoots), len(h.waiters))

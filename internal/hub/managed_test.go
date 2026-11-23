@@ -60,11 +60,10 @@ func TestManagedReferenceFencingAndPermissionCancellation(t *testing.T) {
 	must(t, h.OpenManaged("opencode", "one", "job-one", "token-one", nil))
 	must(t, h.OpenManaged("opencode", "two", "job-two", "token-two", nil))
 	p := h.Ask("opencode", "one", Pending{Tool: "shell"}, true)
-	r, ok := h.Enqueue("one", "queued")
-	if !ok {
-		t.Fatal("enqueue")
-	}
-	h.Claim("one")
+	r, err := h.Enqueue("one", "queued")
+	must(t, err)
+	_, err = h.Claim("one")
+	must(t, err)
 	for _, tc := range []struct{ token, agent, root, id, path string }{
 		{"unknown", "opencode", "one", "", "/api/bridge/poll"},
 		{"token-one", "claude", "one", "", "/api/bridge/event"},
@@ -110,7 +109,8 @@ func TestManagedRestartPreservesIdentityWithoutRestoringOwnership(t *testing.T) 
 	must(t, k.SetRole("ses_empty", r))
 	h.Touch()
 	must(t, h.UpsertSubagent("opencode", "ses_empty", 1, Subagent{ID: "child", Status: "completed"}, &SubagentReport{Report: "retained result"}))
-	h.Enqueue("ses_empty", "never replay after restart")
+	_, err := h.Enqueue("ses_empty", "never replay after restart")
+	must(t, err)
 	// Simulate a crash rather than orderly close.
 	restarted := New(k, cache)
 	restarted.Retire("opencode", -time.Second)
@@ -175,7 +175,9 @@ func TestManagingPreviouslyObservedSessionRetainsMetadata(t *testing.T) {
 func TestTokenlessAdmissionBlocksManagedOwnership(t *testing.T) {
 	h, _, _ := newHub(t)
 	h.Apply("opencode", "root", func(s *Session) { s.LastPrompt = "earlier turn" })
-	h.Enqueue("root", "old reply")
+	if _, err := h.Enqueue("root", "old reply"); err != nil {
+		t.Fatal(err)
+	}
 	_, release, err := h.BridgeLease(context.Background(), "", "opencode", "root", "", "/api/bridge/poll")
 	must(t, err)
 	h.Retire("opencode", -time.Second)
@@ -183,7 +185,7 @@ func TestTokenlessAdmissionBlocksManagedOwnership(t *testing.T) {
 		t.Fatalf("ownership crossed an admitted tokenless request: %v", err)
 	}
 	h.Apply("opencode", "root", func(s *Session) { s.LastPrompt = "old admission" })
-	if len(h.Claim("root")) != 1 {
+	if got, err := h.Claim("root"); err != nil || len(got) != 1 {
 		t.Fatal("tokenless owner could not finish its admitted claim")
 	}
 	release()

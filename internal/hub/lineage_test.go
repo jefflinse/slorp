@@ -43,7 +43,8 @@ func TestAnOpenSessionTakesUpTheClosedOneItContinues(t *testing.T) {
 	must(t, k.Assign("old", e))
 	must(t, k.SetRole("old", r))
 	h.SetInsight("old", h.sessions["old"].key, Insight{Title: "Flanges added", Summary: "It added flanges."})
-	queued, _ := h.Enqueue("old", "and washers")
+	queued, err := h.Enqueue("old", "and washers")
+	must(t, err)
 
 	h.Link("new", "old")
 	next := said("new", "now add washers", began.Add(time.Hour))
@@ -74,7 +75,7 @@ func TestAnOpenSessionTakesUpTheClosedOneItContinues(t *testing.T) {
 	h = New(k, st)
 	h.SetRoster(agent, []Session{next})
 	check(h, "after a restart")
-	if got := h.Claim("new"); len(got) != 1 || got[0].Text != "and washers" {
+	if got, err := h.Claim("new"); err != nil || len(got) != 1 || got[0].Text != "and washers" {
 		t.Errorf("claimed %+v, want the reply queued under the old id delivered under the new", got)
 	}
 

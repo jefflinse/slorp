@@ -1432,15 +1432,15 @@ func (h *Hub) SetIntegration(id string, on bool) error {
 	return h.keepSettings(s)
 }
 
-// ErrNotSaved is wrapped by the error of a change to the settings that could
-// not be saved, which is then not made.
-var ErrNotSaved = errors.New("the settings could not be saved")
+// ErrNotSaved is wrapped by the error of a change to the settings or a reply
+// that could not be saved, which is then not made.
+var ErrNotSaved = errors.New("could not be saved")
 
 // keepSettings saves s, and only then makes it the user's preferences. s
 // shares nothing with the settings it replaces.
 func (h *Hub) keepSettings(s Settings) error {
 	if err := h.cache.Put("setting", "main", s); err != nil {
-		return fmt.Errorf("%w: %w", ErrNotSaved, err)
+		return fmt.Errorf("the settings %w: %w", ErrNotSaved, err)
 	}
 	h.settings = s
 	h.last = ""
@@ -2235,57 +2235,90 @@ func (h *Hub) snapshot() []Session {
 	return out
 }
 
-// Enqueue queues text for a session and reports whether the session exists.
-func (h *Hub) Enqueue(sessionID, text string) (Reply, bool) {
+// ErrNoSuchSession is Enqueue's error for a session the hub does not know.
+var ErrNoSuchSession = errors.New("no such session")
+
+// Enqueue queues text for a session. The reply is saved before it is queued:
+// a reply that could not be saved is not queued, and the error wraps
+// ErrNotSaved.
+func (h *Hub) Enqueue(sessionID, text string) (Reply, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if _, ok := h.sessions[sessionID]; !ok {
-		return Reply{}, false
+		return Reply{}, ErrNoSuchSession
 	}
 	r := &Reply{ID: newID(), SessionID: sessionID, Text: text, State: Queued, CreatedAt: time.Now()}
+	if err := h.saveReply(*r); err != nil {
+		return Reply{}, err
+	}
 	h.replies = append(h.replies, r)
-	h.warn(h.cache.Put("reply", r.ID, r))
 	h.changed()
-	return *r, true
+	return *r, nil
 }
 
-// Claim hands a session's queued replies to its bridge, each exactly once.
-func (h *Hub) Claim(sessionID string) []Reply {
+// Claim hands a session's queued replies to its bridge, in order and each
+// exactly once. Each is saved as claimed before it is handed out. Claim stops
+// at the first that could not be saved, which stays queued with those after
+// it, and returns the replies claimed before it with an error wrapping
+// ErrNotSaved.
+func (h *Hub) Claim(sessionID string) ([]Reply, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	var out []Reply
+	var err error
 	for _, r := range h.replies {
-		if r.SessionID == sessionID && r.State == Queued {
-			r.State = Claimed
-			if s := h.sessions[sessionID]; s != nil && s.run != "" {
-				if h.replyRuns == nil {
-					h.replyRuns = map[string]string{}
-				}
-				h.replyRuns[r.ID] = s.run
-			}
-			h.warn(h.cache.Put("reply", r.ID, r))
-			out = append(out, *r)
+		if r.SessionID != sessionID || r.State != Queued {
+			continue
 		}
+		claimed := *r
+		claimed.State = Claimed
+		if err = h.saveReply(claimed); err != nil {
+			break
+		}
+		*r = claimed
+		if s := h.sessions[sessionID]; s != nil && s.run != "" {
+			if h.replyRuns == nil {
+				h.replyRuns = map[string]string{}
+			}
+			h.replyRuns[r.ID] = s.run
+		}
+		out = append(out, claimed)
 	}
 	if len(out) > 0 {
 		h.changed()
 	}
-	return out
+	return out, err
 }
 
-// Ack records what became of a claimed reply.
-func (h *Hub) Ack(replyID string, state ReplyState) {
+// Ack records what became of a claimed reply. A reply that is not claimed,
+// such as one already acknowledged, is left as it is without error. The new
+// state is saved before it is recorded: on an error, which wraps ErrNotSaved,
+// the reply stays claimed, by the run that claimed it.
+func (h *Hub) Ack(replyID string, state ReplyState) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, r := range h.replies {
-		if r.ID == replyID && r.State == Claimed {
-			r.State = state
-			h.rememberCompletedReference(h.replyRuns[replyID], replyID, true)
-			delete(h.replyRuns, replyID)
-			h.warn(h.cache.Put("reply", r.ID, r))
-			h.changed()
+		if r.ID != replyID || r.State != Claimed {
+			continue
 		}
+		acked := *r
+		acked.State = state
+		if err := h.saveReply(acked); err != nil {
+			return err
+		}
+		*r = acked
+		h.rememberCompletedReference(h.replyRuns[replyID], replyID, true)
+		delete(h.replyRuns, replyID)
+		h.changed()
 	}
+	return nil
+}
+
+func (h *Hub) saveReply(r Reply) error {
+	if err := h.cache.Put("reply", r.ID, r); err != nil {
+		return fmt.Errorf("the reply %w: %w", ErrNotSaved, err)
+	}
+	return nil
 }
 
 // Subscribe returns a channel that receives a tick whenever the snapshot

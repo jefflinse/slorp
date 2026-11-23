@@ -216,8 +216,8 @@ func TestManagedLifecycleSameIdentityAndMetadata(t *testing.T) {
 		s.LastPrompt = "hello"
 		s.PromptAt = time.Unix(1700000001, 0)
 	})
-	if _, ok := a.Hub.Enqueue(id, "drop me"); !ok {
-		t.Fatal("enqueue")
+	if _, err := a.Hub.Enqueue(id, "drop me"); err != nil {
+		t.Fatal(err)
 	}
 	if err := a.Stop(context.Background(), s.Job); err != nil {
 		t.Fatal(err)

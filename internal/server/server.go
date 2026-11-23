@@ -339,9 +339,13 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			http.Error(w, "text is required", http.StatusBadRequest)
 			return
 		}
-		reply, ok := h.Enqueue(r.PathValue("id"), in.Text)
-		if !ok {
-			http.Error(w, "no such session", http.StatusNotFound)
+		reply, err := h.Enqueue(r.PathValue("id"), in.Text)
+		if errors.Is(err, hub.ErrNoSuchSession) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), editFailed(err))
 			return
 		}
 		writeJSON(w, http.StatusAccepted, reply)
@@ -1248,7 +1252,10 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			measured = time.UnixMilli(in.MeasuredAt)
 		}
 		h.SetLimits(agent, measured, windows)
-		replies := h.Claim(in.SessionID)
+		replies, err := h.Claim(in.SessionID)
+		if err != nil {
+			slog.ErrorContext(r.Context(), "claiming replies", "session_id", in.SessionID, "error", err)
+		}
 		if replies == nil {
 			replies = []hub.Reply{}
 		}
@@ -1505,7 +1512,10 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			http.Error(w, "state must be delivered or dropped", http.StatusBadRequest)
 			return
 		}
-		h.Ack(in.ID, in.State)
+		if err := h.Ack(in.ID, in.State); err != nil {
+			http.Error(w, err.Error(), editFailed(err))
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 

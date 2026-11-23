@@ -114,8 +114,8 @@ func TestProviderLimitsRejectBeforeMutation(t *testing.T) {
 	if code := f.post("/api/bridge/poll", providerPollJSON(t, "root", []any{providerReportJSON(at)})); code != 200 {
 		t.Fatal(code)
 	}
-	if _, ok := f.hub.Enqueue("root", "keep queued"); !ok {
-		t.Fatal("enqueue failed")
+	if _, err := f.hub.Enqueue("root", "keep queued"); err != nil {
+		t.Fatal(err)
 	}
 	before := f.state()
 	for name, invalid := range tests {
@@ -296,8 +296,8 @@ func TestProviderLimitsVersionValidationBeforeMutation(t *testing.T) {
 	if code := f.post("/api/bridge/poll", providerPollJSON(t, "root", reports)); code != 200 {
 		t.Fatal(code)
 	}
-	if _, ok := f.hub.Enqueue("root", "keep queued"); !ok {
-		t.Fatal("enqueue failed")
+	if _, err := f.hub.Enqueue("root", "keep queued"); err != nil {
+		t.Fatal(err)
 	}
 	before := f.state()
 	tests := map[string]func(map[string]any){

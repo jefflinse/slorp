@@ -423,24 +423,27 @@ func TestEffortNoteFollowsItsSessions(t *testing.T) {
 
 func TestReplyOutbox(t *testing.T) {
 	h, k, st := newHub(t)
-	if _, ok := h.Enqueue("ghost", "hello"); ok {
-		t.Fatal("queued a reply for a session that does not exist")
+	if _, err := h.Enqueue("ghost", "hello"); !errors.Is(err, ErrNoSuchSession) {
+		t.Fatalf("queuing a reply for a session that does not exist = %v, want ErrNoSuchSession", err)
 	}
 	h.SetRoster(agent, []Session{idle("s1", "/w", ""), idle("s2", "/w", "")})
-	first, _ := h.Enqueue("s1", "first")
-	h.Enqueue("s1", "second")
-	h.Enqueue("s2", "for the other session")
-
-	claimed := h.Claim("s1")
-	if len(claimed) != 2 || claimed[0].Text != "first" || claimed[1].Text != "second" {
-		t.Fatalf("Claim = %+v, want this session's two replies in order", claimed)
-	}
-	if again := h.Claim("s1"); len(again) != 0 {
-		t.Fatalf("replies were handed out twice: %+v", again)
+	first, err := h.Enqueue("s1", "first")
+	must(t, err)
+	for _, r := range [][2]string{{"s1", "second"}, {"s2", "for the other session"}} {
+		_, err := h.Enqueue(r[0], r[1])
+		must(t, err)
 	}
 
-	h.Ack(first.ID, Delivered)
-	h.Ack(first.ID, Dropped) // a second verdict must not overwrite the first
+	claimed, err := h.Claim("s1")
+	if err != nil || len(claimed) != 2 || claimed[0].Text != "first" || claimed[1].Text != "second" {
+		t.Fatalf("Claim = %+v, %v; want this session's two replies in order", claimed, err)
+	}
+	if again, err := h.Claim("s1"); err != nil || len(again) != 0 {
+		t.Fatalf("replies were handed out twice: %+v, %v", again, err)
+	}
+
+	must(t, h.Ack(first.ID, Delivered))
+	must(t, h.Ack(first.ID, Dropped)) // a second verdict must not overwrite the first
 	states := func(h *Hub) string {
 		var out []string
 		for _, r := range session(t, h, "s1").Replies {
@@ -457,8 +460,8 @@ func TestReplyOutbox(t *testing.T) {
 	if got := states(h2); got != "delivered,claimed" {
 		t.Errorf("after restart, reply states = %q", got)
 	}
-	if again := h2.Claim("s1"); len(again) != 0 {
-		t.Errorf("a restart handed out claimed replies again: %+v", again)
+	if again, err := h2.Claim("s1"); err != nil || len(again) != 0 {
+		t.Errorf("a restart handed out claimed replies again: %+v, %v", again, err)
 	}
 }
 
