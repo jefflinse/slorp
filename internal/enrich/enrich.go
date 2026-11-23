@@ -547,15 +547,17 @@ func (l listing) pick() (string, error) {
 // Probe tries a local model server: whether it answers, what it offers, and
 // whether the model that would be used replies to a one-word message. It
 // tries the server and model in use, or with m those m would have Slorp
-// use. Nothing of any session is sent.
+// use. Nothing of any session is sent. It may be called while Run runs.
 func (e *Enricher) Probe(ctx context.Context, m *hub.ModelSettings) hub.ModelCheck {
-	cfg := Config{URL: e.BaseURL, Model: e.Model}
+	var cfg Config
 	if e.Resolve != nil {
 		at := e.Hub.Settings().Model
 		if m != nil {
 			at = *m
 		}
 		cfg = e.Resolve(at)
+	} else {
+		cfg = Config{URL: e.BaseURL, Model: e.Model}
 	}
 	check := hub.ModelCheck{URL: cfg.URL, Models: []string{}}
 	if cfg.URL == "" {
