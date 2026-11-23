@@ -11,7 +11,8 @@ import (
 )
 
 // heldWrites keeps the knowledge base in a store, holding a write under the
-// knowledge base's lock, once held is set, until let is closed.
+// knowledge base's lock, once held is set, until let is closed. held needs
+// room for one signal.
 type heldWrites struct {
 	*store.Store
 	held chan struct{}
@@ -65,7 +66,7 @@ func TestJournalAndEffortWriteBothFinish(t *testing.T) {
 	h := New(k, c)
 	must(t, st.Put("session", "closed-session", sessionDoc{Agent: agent, Label: "closed", Effort: "gone", Ended: time.Now()}))
 
-	held, let := make(chan struct{}), make(chan struct{})
+	held, let := make(chan struct{}, 1), make(chan struct{})
 	var release sync.Once
 	t.Cleanup(func() { release.Do(func() { close(let) }) })
 	p.held, p.let = held, let
@@ -75,7 +76,7 @@ func TestJournalAndEffortWriteBothFinish(t *testing.T) {
 		defer close(created)
 		_, createErr = k.Create("Another", "")
 	}()
-	<-held
+	finishes(t, "the effort write reaching the store", held)
 	p.held = nil
 
 	// The journal reads the closed sessions while the knowledge base holds

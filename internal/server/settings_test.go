@@ -115,24 +115,25 @@ func TestPartialSettingsSavedTogetherBothStand(t *testing.T) {
 	f := newFixture(t)
 	reading, release := make(chan struct{}), make(chan struct{})
 	var released, held sync.Once
-	t.Cleanup(func() { released.Do(func() { close(release) }) })
 	next := f.srv.Config.Handler
-	f.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/settings" {
 			held.Do(func() { r.Body = &heldBody{ReadCloser: r.Body, reading: reading, release: release} })
 		}
 		next.ServeHTTP(w, r)
-	})
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { released.Do(func() { close(release) }) })
 	save := func(body string) <-chan int {
 		done := make(chan int, 1)
 		go func() {
-			req, err := http.NewRequest(http.MethodPost, f.srv.URL+"/api/settings", strings.NewReader(body))
+			req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/settings", strings.NewReader(body))
 			if err != nil {
 				done <- 0
 				return
 			}
 			req.Header.Set("Content-Type", "application/json")
-			res, err := f.srv.Client().Do(req)
+			res, err := srv.Client().Do(req)
 			if err != nil {
 				done <- 0
 				return
