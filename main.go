@@ -83,6 +83,14 @@ func run() (exe string, restart bool) {
 	if ip := net.ParseIP(host); err != nil || ip == nil || !ip.IsLoopback() {
 		log.Fatalf("-addr must be a loopback address, got %q", *addr)
 	}
+	started := enrich.Startup{URL: *llm, Model: *model}
+	flag.Visit(func(f *flag.Flag) {
+		started.URLGiven = started.URLGiven || f.Name == "llm"
+		started.ModelGiven = started.ModelGiven || f.Name == "model"
+	})
+	if started, err = started.Checked(); err != nil {
+		log.Fatalf("-llm: %v", err)
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		log.Fatal(err)
@@ -128,14 +136,6 @@ func run() (exe string, restart bool) {
 		ConfigDir: filepath.Join(configHome, "opencode"), ExtraConfigDir: os.Getenv("OPENCODE_CONFIG_DIR"), ConfigFile: os.Getenv("OPENCODE_CONFIG")}
 	defer func() { stop(); oc.Shutdown() }()
 	go oc.Run(ctx)
-	started := enrich.Startup{URL: *llm, Model: *model}
-	flag.Visit(func(f *flag.Flag) {
-		started.URLGiven = started.URLGiven || f.Name == "llm"
-		started.ModelGiven = started.ModelGiven || f.Name == "model"
-	})
-	if started, err = started.Checked(); err != nil {
-		log.Fatalf("-llm: %v", err)
-	}
 	summarizer := &enrich.Enricher{Hub: h, Resolve: started.Config, Offer: tools.Offer}
 	go summarizer.Run(ctx)
 

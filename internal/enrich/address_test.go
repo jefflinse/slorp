@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -41,10 +42,55 @@ func TestStartupAddressesAreCheckedAsSettingsAre(t *testing.T) {
 			t.Errorf("starting with %q = %q, %v; want %q", in, got.URL, err, want)
 		}
 	}
-	for _, in := range []string{"ftp://localhost:21", "http://local host", "http://user:secret@localhost"} {
-		if _, err := (Startup{URL: in, URLGiven: true}).Checked(); err == nil || !strings.Contains(err.Error(), in) {
-			t.Errorf("starting with %q = %v, want an error naming it", in, err)
+	const secret = "s3cr3t-sentinel"
+	for in, says := range map[string]string{
+		"ftp://" + secret + "@localhost:21":    "http or https",
+		"http://user:" + secret + "@localhost": "user name or password",
+		"http://local host/" + secret:          "not a URL",
+		"http://" + secret + ":99999999":       "port",
+		"http:///" + secret:                    "no host",
+		"http://localhost/" + secret + "%zz":   "not a URL",
+	} {
+		_, err := (Startup{URL: in, URLGiven: true}).Checked()
+		if err == nil || !strings.Contains(err.Error(), says) || strings.Contains(err.Error(), secret) {
+			t.Errorf("starting with %q = %v, want an error saying it %s without repeating it", in, err, says)
 		}
+	}
+}
+
+// The address kept is the one the user meant: what is escaped in its path
+// stays escaped in every request, and its host can be read back.
+func TestAModelServerAddressKeepsWhatIsEscapedInIt(t *testing.T) {
+	asked := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked <- r.RequestURI
+		io.WriteString(w, `{}`)
+	}))
+	t.Cleanup(srv.Close)
+	e := &Enricher{}
+	for _, path := range []string{"/model%23blue", "/team%2Fmodel", "/100%25", "/a%20b/v1/"} {
+		base, ok := ServerURL(srv.URL + path)
+		if !ok {
+			t.Errorf("%s was refused", path)
+			continue
+		}
+		if err := e.get(context.Background(), base, "/v1/models", &struct{}{}); err != nil {
+			t.Errorf("listing from %s: %v", base, err)
+			continue
+		}
+		want := strings.TrimSuffix(strings.TrimSuffix(path, "/"), "/v1") + "/v1/models"
+		if got := <-asked; got != want {
+			t.Errorf("the server at %s was asked for %s, want %s", path, got, want)
+		}
+	}
+
+	base, ok := ServerURL("http://[fe80::1%25lo0]:8080/v1")
+	u, err := url.Parse(base + "/v1/models")
+	if !ok || err != nil || u.Hostname() != "fe80::1%lo0" || u.Port() != "8080" {
+		t.Errorf("a scoped IPv6 address was kept as %q, which reads back as %v, %v", base, u, err)
+	}
+	if _, err := http.NewRequest(http.MethodGet, base+"/v1/models", nil); err != nil {
+		t.Errorf("a request to the kept scoped IPv6 address cannot be made: %v", err)
 	}
 }
 

@@ -96,30 +96,56 @@ type Startup struct {
 }
 
 // ServerURL returns the address of a model server as the user wrote it, in
-// the form Slorp keeps: with a scheme, and without the /v1 its API paths
-// begin with. Empty stays empty. It reports false for anything that is not
-// an http or https address.
+// the form Slorp keeps: with a scheme, its path escaped as written, and
+// without the /v1 its API paths begin with, a query or a fragment. Empty
+// stays empty. It reports false for anything that is not an http or https
+// address.
 func ServerURL(s string) (string, bool) {
+	u, err := serverURL(s)
+	return u, err == nil
+}
+
+// serverURL is ServerURL, with what is wrong with an address it refuses. The
+// error never repeats the address, which may hold a password.
+func serverURL(s string) (string, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
-		return "", true
+		return "", nil
 	}
 	if !strings.Contains(s, "://") {
 		s = "http://" + s
 	}
 	u, err := url.Parse(s)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
-		return "", false
+	switch {
+	case err != nil:
+		return "", errors.New("is not a URL")
+	case u.Scheme != "http" && u.Scheme != "https":
+		return "", errors.New("must be an http or https address")
+	case u.User != nil:
+		return "", errors.New("must not hold a user name or password")
+	case u.Hostname() == "":
+		return "", errors.New("names no host")
 	}
-	return u.Scheme + "://" + u.Host + strings.TrimSuffix(strings.TrimRight(u.Path, "/"), "/v1"), true
+	if port := u.Port(); port != "" {
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+			return "", errors.New("has a port that is not one")
+		}
+	}
+	escaped := strings.TrimSuffix(strings.TrimRight(u.EscapedPath(), "/"), "/v1")
+	path, err := url.PathUnescape(escaped)
+	if err != nil {
+		return "", errors.New("has a path that is not escaped properly")
+	}
+	kept := url.URL{Scheme: u.Scheme, Host: u.Host, Path: path, RawPath: escaped}
+	return kept.String(), nil
 }
 
 // Checked returns s with its server address in the form ServerURL gives,
-// or an error naming the address when it is not one Settings would take.
+// or an error saying what is wrong with it, without repeating it.
 func (s Startup) Checked() (Startup, error) {
-	u, ok := ServerURL(s.URL)
-	if !ok {
-		return s, fmt.Errorf("the model server's address must be an http or https one, not %q", s.URL)
+	u, err := serverURL(s.URL)
+	if err != nil {
+		return s, fmt.Errorf("the model server's address %w", err)
 	}
 	s.URL = u
 	return s, nil
