@@ -13,12 +13,14 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jefflinse/slorp/internal/hub"
 	"github.com/jefflinse/slorp/internal/integrations"
@@ -182,10 +184,46 @@ func sameServer(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-// sameOrigin reports whether a and b have one scheme, host and port, however
-// each spells them.
+// sameOrigin reports whether a and b have one scheme, host and port: the
+// scheme and an all-ASCII host name in any case, a port said or implied by
+// the scheme, and an IP address however it is written, its zone exactly.
+// A host name with anything else in it must be spelled the same in both.
 func sameOrigin(a, b *url.URL) bool {
-	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Hostname(), b.Hostname()) && port(a) == port(b)
+	return asciiLower(a.Scheme) == asciiLower(b.Scheme) && sameHost(a.Hostname(), b.Hostname()) && port(a) == port(b)
+}
+
+// sameHost reports whether hosts a and b, as URL.Hostname gives them, are
+// surely one host.
+func sameHost(a, b string) bool {
+	x, errA := netip.ParseAddr(a)
+	y, errB := netip.ParseAddr(b)
+	switch {
+	case errA == nil || errB == nil:
+		return errA == nil && errB == nil && x == y
+	case isASCII(a) && isASCII(b):
+		return asciiLower(a) == asciiLower(b)
+	}
+	return a == b
+}
+
+func isASCII(s string) bool {
+	for i := range len(s) {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
+// asciiLower returns s with only its ASCII letters lowered.
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
 }
 
 // port is the port u is reached on, said or implied by its scheme.
@@ -193,7 +231,7 @@ func port(u *url.URL) string {
 	if p := u.Port(); p != "" {
 		return strings.TrimLeft(p, "0")
 	}
-	if strings.EqualFold(u.Scheme, "https") {
+	if asciiLower(u.Scheme) == "https" {
 		return "443"
 	}
 	return "80"

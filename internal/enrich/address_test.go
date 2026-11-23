@@ -118,11 +118,36 @@ func TestARedirectIsFollowedOnlyWithinTheOriginFirstAsked(t *testing.T) {
 		{"https://localhost:8443/v1/models", "https://localhost/v1/models", false},
 		{"http://model.example/v1/models", "http://other.example/v1/models", false},
 		{"http://localhost:1234/v1/models", "http://127.0.0.1:1234/v1/models", false},
+		// Names that fold together but which the client sends to different hosts.
+		{"http://ς.example/v1/models", "http://σ.example/v1/models", false},
+		{"http://ς.example/v1/models", "http://Σ.example/v1/models", false},
+		// A name not all ASCII must be spelled the same, even where the client
+		// would send both to one host.
+		{"http://σ.example/v1/models", "http://σ.example/v1/models/", true},
+		{"http://kelvin.example/v1/models", "http://Kelvin.example/v1/models", false},
+		// An address however it is written; its zone exactly.
+		{"http://[::1]/v1/models", "http://[0:0::1]/v1/models", true},
+		{"http://[fe80::1%25eth0]/v1/models", "http://[fe80::1%25eth0]/v1/models/", true},
+		{"http://[fe80::1%25eth0]/v1/models", "http://[fe80::1%25ETH0]/v1/models", false},
+		{"http://[fe80::1%25eth0]/v1/models", "http://[fe80::1]/v1/models", false},
+		{"http://127.0.0.1/v1/models", "http://LOCALHOST/v1/models", false},
 	} {
 		err := sameServer(request(tt.to), []*http.Request{request(tt.from)})
 		if (err == nil) != tt.follows {
 			t.Errorf("a redirect from %s to %s = %v, want followed %v", tt.from, tt.to, err, tt.follows)
 		}
+	}
+	// The client does send the two sigmas to different hosts.
+	sent := func(u string) string {
+		var b strings.Builder
+		if err := request(u).Write(&b); err != nil {
+			t.Fatal(err)
+		}
+		host, _, _ := strings.Cut(strings.SplitN(b.String(), "Host: ", 2)[1], "\r\n")
+		return host
+	}
+	if final, other := sent("http://ς.example/"), sent("http://σ.example/"); final == other {
+		t.Errorf("the client sends both sigmas to %s, so the test does not tell them apart", final)
 	}
 	first := request("http://localhost:1234/a")
 	via := []*http.Request{first}
