@@ -22,7 +22,8 @@ type managedRun struct {
 // The session and every reply waiting for it are saved as the run's in one
 // write before the run is registered; when what was kept of the session
 // cannot be read, or that cannot be saved, nothing changes, and in the latter
-// case the error wraps ErrNotSaved.
+// case the error wraps ErrNotSaved. A session open, or reported open
+// elsewhere, is refused with ErrLifecycleConflict.
 func (h *Hub) OpenManaged(agent, id, job, token string, update func(*Session)) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -31,6 +32,9 @@ func (h *Hub) OpenManaged(agent, id, job, token string, update func(*Session)) e
 	}
 	if h.sessions[id] != nil || h.runs[token] != nil || h.unmanagedAdmissions[id] != 0 {
 		return ErrLifecycleConflict
+	}
+	if _, held := h.unread[id]; held {
+		return fmt.Errorf("%w: session %s is reported open elsewhere", ErrLifecycleConflict, id)
 	}
 	now := time.Now()
 	s := &Session{ID: id, Agent: agent, Kind: "background", Status: Idle, StartedAt: now, ActiveAt: now, managed: true}
@@ -64,7 +68,6 @@ func (h *Hub) OpenManaged(agent, id, job, token string, update func(*Session)) e
 	}
 	delete(h.unsettled, id)
 	delete(h.archive, id)
-	delete(h.unread, id)
 	ctx, cancel := context.WithCancel(context.Background())
 	if h.runs == nil {
 		h.runs = map[string]*managedRun{}

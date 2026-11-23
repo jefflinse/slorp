@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -220,6 +221,50 @@ func TestASessionReportedOpenThatCannotBeReadIsNotClosed(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestARunDoesNotTakeOverASessionReportedOpenThatCannotBeRead(t *testing.T) {
+	st := testdb.Open(t)
+	c := &faultyReplies{Store: st}
+	h := New(testdb.KB(t, st), c)
+	held := func(id string) Reply {
+		t.Helper()
+		h.Apply("opencode", id, func(s *Session) { s.LastPrompt, s.PromptAt = "in a terminal", time.Now() })
+		r, err := h.Enqueue(id, "for the terminal")
+		must(t, err)
+		h.Retire("opencode", -time.Second)
+		c.unreadableID = id
+		h.Apply("opencode", id, nil)
+		c.unreadableID = ""
+		if !h.HeldOpen(id) {
+			t.Fatalf("%s is not held open", id)
+		}
+		return r
+	}
+
+	queued := held("ses_held")
+	c.batches = 0
+	if err := h.OpenManaged("opencode", "ses_held", "job", "token-held", nil); !errors.Is(err, ErrLifecycleConflict) {
+		t.Fatalf("taking over a session reported open elsewhere = %v, want ErrLifecycleConflict", err)
+	}
+	if c.batches != 0 {
+		t.Errorf("a refused takeover wrote %d batches, want none", c.batches)
+	}
+	var r Reply
+	if found, err := st.Get("reply", queued.ID, &r); err != nil || !found || r.Owner != OwnerBridge || r.State != Queued {
+		t.Errorf("the reply for it is saved as %+v, %v, %v; want still queued for the terminal", r, found, err)
+	}
+	h.Apply("opencode", "ses_held", nil)
+	if got, err := h.Claim("ses_held"); err != nil || len(got) != 1 || got[0].ID != queued.ID {
+		t.Errorf("the terminal's next report claimed %+v, %v; want its reply", got, err)
+	}
+
+	held("ses_silent")
+	h.Retire("opencode", -time.Second)
+	if h.HeldOpen("ses_silent") {
+		t.Fatal("a session whose terminal fell silent is still held open")
+	}
+	must(t, h.OpenManaged("opencode", "ses_silent", "job", "token-silent", nil))
 }
 
 func turns(timeline []Moment) []string {

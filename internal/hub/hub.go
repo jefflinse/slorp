@@ -938,6 +938,15 @@ func (h *Hub) warn(err error) {
 	}
 }
 
+// HeldOpen reports whether a session is reported open though what is kept of
+// it could not yet be read.
+func (h *Hub) HeldOpen(id string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_, held := h.unread[id]
+	return held
+}
+
 // restore gives a session agent reports, seen for the first time, what the
 // model last wrote about it. It reports false, with s and what is kept of it
 // unchanged, when that cannot be read; the session is then not to be

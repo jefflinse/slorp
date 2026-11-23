@@ -538,6 +538,10 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			http.Error(w, "no such closed session", http.StatusNotFound)
 			return
 		}
+		if h.HeldOpen(a.ID) {
+			lifecycleError(w, fmt.Errorf("%w: the session is reported open elsewhere", hub.ErrLifecycleConflict), a.ID)
+			return
+		}
 		if a.Agent == opencode.Agent && key != "" {
 			var finish func()
 			w, r, finish, ok = journalLifecycle(h, w, r, key, fingerprint, a.ID)
