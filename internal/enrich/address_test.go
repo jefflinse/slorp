@@ -94,6 +94,46 @@ func TestAModelServerAddressKeepsWhatIsEscapedInIt(t *testing.T) {
 	}
 }
 
+func TestARedirectIsFollowedOnlyWithinTheOriginFirstAsked(t *testing.T) {
+	request := func(u string) *http.Request {
+		r, err := http.NewRequest(http.MethodGet, u, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	for _, tt := range []struct {
+		from, to string
+		follows  bool
+	}{
+		{"http://localhost:1234/v1/models", "http://localhost:1234/v1/models/", true},
+		{"https://MODEL.example/v1/models", "https://model.example/v1/models", true},
+		{"https://localhost:443/v1/models", "https://localhost/v1/models", true},
+		{"https://localhost/v1/models", "https://localhost:443/v1/models", true},
+		{"http://model.example/v1/models", "http://model.example:80/v1/models", true},
+		{"http://[::1]:80/v1/models", "http://[::1]/v1/models", true},
+		{"http://model.example/v1/models", "https://model.example/v1/models", false},
+		{"https://model.example/v1/models", "http://model.example:443/v1/models", false},
+		{"http://localhost:1234/v1/models", "http://localhost:1235/v1/models", false},
+		{"https://localhost:8443/v1/models", "https://localhost/v1/models", false},
+		{"http://model.example/v1/models", "http://other.example/v1/models", false},
+		{"http://localhost:1234/v1/models", "http://127.0.0.1:1234/v1/models", false},
+	} {
+		err := sameServer(request(tt.to), []*http.Request{request(tt.from)})
+		if (err == nil) != tt.follows {
+			t.Errorf("a redirect from %s to %s = %v, want followed %v", tt.from, tt.to, err, tt.follows)
+		}
+	}
+	first := request("http://localhost:1234/a")
+	via := []*http.Request{first}
+	for len(via) < 10 {
+		via = append(via, request("http://localhost:1234/b"))
+	}
+	if err := sameServer(request("http://localhost:1234/c"), via); err == nil {
+		t.Error("an eleventh redirect within the model server was followed")
+	}
+}
+
 func TestRequestsGoNowhereButTheModelServer(t *testing.T) {
 	var elsewhere atomic.Int32
 	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

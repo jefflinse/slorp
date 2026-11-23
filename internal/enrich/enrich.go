@@ -170,16 +170,33 @@ func (s Startup) Config(m hub.ModelSettings) Config {
 
 var defaultClient = &http.Client{Timeout: 3 * time.Minute, CheckRedirect: sameServer}
 
-// sameServer follows a redirect only to the scheme and host the request was
-// first sent to, so nothing sent to the model server goes anywhere else.
+// sameServer follows a redirect only to the origin the request was first
+// sent to, so nothing sent to the model server goes anywhere else.
 func sameServer(req *http.Request, via []*http.Request) error {
 	if len(via) >= 10 {
 		return errors.New("the model server redirected too many times")
 	}
-	if from := via[0].URL; req.URL.Scheme != from.Scheme || req.URL.Host != from.Host {
+	if !sameOrigin(via[0].URL, req.URL) {
 		return fmt.Errorf("the model server redirected to %s://%s, which is not it", req.URL.Scheme, req.URL.Host)
 	}
 	return nil
+}
+
+// sameOrigin reports whether a and b have one scheme, host and port, however
+// each spells them.
+func sameOrigin(a, b *url.URL) bool {
+	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Hostname(), b.Hostname()) && port(a) == port(b)
+}
+
+// port is the port u is reached on, said or implied by its scheme.
+func port(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return strings.TrimLeft(p, "0")
+	}
+	if strings.EqualFold(u.Scheme, "https") {
+		return "443"
+	}
+	return "80"
 }
 
 func (e *Enricher) http() *http.Client {
