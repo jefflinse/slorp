@@ -142,7 +142,19 @@ func (s Startup) Config(m hub.ModelSettings) Config {
 	return c
 }
 
-var defaultClient = &http.Client{Timeout: 3 * time.Minute}
+var defaultClient = &http.Client{Timeout: 3 * time.Minute, CheckRedirect: sameServer}
+
+// sameServer follows a redirect only to the scheme and host the request was
+// first sent to, so nothing sent to the model server goes anywhere else.
+func sameServer(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("the model server redirected too many times")
+	}
+	if from := via[0].URL; req.URL.Scheme != from.Scheme || req.URL.Host != from.Host {
+		return fmt.Errorf("the model server redirected to %s://%s, which is not it", req.URL.Scheme, req.URL.Host)
+	}
+	return nil
+}
 
 func (e *Enricher) http() *http.Client {
 	if e.client != nil {
