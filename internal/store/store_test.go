@@ -3,6 +3,7 @@ package store_test
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -137,6 +138,27 @@ func TestEachIsNotProlongedByWhatIsAdded(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Each never finished while adding documents of its kind")
+	}
+}
+
+func TestEachDirectoryKeepsItsOwnDatabase(t *testing.T) {
+	root := t.TempDir()
+	names := []string{"example space", "example%20space", "what?", "what%3F", "hash#tag", "hash%23tag"}
+	stores := map[string]*store.Store{}
+	for _, name := range names {
+		stores[name] = testdb.OpenAt(t, filepath.Join(root, name, "slorp.db"))
+		if err := stores[name].Put("marker", "only", doc{len(stores)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, name := range names {
+		var got doc
+		if found, err := stores[name].Get("marker", "only", &got); err != nil || !found || got.N != i+1 {
+			t.Errorf("%q holds marker %+v, %v, %v; want its own, %d", name, got, found, err, i+1)
+		}
+		if _, err := os.Stat(filepath.Join(root, name, "slorp.db")); err != nil {
+			t.Errorf("%q has no database of its own: %v", name, err)
+		}
 	}
 }
 
