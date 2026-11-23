@@ -92,6 +92,13 @@ func (a *Adapter) runtimeConfig(r *runtime, config map[string]any) error {
 		}
 	}
 	config["plugins"] = append(plugins, (&url.URL{Scheme: "file", Path: bundle}).String())
+	// An idle directory's services are otherwise unloaded, the bridge with them.
+	experimental, _ := config["experimental"].(map[string]any)
+	if experimental == nil {
+		experimental = map[string]any{}
+	}
+	experimental["location_idle_timeout"] = false
+	config["experimental"] = experimental
 	config["$schema"] = "https://opencode.ai/config.json"
 	data, err := json.Marshal(config)
 	if err != nil {

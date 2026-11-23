@@ -1,8 +1,12 @@
 package store_test
 
 import (
+	"errors"
+	"fmt"
 	"path/filepath"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/jefflinse/slorp/internal/store"
 	"github.com/jefflinse/slorp/internal/testdb"
@@ -52,6 +56,87 @@ func TestEachIsOldestFirstWithinAKind(t *testing.T) {
 	}
 	if got := len(ids); got != 3 || ids[0] != "c" || ids[1] != "a" || ids[2] != "b" {
 		t.Fatalf("Each order = %v, want [c a b]", ids)
+	}
+}
+
+func TestEachLetsGoOfTheStoreWhileCallingBack(t *testing.T) {
+	st := testdb.Open(t)
+	const n = 300
+	for i := range n {
+		if err := st.Put("thing", strconv.Itoa(i), doc{i}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	type result struct {
+		seen []int
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		var r result
+		var inside error
+		err := st.Each("thing", func(id string, body []byte) {
+			var d doc
+			if found, err := st.Get("thing", id, &d); inside == nil && (err != nil || !found) {
+				inside = fmt.Errorf("Get %s inside Each = %v, %v", id, found, err)
+			}
+			if err := st.Put("copy", id, d); inside == nil && err != nil {
+				inside = err
+			}
+			r.seen = append(r.seen, d.N)
+		})
+		r.err = errors.Join(err, inside)
+		done <- r
+	}()
+	select {
+	case r := <-done:
+		seen := r.seen
+		if r.err != nil {
+			t.Fatal(r.err)
+		}
+		if len(seen) != n {
+			t.Fatalf("Each called back %d times, want %d", len(seen), n)
+		}
+		for i, got := range seen {
+			if got != i {
+				t.Fatalf("Each order at %d = %d, want oldest first", i, got)
+			}
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("reading and writing the store from within Each never finished")
+	}
+}
+
+func TestEachIsNotProlongedByWhatIsAdded(t *testing.T) {
+	st := testdb.Open(t)
+	const n = 200
+	for i := range n {
+		if err := st.Put("thing", strconv.Itoa(i), doc{i}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	done := make(chan error, 1)
+	seen := 0
+	go func() {
+		var inside error
+		err := st.Each("thing", func(id string, _ []byte) {
+			seen++
+			if err := st.Put("thing", "new-"+id, doc{}); inside == nil {
+				inside = err
+			}
+		})
+		done <- errors.Join(err, inside)
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+		if seen != n {
+			t.Errorf("Each called back %d times while adding documents of its kind, want the %d there when it began", seen, n)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Each never finished while adding documents of its kind")
 	}
 }
 

@@ -1,7 +1,26 @@
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { after, before, test } from 'node:test'
 import { OpenCode } from '@opencode/client'
 import { Native, maxRelayInFlight, relayRequest, transcript, type NativeRequest } from './native.ts'
+
+// Each test chooses its own endpoint: one the caller set is put back after.
+const inheritedEndpoint = process.env.SLORP_OPENCODE_URL
+before(() => { delete process.env.SLORP_OPENCODE_URL })
+after(() => { if (inheritedEndpoint === undefined) delete process.env.SLORP_OPENCODE_URL; else process.env.SLORP_OPENCODE_URL = inheritedEndpoint })
+
+test('an endpoint set in the environment is used without discovery, unless one is given', async t => {
+  t.after(() => { delete process.env.SLORP_OPENCODE_URL })
+  process.env.SLORP_OPENCODE_URL = 'http://127.0.0.1:4097'
+  const calls: string[] = []
+  t.mock.method(globalThis, 'fetch', async (url: string) => { calls.push(url); return Response.json(url.endsWith('/api/info') ? { pid: process.pid } : { data: {} }) })
+  let discovered = 0
+  const discovery = async () => { discovered++; return { url: 'http://127.0.0.1:4096', auth: undefined } }
+  await new Native({} as any, undefined, discovery).active(new AbortController().signal)
+  await new Native({} as any, 'http://127.0.0.1:4098', discovery).active(new AbortController().signal)
+  assert.equal(discovered, 0)
+  assert.deepEqual(calls, ['http://127.0.0.1:4097/api/info', 'http://127.0.0.1:4097/api/session/active',
+    'http://127.0.0.1:4098/api/info', 'http://127.0.0.1:4098/api/session/active'])
+})
 
 test('explicit HTTP verifies the same PID before authenticated operations and disallows redirects', async t => {
   const calls: { url: string; init: RequestInit }[] = []
@@ -35,7 +54,35 @@ test('PID mismatch and rejected verification never issue a session or form opera
   assert.deepEqual(calls, ['http://localhost:4096/api/info'])
 })
 
+// managed gives the test a Slorp-managed run's environment, or with no run
+// an ordinary shell's, whichever the tests themselves run in.
+function managed(t: { after: (fn: () => void) => void }, run?: { file: string; run: string }) {
+  const saved = { SLORP_MANAGED_FILE: process.env.SLORP_MANAGED_FILE, SLORP_MANAGED_RUN: process.env.SLORP_MANAGED_RUN }
+  if (run) { process.env.SLORP_MANAGED_FILE = run.file; process.env.SLORP_MANAGED_RUN = run.run }
+  else { delete process.env.SLORP_MANAGED_FILE; delete process.env.SLORP_MANAGED_RUN }
+  t.after(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value
+    }
+  })
+}
+
+test('a managed run never consults shared discovery', async t => {
+  managed(t, { file: '/nonexistent/session.json', run: 'token' })
+  const calls: string[] = []
+  t.mock.method(globalThis, 'fetch', async (url: string) => { calls.push(url); return Response.json({ pid: process.pid }) })
+  let discovered = 0
+  const native = new Native({} as any, undefined, async () => {
+    discovered++
+    return { url: 'http://127.0.0.1:4096', auth: undefined }
+  })
+  await assert.rejects(native.active(new AbortController().signal), /terminal transport/)
+  assert.equal(discovered, 0)
+  assert.deepEqual(calls, [])
+})
+
 test('matching shared discovery uses registration auth rather than the process password', async t => {
+  managed(t)
   const calls: { url: string; init: RequestInit }[] = []
   t.mock.method(globalThis, 'fetch', async (url: string, init: RequestInit) => {
     calls.push({ url, init })
@@ -54,6 +101,7 @@ test('matching shared discovery uses registration auth rather than the process p
 })
 
 test('another registered service is never used; requests fall back to the terminal relay', async t => {
+  managed(t)
   const calls: string[] = []
   t.mock.method(globalThis, 'fetch', async (url: string) => { calls.push(url); return Response.json({ pid: process.pid + 1 }) })
   const native = new Native({} as any, undefined, async () => ({ url: 'http://127.0.0.1:4096', auth: undefined }))

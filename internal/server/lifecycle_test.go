@@ -60,7 +60,7 @@ func TestLifecycleHTTPContracts(t *testing.T) {
 	h := hub.New(k, cache)
 	l := &managedLauncher{launcher: launcher{id: "ses_native"}, h: h}
 	m := integrations.NewManager(func() map[string]bool { return nil })
-	handler := New(h, k, m, &asked{}, map[string]History{"opencode": func(context.Context, string, int) ([]hub.Exchange, error) { return nil, nil }}, map[string]Launcher{"opencode": l, "claude": &claude.Adapter{Bin: "/custom/claude"}}, nil, nil, nil, Page(nil, ""))
+	handler := New(h, k, m, &asked{}, map[string]History{"opencode": {Exchanges: func(context.Context, string, int) ([]hub.Exchange, error) { return nil, nil }}}, map[string]Launcher{"opencode": l, "claude": &claude.Adapter{Bin: "/custom/claude"}}, nil, nil, nil, nil, nil, Page(nil, ""))
 	do := func(method, path, body, token string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, "http://127.0.0.1"+path, strings.NewReader(body))
 		r.Header.Set("Content-Type", "application/json")
@@ -166,7 +166,7 @@ func TestBindingFailureReturnsKnownIDAndStopsOwnedRuntime(t *testing.T) {
 			t.Error(err)
 		}
 	}}
-	handler := New(h, k, integrations.NewManager(func() map[string]bool { return nil }), &asked{}, nil, map[string]Launcher{"opencode": l}, nil, nil, nil, Page(nil, ""))
+	handler := New(h, k, integrations.NewManager(func() map[string]bool { return nil }), &asked{}, nil, map[string]Launcher{"opencode": l}, nil, nil, nil, nil, nil, Page(nil, ""))
 	body := `{"agent":"opencode","dir":` + quotedJSON(t.TempDir()) + `,"effort":` + quotedJSON(e.ID) + `}`
 	r := httptest.NewRequest("POST", "http://127.0.0.1/api/sessions", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")

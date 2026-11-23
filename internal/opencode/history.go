@@ -19,7 +19,8 @@ const (
 	historyTimeout = 30 * time.Second
 	historyBytes   = 64 << 20
 	historyPrompt  = 8000
-	historyReply   = 2000
+	// historyReply is as much as is kept of a session's last message.
+	historyReply = 30000
 )
 
 var sessionIDPattern = regexp.MustCompile(`^ses[A-Za-z0-9_-]{1,128}$`)
@@ -50,21 +51,42 @@ type historyExport struct {
 	Messages *[]historyMessage `json:"messages"`
 }
 
-// Exchanges exports a local session into a private temporary file and returns
-// its latest exchanges and completed compactions, oldest first. Reading is
-// cancelled with ctx and bounded by historyTimeout and historyBytes.
-func (a *Adapter) Exchanges(ctx context.Context, sessionID string, limit int) ([]hub.Exchange, error) {
-	if !sessionIDPattern.MatchString(sessionID) {
-		return nil, errors.New("invalid OpenCode session id")
-	}
+// Exchanges exports a local session and returns its latest exchanges and
+// completed compactions, oldest first. Reading is cancelled with ctx and
+// bounded by historyTimeout and historyBytes.
+func (a *Adapter) Exchanges(ctx context.Context, sessionID string, limit int) (xs []hub.Exchange, err error) {
 	if limit <= 0 {
 		return nil, nil
+	}
+	err = a.exported(ctx, sessionID, func(r io.Reader) error {
+		xs, err = readExchanges(r, sessionID, min(limit, hub.BackfillLimit))
+		return err
+	})
+	return xs, err
+}
+
+// Reply exports a local session and returns, in full, the latest message its
+// agent completed that ends with ends, empty when the session holds none.
+// Reading is bounded as it is for Exchanges.
+func (a *Adapter) Reply(ctx context.Context, sessionID, ends string) (said string, err error) {
+	err = a.exported(ctx, sessionID, func(r io.Reader) error {
+		said, err = readReply(r, sessionID, ends)
+		return err
+	})
+	return said, err
+}
+
+// exported exports a local session into a private temporary file and has
+// read read it. A read that ctx cut short fails with ctx's error.
+func (a *Adapter) exported(ctx context.Context, sessionID string, read func(io.Reader) error) error {
+	if !sessionIDPattern.MatchString(sessionID) {
+		return errors.New("invalid OpenCode session id")
 	}
 	ctx, cancel := context.WithTimeout(ctx, historyTimeout)
 	defer cancel()
 	f, err := os.CreateTemp("", "slorp-opencode-history-*.json")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer os.Remove(f.Name())
 	defer f.Close()
@@ -76,28 +98,28 @@ func (a *Adapter) Exchanges(ctx context.Context, sessionID string, limit int) ([
 	cmd.WaitDelay = 2 * time.Second
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
-			return nil, fmt.Errorf("OpenCode history: %w", ctx.Err())
+			return fmt.Errorf("OpenCode history: %w", ctx.Err())
 		}
-		return nil, fmt.Errorf("OpenCode export failed: %w: %s", err, strings.TrimSpace(string(stderr.data)))
+		return fmt.Errorf("OpenCode export failed: %w: %s", err, strings.TrimSpace(string(stderr.data)))
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return err
 	}
 	info, err := f.Stat()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if info.Size() > historyBytes {
-		return nil, errors.New("OpenCode export exceeds the 64 MiB history limit")
+		return errors.New("OpenCode export exceeds the 64 MiB history limit")
 	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return nil, err
+		return err
 	}
-	xs, err := readExchanges(&historyReader{ctx: ctx, Reader: f}, sessionID, min(limit, hub.BackfillLimit))
+	err = read(&historyReader{ctx: ctx, Reader: f})
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return ctx.Err()
 	}
-	return xs, err
+	return err
 }
 
 type historyReader struct {
@@ -119,7 +141,9 @@ func (b *diagnosticBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func readExchanges(r io.Reader, sessionID string, limit int) ([]hub.Exchange, error) {
+// readExport reads an export of the session sessionID and returns its
+// messages in transcript order, up to where the session was reverted to.
+func readExport(r io.Reader, sessionID string) ([]historyMessage, error) {
 	var export historyExport
 	d := json.NewDecoder(r)
 	if err := d.Decode(&export); err != nil {
@@ -138,6 +162,45 @@ func readExchanges(r io.Reader, sessionID string, limit int) ([]hub.Exchange, er
 			return nil, errors.New("OpenCode export is missing its revert boundary")
 		}
 		messages = messages[:at]
+	}
+	return messages, nil
+}
+
+// text returns what an assistant message says, its text parts a blank line
+// apart.
+func (m historyMessage) text() string {
+	var text []string
+	for _, content := range m.Content {
+		if content.Type == "text" {
+			if t := strings.TrimSpace(content.Text); t != "" {
+				text = append(text, t)
+			}
+		}
+	}
+	return strings.Join(text, "\n\n")
+}
+
+func readReply(r io.Reader, sessionID, ends string) (string, error) {
+	messages, err := readExport(r, sessionID)
+	if err != nil {
+		return "", err
+	}
+	var found string
+	for _, m := range messages {
+		if m.Type != "assistant" || m.ID == "" || m.Time.Created <= 0 || m.Time.Completed <= 0 {
+			continue
+		}
+		if said := m.text(); said != "" && strings.HasSuffix(said, ends) {
+			found = said
+		}
+	}
+	return found, nil
+}
+
+func readExchanges(r io.Reader, sessionID string, limit int) ([]hub.Exchange, error) {
+	messages, err := readExport(r, sessionID)
+	if err != nil {
+		return nil, err
 	}
 	var out []hub.Exchange
 	seen := map[string]bool{}
@@ -173,15 +236,7 @@ func readExchanges(r io.Reader, sessionID string, limit int) ([]hub.Exchange, er
 			if last < 0 || m.Time.Completed <= 0 {
 				continue
 			}
-			var text []string
-			for _, content := range m.Content {
-				if content.Type == "text" {
-					if t := strings.TrimSpace(content.Text); t != "" {
-						text = append(text, t)
-					}
-				}
-			}
-			if said := strings.Join(text, "\n\n"); said != "" {
+			if said := m.text(); said != "" {
 				out[last].Reply = clipped(said, historyReply, true)
 			}
 		case "compaction":

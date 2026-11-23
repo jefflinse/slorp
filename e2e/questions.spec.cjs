@@ -45,7 +45,7 @@ async function world(t, questions, ordered = true) {
   page.on('pageerror', error => errors.push(error.message))
   t.after(() => assert.deepEqual(errors, []))
   await page.goto(`http://127.0.0.1:${server.address().port}/#sessions`)
-  await page.getByRole('button', { name: 'Send answer', exact: true }).waitFor()
+  await page.getByRole('button', { name: 'Send Answer', exact: true }).waitFor()
   return { page, received }
 }
 
@@ -61,7 +61,7 @@ test('custom answers survive rerenders, and choosing a single option clears cust
   assert.equal(await input.inputValue(), 'SQLite')
   await page.getByRole('button', { name: /Postgres/ }).click()
   assert.equal(await input.inputValue(), '')
-  await page.getByRole('button', { name: 'Send answer', exact: true }).click()
+  await page.getByRole('button', { name: 'Send Answer', exact: true }).click()
   await page.waitForFunction(() => !document.querySelector('[data-act="liveAnswer"]'))
   assert.deepEqual(received, [{ selections: [['Postgres']] }])
 })
@@ -71,11 +71,11 @@ test('multi-select, comma labels, repeated questions and custom text reach the A
     { question: 'Choose', custom: true, multiSelect: true, options: [{ label: 'A, B' }, { label: 'C' }] },
     { question: 'Choose', custom: true, options: [] },
   ])
-  assert.equal(await page.getByRole('button', { name: 'Send answer', exact: true }).isDisabled(), true)
+  assert.equal(await page.getByRole('button', { name: 'Send Answer', exact: true }).isDisabled(), true)
   await page.getByRole('button', { name: /A, B/ }).click()
   await page.locator('[data-question-custom]').nth(0).fill('D')
   await page.locator('[data-question-custom]').nth(1).fill('my own answer')
-  await page.getByRole('button', { name: 'Send answer', exact: true }).click()
+  await page.getByRole('button', { name: 'Send Answer', exact: true }).click()
   await page.waitForFunction(() => !document.querySelector('[data-act="liveAnswer"]'))
   assert.deepEqual(received, [{ selections: [['A, B', 'D'], ['my own answer']] }])
 })
@@ -91,7 +91,7 @@ test('Claude question answers keep their existing wire format', async t => {
   const { page, received } = await world(t, [{ question: 'Which?', options: [{ label: 'Postgres' }] }], false)
   assert.equal(await page.locator('[data-question-custom]').count(), 0)
   await page.getByRole('button', { name: /Postgres/ }).click()
-  await page.getByRole('button', { name: 'Send answer', exact: true }).click()
+  await page.getByRole('button', { name: 'Send Answer', exact: true }).click()
   await page.waitForFunction(() => !document.querySelector('[data-act="liveAnswer"]'))
   assert.deepEqual(received, [{ answers: { 'Which?': ['Postgres'] } }])
 })

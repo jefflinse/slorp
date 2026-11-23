@@ -39,7 +39,8 @@ const discussRetry = 5 * time.Minute
 
 // PullRef names one pull request an integration listed, and Key what the
 // listing last said of it: a discussion or brief made under one key is out
-// of date under another. Wanted is true while the user is looking at it.
+// of date under another. For a brief the key also marks the times briefs
+// have been asked for again. Wanted is true while the user is looking at it.
 type PullRef struct {
 	Source string
 	Repo   string
@@ -126,7 +127,7 @@ func (h *Hub) discuss(p *PullRequest) {
 		return
 	}
 	p.ReadAt, p.Brief = d.ReadAt, d.Brief
-	p.Behind = d.Key != ref.Key || d.BriefKey != d.Key
+	p.Behind = d.Key != ref.Key || d.BriefKey != d.Key+h.rewritten(ActBrief)
 	p.Points = []PullPoint{}
 	open := false
 	for _, pt := range d.Discussion.Points(p.Mine) {
@@ -158,7 +159,7 @@ func raised(p PullRequest) []Item {
 		sum := sha1.Sum([]byte(ref.id() + "\x00" + pt.ID))
 		it := Item{ID: p.Source + "-" + hex.EncodeToString(sum[:6]), Kind: kind, Urgency: "blocking", Title: word + ": " + p.Title, Subtitle: pt.Gist,
 			Ask: cmp.Or(pt.Gist, pt.Who+" spoke last") + ".", Summary: fmt.Sprintf("%s#%d, %s. %s wrote: %s", p.Repo, p.Number, whose(p), pt.Who, pt.Text),
-			Replies: []string{}, At: pt.At, Source: p.Source, URL: cmp.Or(pt.URL, p.URL), Repo: p.Repo, Pull: p.Repo + "#" + strconv.Itoa(p.Number), Point: pt.ID,
+			Replies: []string{}, At: pt.At, Source: p.Source, URL: cmp.Or(pt.URL, p.URL), Repo: p.Repo, Pull: pullName(p.PullRequest), Point: pt.ID,
 			Effort: p.Effort, EffortVia: p.EffortVia}
 		if p.Mine {
 			it.Urgency = "awaiting"
@@ -254,8 +255,8 @@ func (h *Hub) Unbriefed() []Unbriefed {
 	var out []Unbriefed
 	for _, p := range h.ranked() {
 		ref := pullRef(p)
-		if d := h.discussed[ref.id()]; d != nil && d.BriefKey != d.Key {
-			ref.Key = d.Key
+		if d := h.discussed[ref.id()]; d != nil && d.BriefKey != d.Key+h.rewritten(ActBrief) {
+			ref.Key = d.Key + h.rewritten(ActBrief)
 			out = append(out, Unbriefed{Ref: ref, Pull: p, Discussion: d.Discussion, Points: d.Discussion.Points(p.Mine), Wanted: ref.id() == h.wantedPull})
 		}
 	}
@@ -263,12 +264,13 @@ func (h *Hub) Unbriefed() []Unbriefed {
 }
 
 // SetBrief records what the model wrote about the discussion read under
-// ref's key, unless it has been read again since.
+// ref's key, unless it has been read again since, or briefs have been
+// asked for again.
 func (h *Hub) SetBrief(ref PullRef, b PullBrief, sorts map[string]Sorted) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	d := h.discussed[ref.id()]
-	if d == nil || d.Key != ref.Key {
+	if d == nil || d.Key+h.rewritten(ActBrief) != ref.Key {
 		return
 	}
 	b.At = time.Now()

@@ -51,8 +51,8 @@ test('Settings installs the bundled plugin and explains automatic loading', asyn
 test('a local package offers companion setup without managed update or removal', async t => {
   const { card, calls } = await world(t, { installed: true, source: 'local', needsSetup: true, path: '/dev/slorp/plugin', version: '0.2.0' })
   assert.equal(await card.getByRole('button', { name: 'Uninstall', exact: true }).count(), 0)
-  await card.getByRole('button', { name: 'Finish setup' }).click()
-  await card.getByRole('button', { name: 'Finish setup' }).waitFor({ state: 'hidden' })
+  await card.getByRole('button', { name: 'Finish Setup' }).click()
+  await card.getByRole('button', { name: 'Finish Setup' }).waitFor({ state: 'hidden' })
   assert.deepEqual(calls, [['POST', '/api/plugins/opencode']])
 })
 

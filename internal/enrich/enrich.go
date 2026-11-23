@@ -13,10 +13,14 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jefflinse/slorp/internal/hub"
 	"github.com/jefflinse/slorp/internal/integrations"
@@ -101,6 +105,62 @@ type Startup struct {
 	URLGiven, ModelGiven bool
 }
 
+// ServerURL returns the address of a model server as the user wrote it, in
+// the form Slorp keeps: with a scheme, its path escaped as written, and
+// without the /v1 its API paths begin with, a query or a fragment. Empty
+// stays empty. It reports false for anything that is not an http or https
+// address.
+func ServerURL(s string) (string, bool) {
+	u, err := serverURL(s)
+	return u, err == nil
+}
+
+// serverURL is ServerURL, with what is wrong with an address it refuses. The
+// error never repeats the address, which may hold a password.
+func serverURL(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", nil
+	}
+	if !strings.Contains(s, "://") {
+		s = "http://" + s
+	}
+	u, err := url.Parse(s)
+	switch {
+	case err != nil:
+		return "", errors.New("is not a URL")
+	case u.Scheme != "http" && u.Scheme != "https":
+		return "", errors.New("must be an http or https address")
+	case u.User != nil:
+		return "", errors.New("must not hold a user name or password")
+	case u.Hostname() == "":
+		return "", errors.New("names no host")
+	}
+	if port := u.Port(); port != "" {
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+			return "", errors.New("has a port that is not one")
+		}
+	}
+	escaped := strings.TrimSuffix(strings.TrimRight(u.EscapedPath(), "/"), "/v1")
+	path, err := url.PathUnescape(escaped)
+	if err != nil {
+		return "", errors.New("has a path that is not escaped properly")
+	}
+	kept := url.URL{Scheme: u.Scheme, Host: u.Host, Path: path, RawPath: escaped}
+	return kept.String(), nil
+}
+
+// Checked returns s with its server address in the form ServerURL gives,
+// or an error saying what is wrong with it, without repeating it.
+func (s Startup) Checked() (Startup, error) {
+	u, err := serverURL(s.URL)
+	if err != nil {
+		return s, fmt.Errorf("the model server's address %w", err)
+	}
+	s.URL = u
+	return s, nil
+}
+
 // Config returns what to use under the user's settings m. What was given
 // outright at startup stands whatever m says; otherwise m decides, and
 // what it leaves empty falls back to what Slorp was started with.
@@ -118,7 +178,72 @@ func (s Startup) Config(m hub.ModelSettings) Config {
 	return c
 }
 
-var defaultClient = &http.Client{Timeout: 3 * time.Minute}
+var defaultClient = &http.Client{Timeout: 3 * time.Minute, CheckRedirect: sameServer}
+
+// sameServer follows a redirect only to the origin the request was first
+// sent to, so nothing sent to the model server goes anywhere else.
+func sameServer(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("the model server redirected too many times")
+	}
+	if !sameOrigin(via[0].URL, req.URL) {
+		return fmt.Errorf("the model server redirected to %s://%s, which is not it", req.URL.Scheme, req.URL.Host)
+	}
+	return nil
+}
+
+// sameOrigin reports whether a and b have one scheme, host and port: the
+// scheme and an all-ASCII host name in any case, a port said or implied by
+// the scheme, and an IP address however it is written, its zone exactly.
+// A host name with anything else in it must be spelled the same in both.
+func sameOrigin(a, b *url.URL) bool {
+	return asciiLower(a.Scheme) == asciiLower(b.Scheme) && sameHost(a.Hostname(), b.Hostname()) && port(a) == port(b)
+}
+
+// sameHost reports whether hosts a and b, as URL.Hostname gives them, are
+// surely one host.
+func sameHost(a, b string) bool {
+	x, errA := netip.ParseAddr(a)
+	y, errB := netip.ParseAddr(b)
+	switch {
+	case errA == nil || errB == nil:
+		return errA == nil && errB == nil && x == y
+	case isASCII(a) && isASCII(b):
+		return asciiLower(a) == asciiLower(b)
+	}
+	return a == b
+}
+
+func isASCII(s string) bool {
+	for i := range len(s) {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
+// asciiLower returns s with only its ASCII letters lowered.
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
+}
+
+// port is the port u is reached on, said or implied by its scheme.
+func port(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return strings.TrimLeft(p, "0")
+	}
+	if asciiLower(u.Scheme) == "https" {
+		return "443"
+	}
+	return "80"
+}
 
 func (e *Enricher) http() *http.Client {
 	if e.client != nil {
@@ -144,10 +269,10 @@ func (e *Enricher) Run(ctx context.Context) {
 }
 
 // step does one piece of work if there is one, and tells the hub which model
-// is there to do it and what it is on while it works: before each piece,
-// every idleCheck while there is none, and at once when the user's settings
-// change which to use. With a model and nothing to do, it has the journal ask
-// for a day it is missing.
+// is there to do it, what it is on while it works, and what came of it:
+// before each piece, every idleCheck while there is none, and at once when
+// the user's settings change which to use. With a model and nothing to do, it
+// has the journal ask for a day it is missing.
 func (e *Enricher) step(ctx context.Context) {
 	if e.Resolve != nil {
 		if cfg := e.Resolve(e.Hub.Settings().Model); cfg != e.cfg || e.checked.IsZero() {
@@ -163,8 +288,8 @@ func (e *Enricher) step(ctx context.Context) {
 		e.Hub.SetSummarizer(said)
 		return
 	}
-	key, what, job := e.next()
-	if job == nil && time.Since(e.checked) < idleCheck {
+	key, what, work := e.next()
+	if work == nil && time.Since(e.checked) < idleCheck {
 		return
 	}
 	model, err := e.model(ctx)
@@ -175,7 +300,7 @@ func (e *Enricher) step(ctx context.Context) {
 		return
 	}
 	said.Model = model
-	if job == nil {
+	if work == nil {
 		e.Hub.SetSummarizer(said)
 		if time.Since(e.missed) >= missedCheck {
 			e.missed = time.Now()
@@ -185,16 +310,21 @@ func (e *Enricher) step(ctx context.Context) {
 	}
 	said.Doing = what
 	e.Hub.SetSummarizer(said)
-	err = job(ctx, model)
+	did := work.about
+	did.At, did.Model = time.Now(), model
+	err = work.do(ctx, model, &did)
+	did.Millis = time.Since(did.At).Milliseconds()
 	said.Doing = ""
 	e.Hub.SetSummarizer(said)
 	switch {
 	case err == nil:
 		delete(e.retries, key)
+	// Work cut short because Slorp is stopping is not the model's doing.
 	case ctx.Err() != nil:
 		return
 	case key == "":
 		log.Printf("enrich: %s: %v", what, err)
+		did.Outcome, did.Error = "", err.Error()
 	default:
 		if e.retries == nil {
 			e.retries = map[string]retry{}
@@ -202,7 +332,26 @@ func (e *Enricher) step(ctx context.Context) {
 		wait := min(maxRetryAfter, max(retryAfter, 2*e.retries[key].wait))
 		e.retries[key] = retry{readyAt: time.Now().Add(wait), wait: wait}
 		log.Printf("enrich: %s: %v (retry delay %s)", what, err, wait)
+		did.Outcome, did.Error = "", err.Error()
 	}
+	e.Hub.Acted(did)
+}
+
+// job is one piece of work for the model. about says what kind it is and
+// what it is about, and do does it, adding to did what came of it and
+// anything more that turned out to be about.
+type job struct {
+	about hub.Action
+	do    func(ctx context.Context, model string, did *hub.Action) error
+}
+
+// of names sessions as an action is about them.
+func of(sessions ...hub.Session) []hub.Named {
+	var out []hub.Named
+	for _, s := range sessions {
+		out = append(out, hub.Named{ID: s.ID, Name: s.Label})
+	}
+	return out
 }
 
 // next picks one piece of work: what the user asked for comes first, a day
@@ -210,90 +359,125 @@ func (e *Enricher) step(ctx context.Context) {
 // request they are looking at; then describing a session, filing it under
 // an effort, guessing its role, rewriting an effort's note, and briefing
 // the other pull requests. Jobs with an empty key are tried once per request.
-func (e *Enricher) next() (key, what string, job func(context.Context, string) error) {
+func (e *Enricher) next() (key, what string, work *job) {
 	now := time.Now()
 	ready := func(key string) bool { return !now.Before(e.retries[key].readyAt) }
 	briefs := e.Hub.Unbriefed()
-	briefing := func(wanted bool) (key, what string, job func(context.Context, string) error) {
+	briefing := func(wanted bool) (key, what string, work *job) {
 		for _, w := range briefs {
 			name := w.Ref.Repo + "#" + strconv.Itoa(w.Ref.Number)
 			if k := "brief:" + w.Ref.Source + ":" + name + ":" + w.Ref.Key; w.Wanted == wanted && ready(k) {
-				return k, "brief " + name, func(ctx context.Context, model string) error {
+				about := hub.Action{Kind: hub.ActBrief, Pulls: []hub.WrapupPull{{Key: name, Title: w.Pull.Title, URL: w.Pull.URL}}}
+				return k, "brief " + name, &job{about, func(ctx context.Context, model string, did *hub.Action) error {
 					b, sorts, err := e.brief(ctx, model, w)
 					if err == nil {
 						e.Hub.SetBrief(w.Ref, b, sorts)
 					}
+					did.Outcome = cmp.Or(b.Next, b.Stands)
 					return err
-				}
+				}}
 			}
 		}
 		return "", "", nil
 	}
 	for _, w := range e.Hub.Unwrapped() {
-		return "", "wrap up " + w.Day.Format("2 January"), func(ctx context.Context, model string) error {
+		about := hub.Action{Kind: hub.ActWrapup, Day: w.Day.Format(time.DateOnly)}
+		for _, ef := range w.Efforts {
+			// By ID alone, which leaves out the one that sessions filed
+			// nowhere come under.
+			about.Efforts = append(about.Efforts, hub.Named{ID: ef.ID})
+			for _, s := range ef.Sessions {
+				about.Sessions = append(about.Sessions, hub.Named{ID: s.ID, Name: s.Label})
+				if p := s.Pull; p != nil && !slices.Contains(about.Pulls, *p) {
+					about.Pulls = append(about.Pulls, *p)
+				}
+			}
+		}
+		return "", "wrap up " + w.Day.Format("2 January"), &job{about, func(ctx context.Context, model string, did *hub.Action) error {
 			headline, efforts, tags, err := e.wrapup(ctx, model, w)
 			failure := ""
 			if err != nil {
 				failure = "The local model could not write it: " + err.Error()
 			}
 			e.Hub.SetWrapup(w, headline, efforts, tags, failure)
+			did.Outcome = headline
 			return err
-		}
+		}}
 	}
 	for _, u := range e.Hub.Unfilled() {
-		return "", "fill in " + u.Label, func(ctx context.Context, model string) error {
+		about := hub.Action{Kind: hub.ActBackfill, Sessions: []hub.Named{{ID: u.SessionID, Name: u.Label}}}
+		return "", "fill in " + u.Label, &job{about, func(ctx context.Context, model string, did *hub.Action) error {
 			lines, err := e.backfill(ctx, model, u)
 			// Exchanges the model could not be asked about are left as they
 			// are, for the user to ask again.
 			e.Hub.SetFilled(u, lines)
+			did.Outcome = fmt.Sprintf("Said how %d of %d earlier exchanges came out", len(lines), len(u.Exchanges))
 			return err
-		}
+		}}
 	}
-	if key, what, job := briefing(true); job != nil {
-		return key, what, job
+	if key, what, work := briefing(true); work != nil {
+		return key, what, work
 	}
 	for _, w := range e.Hub.Undescribed() {
 		if ready(w.Key) {
-			return w.Key, "describe " + w.Session.Name, func(ctx context.Context, model string) error {
+			about := hub.Action{Kind: hub.ActDescribe, Sessions: of(w.Session)}
+			return w.Key, "describe " + w.Session.Name, &job{about, func(ctx context.Context, model string, did *hub.Action) error {
 				in, err := e.describe(ctx, model, w)
 				if err == nil {
 					e.Hub.SetInsight(w.Session.ID, w.Key, in)
 				}
+				did.Outcome, did.Lookups = in.Title, in.Lookups
 				return err
-			}
+			}}
 		}
 	}
 	for _, w := range e.Hub.Unrouted() {
 		if k := "route:" + w.Session.ID + w.Key; ready(k) {
-			return k, "file " + w.Session.Name, func(ctx context.Context, model string) error {
+			about := hub.Action{Kind: hub.ActFile, Sessions: of(w.Session)}
+			return k, "file " + w.Session.Name, &job{about, func(ctx context.Context, model string, did *hub.Action) error {
 				id, err := e.route(ctx, model, w)
 				if err == nil {
 					e.Hub.SetGuess(w.Session.ID, w.Key, id)
 				}
+				did.Outcome = "Left it unsorted"
+				for _, ef := range w.Efforts {
+					if ef.ID == id {
+						did.Outcome, did.Efforts = "Filed it under "+ef.Name, []hub.Named{{ID: ef.ID, Name: ef.Name}}
+					}
+				}
 				return err
-			}
+			}}
 		}
 	}
 	for _, w := range e.Hub.Unroled() {
 		if k := "role:" + w.Session.ID + w.Key; ready(k) {
-			return k, "role " + w.Session.Name, func(ctx context.Context, model string) error {
+			about := hub.Action{Kind: hub.ActRole, Sessions: of(w.Session)}
+			return k, "role " + w.Session.Name, &job{about, func(ctx context.Context, model string, did *hub.Action) error {
 				id, err := e.role(ctx, model, w)
 				if err == nil {
 					e.Hub.SetRoleGuess(w.Session.ID, w.Key, id)
 				}
+				did.Outcome = "Guessed no role"
+				for _, r := range w.Roles {
+					if r.ID == id {
+						did.Outcome = "Guessed the role " + r.Name
+					}
+				}
 				return err
-			}
+			}}
 		}
 	}
 	for _, w := range e.Hub.Unnoted() {
 		if k := "note:" + w.Key; ready(k) {
-			return k, "note " + w.Effort.Name, func(ctx context.Context, model string) error {
+			about := hub.Action{Kind: hub.ActNote, Efforts: []hub.Named{{ID: w.Effort.ID, Name: w.Effort.Name}}, Sessions: of(w.Members...)}
+			return k, "note " + w.Effort.Name, &job{about, func(ctx context.Context, model string, did *hub.Action) error {
 				n, err := e.note(ctx, model, w)
 				if err == nil {
 					e.Hub.SetNote(w.Effort.ID, w.Key, n)
 				}
+				did.Outcome = n.Line
 				return err
-			}
+			}}
 		}
 	}
 	return briefing(false)
@@ -320,7 +504,7 @@ func (e *Enricher) route(ctx context.Context, model string, w hub.Unrouted) (str
 	var out struct {
 		Effort string `json:"effort"`
 	}
-	if err := e.ask(ctx, model, routeSystem, b.String(), "filing", schema, &out); err != nil {
+	if err := e.ask(ctx, model, hub.ActFile, b.String(), "filing", schema, &out); err != nil {
 		return "", err
 	}
 	for _, ef := range w.Efforts {
@@ -351,7 +535,7 @@ func (e *Enricher) role(ctx context.Context, model string, w hub.Unroled) (strin
 	var out struct {
 		Kind string `json:"kind"`
 	}
-	if err := e.ask(ctx, model, roleSystem, b.String(), "role", schema, &out); err != nil {
+	if err := e.ask(ctx, model, hub.ActRole, b.String(), "role", schema, &out); err != nil {
 		return "", err
 	}
 	for _, r := range w.Roles {
@@ -381,7 +565,7 @@ func (e *Enricher) note(ctx context.Context, model string, w hub.Unnoted) (hub.N
 	knowing(&b, "Questions the developer has left open about this effort; mention one only if the sessions now depend on it:", w.Questions)
 	knowing(&b, "What the developer wants you to keep in mind:", w.Context)
 	var n hub.Note
-	err := e.ask(ctx, model, noteSystem, b.String(), "note", noteSchema, &n)
+	err := e.ask(ctx, model, hub.ActNote, b.String(), "note", noteSchema, &n)
 	n.Line = strings.TrimSuffix(strings.TrimSpace(n.Line), ".")
 	return n, err
 }
@@ -462,15 +646,17 @@ func (l listing) pick() (string, error) {
 // Probe tries a local model server: whether it answers, what it offers, and
 // whether the model that would be used replies to a one-word message. It
 // tries the server and model in use, or with m those m would have Slorp
-// use. Nothing of any session is sent.
+// use. Nothing of any session is sent. It may be called while Run runs.
 func (e *Enricher) Probe(ctx context.Context, m *hub.ModelSettings) hub.ModelCheck {
-	cfg := Config{URL: e.BaseURL, Model: e.Model}
+	var cfg Config
 	if e.Resolve != nil {
 		at := e.Hub.Settings().Model
 		if m != nil {
 			at = *m
 		}
 		cfg = e.Resolve(at)
+	} else {
+		cfg = Config{URL: e.BaseURL, Model: e.Model}
 	}
 	check := hub.ModelCheck{URL: cfg.URL, Models: []string{}}
 	if cfg.URL == "" {
@@ -573,7 +759,7 @@ func (e *Enricher) lookUp(ctx context.Context, model string, s hub.Session, exch
 	}
 	msg, err := e.chat(ctx, e.BaseURL, map[string]any{
 		"model": model, "temperature": 0, "max_tokens": maxTokens, "reasoning_effort": "none",
-		"messages": []map[string]string{{"role": "system", "content": planSystem}, {"role": "user", "content": exchange + "\n\n" + strings.Join(notes, "\n")}},
+		"messages": []map[string]string{{"role": "system", "content": e.instructions(hub.PromptLookup)}, {"role": "user", "content": exchange + "\n\n" + strings.Join(notes, "\n")}},
 		"tools":    defs,
 	})
 	if err != nil {
@@ -627,7 +813,7 @@ func (e *Enricher) describe(ctx context.Context, model string, w hub.Undescribed
 
 	knowing(&b, "What the developer wants you to keep in mind, as background rather than about this session in particular:", w.Context)
 	var in hub.Insight
-	if err := e.ask(ctx, model, system, b.String(), "insight", schema, &in); err != nil {
+	if err := e.ask(ctx, model, hub.ActDescribe, b.String(), "insight", schema, &in); err != nil {
 		return hub.Insight{}, err
 	}
 	in.Lookups = lookups
@@ -646,15 +832,15 @@ func (e *Enricher) describe(ctx context.Context, model string, w hub.Undescribed
 	return in, nil
 }
 
-// ask sends one system and user message and decodes the reply, which the
-// server constrains to schema, into out.
-func (e *Enricher) ask(ctx context.Context, model, system, user, name string, schema json.RawMessage, out any) error {
+// ask sends the instructions for task and one user message, and decodes the
+// reply, which the server constrains to schema, into out.
+func (e *Enricher) ask(ctx context.Context, model, task, user, name string, schema json.RawMessage, out any) error {
 	msg, err := e.chat(ctx, e.BaseURL, map[string]any{
 		"model": model, "temperature": 0.2, "max_tokens": maxTokens,
 		// These tasks need no deliberation; servers and models that cannot
 		// turn reasoning off ignore this.
 		"reasoning_effort": "none",
-		"messages":         []map[string]string{{"role": "system", "content": system}, {"role": "user", "content": user}},
+		"messages":         []map[string]string{{"role": "system", "content": e.instructions(task)}, {"role": "user", "content": user}},
 		"response_format":  map[string]any{"type": "json_schema", "json_schema": map[string]any{"name": name, "strict": true, "schema": schema}},
 	})
 	if err != nil {
@@ -684,8 +870,14 @@ type message struct {
 // chat sends one chat completion request to the server at base and returns
 // the model's message.
 func (e *Enricher) chat(ctx context.Context, base string, request map[string]any) (message, error) {
-	body, _ := json.Marshal(request)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/chat/completions", bytes.NewReader(body))
+	body, err := json.Marshal(request)
+	if err != nil {
+		return message{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return message{}, err
+	}
 	req.Header.Set("Content-Type", "application/json")
 	res, err := e.http().Do(req)
 	if err != nil {
@@ -711,7 +903,10 @@ func (e *Enricher) chat(ctx context.Context, base string, request map[string]any
 }
 
 func (e *Enricher) get(ctx context.Context, base, path string, v any) error {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
+	if err != nil {
+		return err
+	}
 	res, err := e.http().Do(req)
 	if err != nil {
 		return err

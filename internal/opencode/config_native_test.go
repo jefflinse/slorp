@@ -24,12 +24,7 @@ func configNativeFixture(t *testing.T) *Adapter {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, entry := range os.Environ() {
-		key, _, _ := strings.Cut(entry, "=")
-		if key != "PATH" && key != "TMPDIR" {
-			t.Setenv(key, "")
-		}
-	}
+	clearEnv(t)
 	t.Setenv("TMPDIR", t.TempDir())
 	a := fixture(t)
 	a.Bin = bin

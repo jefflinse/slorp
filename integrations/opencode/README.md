@@ -46,11 +46,11 @@ The standard OpenCode V2 TUI is supported. The distinct Mini interface is not co
 
 ## Start, stop and reopen
 
-Choose **New session** from Sessions or an effort, select **OpenCode**, and enter a directory. Slorp loads that directory's available root agents, connected provider/models, and reasoning variants. Default choices follow native configuration and recent-model selection. The OpenCode agent is separate from the Slorp role; the reasoning variant is separate from the effort where the conversation is filed.
+Choose **New Session** from Sessions or an effort, select **OpenCode**, and enter a directory. Slorp loads that directory's available root agents, connected provider/models, and reasoning variants. Default choices follow native configuration and recent-model selection. The OpenCode agent is separate from the Slorp role; the reasoning variant is separate from the effort where the conversation is filed.
 
 Each launch runs a private, authenticated loopback OpenCode server with Slorp's bundled bridge. It remains available for replies and permissions while idle. **Stop** interrupts its work and closes that owned runtime while retaining the native conversation and Slorp record. Terminal-owned sessions are not stoppable from Slorp. Managed runtimes close when Slorp exits, including parent-process loss; conversations can be reopened afterwards.
 
-Reopen a closed session with an optional prompt. Leaving the prompt empty restores an idle, replyable conversation without adding a turn. The session keeps its native ID, selected agent/model/variant, effort, role, timeline and subagent reports. **Copy resume command** uses the configured OpenCode executable and quotes the directory and session ID for a shell.
+Reopen a closed session with an optional prompt. Leaving the prompt empty restores an idle, replyable conversation without adding a turn. The session keeps its native ID, selected agent/model/variant, effort, role, timeline and subagent reports. **Copy Resume Command** uses the configured OpenCode executable and quotes the directory and session ID for a shell.
 
 The bridge is activated only for the managed conversation and its descendants. Late requests from a stopped runtime cannot reopen it or consume the replacement runtime's replies. Starting and reopening use durable request IDs: retries of the same operation do not create another conversation or submit the prompt twice. If a response is uncertain, the page offers the retained conversation for inspection. Preparing another attempt is explicit, since a previous prompt may already have run.
 
@@ -74,7 +74,7 @@ Update the plugin in Settings and reload it in OpenCode if the running bridge ha
 
 ## Earlier history
 
-Open a live session's page and choose **Fill in earlier history** beside its timeline. A local model must be available to summarize the exchanges. Slorp reads the native OpenCode V2 transcript, retains the latest forty exchanges/compaction markers, and queues answered exchanges for the existing summarizer. This happens only when requested. Re-reading keeps existing summaries and distinct repeated prompts.
+Open a live session's page and choose **Fill In Earlier History** beside its timeline. A local model must be available to summarize the exchanges. Slorp reads the native OpenCode V2 transcript, retains the latest forty exchanges/compaction markers, and queues answered exchanges for the existing summarizer. This happens only when requested. Re-reading keeps existing summaries and distinct repeated prompts.
 
 History export has a thirty-second timeout and a 64 MiB parsing limit. Export failures leave the timeline intact and appear on the page. This reads local history; conversations stored only on a remote OpenCode server are not supported. Closed-session history backfill is not yet exposed.
 

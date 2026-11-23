@@ -69,7 +69,7 @@ async function world(t, { archived = false, children } = {}) {
   o.lane = id => page.locator('.lane').filter({ has: page.locator('.t', { hasText: subagents.find(a => a.id === id).description }) })
   o.refresh = () => page.evaluate(() => refresh(true))
   o.text = text => page.locator('.subdoc').getByText(text, { exact: true }).waitFor()
-  o.retry = () => page.getByRole('button', { name: 'Retry loading report', exact: true })
+  o.retry = () => page.getByRole('button', { name: 'Retry Loading Report', exact: true })
   return o
 }
 
@@ -84,8 +84,8 @@ test('OpenCode nested children reuse lanes, parent context, usage, timing and la
   assert.match(await o.page.locator('.tabbody > p').innerText(), /270 tokens.*400 in the conversation itself/)
   await nested.click()
   await o.text('Report for nested')
-  await o.text('What it was asked')
-  await o.text('What it reported')
+  await o.text('What It Was Asked')
+  await o.text('What It Reported')
   assert.deepEqual(o.requests.map(r => r.id), ['nested'])
   await nested.click()
   await nested.click()
@@ -119,7 +119,7 @@ test('lifecycle and activity changes invalidate cached reports even without a re
   await o.refresh()
   o.reply = () => ({ body: { prompt: 'Review', report: 'Work in progress', handed: false } })
   await o.lane('child').click()
-  await o.text('The last thing it has said')
+  await o.text('The Last Thing It Has Said')
   for (const [field, value, text] of [
     ['status', 'idle', 'Idle update'],
     ['done', true, 'Final reply'],

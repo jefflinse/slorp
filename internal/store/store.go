@@ -30,6 +30,9 @@ func Open(path string) (*Store, error) {
 		kind TEXT NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL,
 		updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		PRIMARY KEY (kind, id))`)
+	if err == nil {
+		_, err = db.Exec(`CREATE INDEX IF NOT EXISTS docs_kind ON docs (kind)`)
+	}
 	if err != nil {
 		db.Close()
 		return nil, err
@@ -63,21 +66,60 @@ func (s *Store) Get(kind, id string, v any) (bool, error) {
 	return true, json.Unmarshal([]byte(body), v)
 }
 
-// Each calls fn with every document of a kind, oldest first.
+// eachPage is how many documents Each reads before it calls back, and
+// eachQuery how it reads them: docs_kind orders a kind's documents by rowid,
+// so each page is a seek rather than a sort.
+const (
+	eachPage  = 128
+	eachQuery = `SELECT rowid, id, body FROM docs WHERE kind = ? AND rowid > ? AND rowid <= ? ORDER BY rowid LIMIT ?`
+)
+
+// Each calls fn with the documents of a kind, oldest first, read a page at a
+// time up to the highest rowid the kind had when Each was called. The store
+// holds no connection while fn runs, so fn may use the store and take other
+// locks whose holders are waiting on it. Each is bounded but not a snapshot:
+// a document is seen as it is when its page is read, one deleted before then
+// is not seen, and one added since is seen only if it reuses a rowid within
+// the bound.
 func (s *Store) Each(kind string, fn func(id string, body []byte)) error {
-	rows, err := s.db.Query(`SELECT id, body FROM docs WHERE kind = ? ORDER BY rowid`, kind)
-	if err != nil {
+	type doc struct {
+		id   string
+		body []byte
+	}
+	var after, last int64
+	if err := s.db.QueryRow(`SELECT COALESCE(MAX(rowid), 0) FROM docs WHERE kind = ?`, kind).Scan(&last); err != nil {
 		return err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var id, body string
-		if err := rows.Scan(&id, &body); err != nil {
+	for after < last {
+		page := make([]doc, 0, eachPage)
+		err := func() error {
+			rows, err := s.db.Query(eachQuery, kind, after, last, eachPage)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var d doc
+				var body string
+				if err := rows.Scan(&after, &d.id, &body); err != nil {
+					return err
+				}
+				d.body = []byte(body)
+				page = append(page, d)
+			}
+			return rows.Err()
+		}()
+		if err != nil {
 			return err
 		}
-		fn(id, []byte(body))
+		for _, d := range page {
+			fn(d.id, d.body)
+		}
+		if len(page) < eachPage {
+			return nil
+		}
 	}
-	return rows.Err()
+	return nil
 }
 
 func (s *Store) Delete(kind, id string) error {

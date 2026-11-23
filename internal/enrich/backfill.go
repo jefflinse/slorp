@@ -43,7 +43,7 @@ func (e *Enricher) backfill(ctx context.Context, model string, u hub.Unfilled) (
 			Summary string `json:"summary"`
 		} `json:"entries"`
 	}
-	if err := e.ask(ctx, model, backfillSystem, b.String(), "backfill", backfillSchema, &out); err != nil {
+	if err := e.ask(ctx, model, hub.ActBackfill, b.String(), "backfill", backfillSchema, &out); err != nil {
 		return nil, err
 	}
 	var lines []hub.Filled

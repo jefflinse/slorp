@@ -1,6 +1,9 @@
 package kb_test
 
 import (
+	"errors"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/jefflinse/slorp/internal/kb"
@@ -294,7 +297,6 @@ func TestMergeMovesEverythingAcross(t *testing.T) {
 	must(t, k.Assign("s2", c))
 	must(t, k.AssignRepo("Org/Repo", a))
 	must(t, k.Add(kb.SectionQuestions, kb.Entry{Text: "about a?", Effort: a}))
-	must(t, k.Add(kb.SectionWatch, kb.Entry{Type: "channel", Name: "#a", Effort: a}))
 	revision := k.Revision()
 
 	must(t, k.Merge(a, b))
@@ -319,8 +321,8 @@ func TestMergeMovesEverythingAcross(t *testing.T) {
 			t.Error("merging two efforts moved what was filed under a third")
 		}
 		know := k.Knowledge()
-		if know.Questions[0].Effort != b || len(know.Watch[0].Efforts) != 1 || know.Watch[0].Efforts[0] != b {
-			t.Errorf("questions and watch entries were not moved: %+v, %+v", know.Questions, know.Watch)
+		if know.Questions[0].Effort != b {
+			t.Errorf("questions were not moved: %+v", know.Questions)
 		}
 	}
 	check(k)
@@ -340,7 +342,6 @@ func TestDeleteForgetsTheEffortEverywhere(t *testing.T) {
 	must(t, k.Assign("s1", a))
 	must(t, k.Assign("s2", b))
 	must(t, k.Add(kb.SectionQuestions, kb.Entry{Text: "about a?", Effort: a}))
-	must(t, k.Add(kb.SectionWatch, kb.Entry{Type: "channel", Name: "#a", Effort: a}))
 
 	must(t, k.Delete(a))
 
@@ -353,9 +354,6 @@ func TestDeleteForgetsTheEffortEverywhere(t *testing.T) {
 	know := k.Knowledge()
 	if know.Questions[0].Effort != "" || know.Questions[0].Text != "about a?" {
 		t.Errorf("question should outlive its effort, unfiled: %+v", know.Questions[0])
-	}
-	if len(know.Watch[0].Efforts) != 0 {
-		t.Errorf("watch entry still names the deleted effort: %+v", know.Watch[0])
 	}
 	if err := k.Delete(a); err == nil {
 		t.Error("deleting an unknown effort reported success")
@@ -384,7 +382,6 @@ func TestRevisionsTrackWhatTheModelReads(t *testing.T) {
 		{"routing hint", func() { must(t, k.Add(kb.SectionRouting, kb.Entry{Text: "hint"})) }, true, false},
 		{"standing context", func() { must(t, k.Add(kb.SectionContext, kb.Entry{Text: "fact"})) }, false, true},
 		{"open question", func() { must(t, k.Add(kb.SectionQuestions, kb.Entry{Text: "q", Effort: a})) }, false, false},
-		{"watch entry", func() { must(t, k.Add(kb.SectionWatch, kb.Entry{Type: "dm", Name: "x"})) }, false, false},
 		{"file a session", func() { must(t, k.Assign("s", a)) }, false, false},
 		{"directory rule", func() { must(t, k.AddDir(a, "/w")) }, false, false},
 		{"drop directory rule", func() { must(t, k.RemoveDir(a, "/w")) }, false, false},
@@ -419,8 +416,6 @@ func TestAddValidates(t *testing.T) {
 		{"unknown section", "nonsense", kb.Entry{Text: "x"}},
 		{"blank fact", kb.SectionContext, kb.Entry{Text: "  "}},
 		{"blank question", kb.SectionQuestions, kb.Entry{}},
-		{"watch without a name", kb.SectionWatch, kb.Entry{Type: "person"}},
-		{"watch of an unknown type", kb.SectionWatch, kb.Entry{Type: "robot", Name: "x"}},
 		{"question for an unknown effort", kb.SectionQuestions, kb.Entry{Text: "x", Effort: "nope"}},
 	}
 	for _, tt := range bad {
@@ -429,7 +424,7 @@ func TestAddValidates(t *testing.T) {
 		}
 	}
 	know := k.Knowledge()
-	if n := len(know.Watch) + len(know.Questions) + len(know.Context) + len(know.Routing); n != 0 {
+	if n := len(know.Questions) + len(know.Context) + len(know.Routing); n != 0 {
 		t.Errorf("%d rejected entries were stored", n)
 	}
 }
@@ -509,7 +504,7 @@ func TestResolveRepo(t *testing.T) {
 
 	must(t, k.AssignRepo("Acme/Widgets", a))
 	for _, name := range []string{"acme/widgets", "ACME/Widgets"} {
-		if got, via, ok := k.ResolveRepo(name, []string{"/work/b"}); got != a || via != kb.ViaUser || !ok {
+		if got, via, ok := k.ResolveRepo(name, []string{"/work/b"}); got != a || via != kb.ViaRepo || !ok {
 			t.Errorf("%s after the user filed it: %q, %q, %v; want their choice over the directory rule, whatever the case", name, got, via, ok)
 		}
 	}
@@ -521,7 +516,7 @@ func TestResolveRepo(t *testing.T) {
 	}
 
 	must(t, k.AssignRepo("acme/widgets", ""))
-	if got, via, ok := k.ResolveRepo("acme/widgets", []string{"/work/b"}); got != "" || via != kb.ViaUser || !ok {
+	if got, via, ok := k.ResolveRepo("acme/widgets", []string{"/work/b"}); got != "" || via != kb.ViaRepo || !ok {
 		t.Errorf("after the user left it unsorted: %q, %q, %v; want unsorted to hold against the rule", got, via, ok)
 	}
 
@@ -544,7 +539,81 @@ func TestRepoFilingSurvivesReopen(t *testing.T) {
 	k := testdb.KB(t, st)
 	id := create(t, k, "A")
 	must(t, k.AssignRepo("acme/widgets", id))
-	if got, via, ok := testdb.KB(t, st).ResolveRepo("acme/widgets", nil); got != id || via != kb.ViaUser || !ok {
+	if got, via, ok := testdb.KB(t, st).ResolveRepo("acme/widgets", nil); got != id || via != kb.ViaRepo || !ok {
+		t.Errorf("after reopening: %q, %q, %v", got, via, ok)
+	}
+}
+
+func TestResolvePull(t *testing.T) {
+	k := open(t)
+	a, b, c := create(t, k, "A"), create(t, k, "B"), create(t, k, "C")
+	must(t, k.AddDir(c, "/work/c"))
+	held := []string{"/work/c"}
+	resolve := func(pull string) [2]string {
+		id, via, ok := k.ResolvePull(pull, held)
+		if !ok {
+			return [2]string{}
+		}
+		return [2]string{id, via}
+	}
+
+	if got := resolve("acme/widgets#7"); got != [2]string{c, kb.ViaDir} {
+		t.Errorf("before anything is filed: %v, want the directory rule for its repository", got)
+	}
+	must(t, k.AssignRepo("acme/widgets", a))
+	if got := resolve("acme/widgets#7"); got != [2]string{a, kb.ViaRepo} {
+		t.Errorf("after its repository was filed: %v, want it to go with the repository", got)
+	}
+
+	must(t, k.AssignPull("Acme/Widgets#7", b))
+	for _, name := range []string{"acme/widgets#7", "ACME/Widgets#7"} {
+		if got := resolve(name); got != [2]string{b, kb.ViaUser} {
+			t.Errorf("%s after the user filed it: %v, want their choice over its repository's, whatever the case", name, got)
+		}
+	}
+	if got := resolve("acme/widgets#70"); got != [2]string{a, kb.ViaRepo} {
+		t.Errorf("another pull request of the repository: %v, want it left with the repository", got)
+	}
+	if got, via, _ := k.ResolveRepo("acme/widgets", held); got != a || via != kb.ViaRepo {
+		t.Errorf("the repository after one of its pull requests was filed: %q, %q; want it where it was", got, via)
+	}
+
+	must(t, k.AssignRepo("acme/widgets", c))
+	if got := resolve("acme/widgets#7"); got != [2]string{b, kb.ViaUser} {
+		t.Errorf("after its repository was filed elsewhere: %v, want its own filing to hold", got)
+	}
+	must(t, k.AssignPull("acme/widgets#7", ""))
+	if got := resolve("acme/widgets#7"); got != [2]string{"", kb.ViaUser} {
+		t.Errorf("after the user left it unsorted: %v, want unsorted to hold against its repository", got)
+	}
+
+	must(t, k.AssignPull("acme/widgets#7", b))
+	must(t, k.Delete(b))
+	if got := resolve("acme/widgets#7"); got != [2]string{c, kb.ViaRepo} {
+		t.Errorf("after its effort was deleted: %v, want it with its repository again", got)
+	}
+	must(t, k.AssignPull("acme/widgets#7", a))
+	must(t, k.UnassignPull("ACME/widgets#7"))
+	if got := resolve("acme/widgets#7"); got != [2]string{c, kb.ViaRepo} {
+		t.Errorf("after its filing was forgotten: %v, want it with its repository again", got)
+	}
+
+	for _, bad := range []string{"acme/widgets", "acme/widgets#", "acme/widgets#x", "acme/widgets#0", "#7", " #7"} {
+		if err := k.AssignPull(bad, a); err == nil {
+			t.Errorf("filing %q as a pull request was accepted", bad)
+		}
+	}
+	if err := k.AssignPull("acme/widgets#7", "nope"); err == nil {
+		t.Error("filing under an effort that does not exist was accepted")
+	}
+}
+
+func TestPullFilingSurvivesReopen(t *testing.T) {
+	st := testdb.Open(t)
+	k := testdb.KB(t, st)
+	id := create(t, k, "A")
+	must(t, k.AssignPull("acme/widgets#7", id))
+	if got, via, ok := testdb.KB(t, st).ResolvePull("acme/widgets#7", nil); got != id || via != kb.ViaUser || !ok {
 		t.Errorf("after reopening: %q, %q, %v", got, via, ok)
 	}
 }
@@ -660,4 +729,221 @@ func TestCarry(t *testing.T) {
 		t.Error("a session whose filing was not needed is still filed")
 	}
 	must(t, k.Carry("nothing", "new"))
+}
+
+func TestWorkspaces(t *testing.T) {
+	st := testdb.Open(t)
+	k := testdb.KB(t, st)
+	if got := k.Knowledge().Workspaces; got == nil || len(got) != 0 {
+		t.Errorf("Workspaces = %v before any is added, want an empty list", got)
+	}
+	must(t, k.Add(kb.SectionWorkspaces, kb.Entry{Name: " Slorp ", Dir: "/work/slorp/"}))
+	must(t, k.Add(kb.SectionWorkspaces, kb.Entry{Name: "Docs", Dir: "/work/docs"}))
+	got := k.Knowledge().Workspaces
+	if len(got) != 2 || got[0].Name != "Slorp" || got[0].Dir != "/work/slorp" || got[1].Name != "Docs" || got[0].ID == "" || got[0].ID == got[1].ID {
+		t.Fatalf("Workspaces = %+v, want the two added, in that order, each with an id of its own, a trimmed name and a clean directory", got)
+	}
+
+	bad := map[string]kb.Entry{
+		"no name":                 {Dir: "/work/x"},
+		"a blank name":            {Name: "  ", Dir: "/work/x"},
+		"no directory":            {Name: "X"},
+		"a relative directory":    {Name: "X", Dir: "work/x"},
+		"a directory another has": {Name: "Again", Dir: "/work/docs/"},
+	}
+	for name, entry := range bad {
+		if err := k.Add(kb.SectionWorkspaces, entry); err == nil {
+			t.Errorf("a workspace with %s was accepted", name)
+		}
+	}
+	if n := len(k.Knowledge().Workspaces); n != 2 {
+		t.Errorf("%d workspaces after the rejected ones, want 2", n)
+	}
+
+	if after := testdb.KB(t, st).Knowledge().Workspaces; !reflect.DeepEqual(after, got) {
+		t.Errorf("after reopening: %+v, want %+v", after, got)
+	}
+	must(t, k.Remove(kb.SectionWorkspaces, got[0].ID))
+	if left := k.Knowledge().Workspaces; len(left) != 1 || left[0].Name != "Docs" {
+		t.Errorf("after removing the first: %+v, want only Docs", left)
+	}
+	if err := k.Remove(kb.SectionWorkspaces, got[0].ID); err == nil {
+		t.Error("removing a workspace that is gone was accepted")
+	}
+	must(t, k.Add(kb.SectionWorkspaces, kb.Entry{Name: "Slorp again", Dir: "/work/slorp"}))
+}
+
+func TestProfiles(t *testing.T) {
+	st := testdb.Open(t)
+	k := testdb.KB(t, st)
+	if got := k.Knowledge().Profiles; got == nil || len(got) != 0 {
+		t.Errorf("Profiles = %v before any is added, want an empty list", got)
+	}
+	effort, err := k.Create("Docs", "")
+	must(t, err)
+	other, err := k.Create("Site", "")
+	must(t, err)
+	must(t, k.Add(kb.SectionRoles, kb.Entry{Name: "Reviewer"}))
+	role := k.Knowledge().Roles[0].ID
+	warm := 0.7
+
+	first, err := k.AddProfile(kb.Profile{ID: "mine", Name: " Review ", Default: true, Dir: "/work/docs/", Effort: effort.ID, Role: role, Terminal: true, Model: " opus ", EffortLevel: "high"})
+	must(t, err)
+	second, err := k.AddProfile(kb.Profile{Name: "Local", Engine: kb.EngineLocal, Thinking: true, Temperature: &warm, OpenCodeAgent: " build ", OpenCodeModel: " openai/gpt-5 ", OpenCodeVariant: " high "})
+	must(t, err)
+	got := k.Knowledge().Profiles
+	want := []kb.Profile{
+		{ID: first, Name: "Review", Default: true, Engine: kb.EngineClaude, Dir: "/work/docs", Effort: effort.ID, Role: role, Terminal: true, Model: "opus", EffortLevel: "high"},
+		{ID: second, Name: "Local", Engine: kb.EngineLocal, Thinking: true, Temperature: &warm, OpenCodeAgent: "build", OpenCodeModel: "openai/gpt-5", OpenCodeVariant: "high"},
+	}
+	if first == "" || first == "mine" || first == second || !reflect.DeepEqual(got, want) {
+		t.Fatalf("Profiles = %+v, want %+v", got, want)
+	}
+
+	set := func(p kb.Profile) error {
+		return k.EditProfile(p.ID, func(q *kb.Profile) error { *q = p; return nil })
+	}
+	hot, cold := 2.5, -0.1
+	bad := map[string]kb.Profile{
+		"no name":                       {},
+		"a blank name":                  {Name: "  "},
+		"a name another has":            {Name: "review"},
+		"an engine there is none of":    {Name: "X", Engine: "gemini"},
+		"a relative directory":          {Name: "X", Dir: "work/x"},
+		"an effort that does not exist": {Name: "X", Effort: "nope"},
+		"a role that does not exist":    {Name: "X", Role: "nope"},
+		"a temperature above 2":         {Name: "X", Temperature: &hot},
+		"a temperature below 0":         {Name: "X", Temperature: &cold},
+	}
+	for name, p := range bad {
+		if _, err := k.AddProfile(p); err == nil {
+			t.Errorf("a profile with %s was accepted", name)
+		}
+		p.ID = second
+		if name != "a name another has" {
+			if err := set(p); err == nil {
+				t.Errorf("a profile changed to have %s was accepted", name)
+			}
+		}
+	}
+	if err := set(kb.Profile{ID: second, Name: "REVIEW"}); err == nil {
+		t.Error("a profile renamed to another's name was accepted")
+	}
+	if err := set(kb.Profile{ID: "nope", Name: "X"}); err == nil {
+		t.Error("changing a profile that does not exist was accepted")
+	}
+	if err := k.EditProfile(second, func(p *kb.Profile) error { p.Name = "Changed"; return errors.New("no") }); err == nil {
+		t.Error("an edit that failed was accepted")
+	}
+	if after := k.Knowledge().Profiles; !reflect.DeepEqual(after, want) {
+		t.Errorf("after the rejected ones: %+v, want %+v", after, want)
+	}
+
+	must(t, set(kb.Profile{ID: second, Name: "local", Default: true, Engine: kb.EngineOpenCode, Effort: other.ID}))
+	must(t, set(kb.Profile{ID: first, Name: "Review", Effort: effort.ID, Role: role}))
+	must(t, k.EditProfile(second, func(p *kb.Profile) error { p.ID, p.Default = "other", true; return nil }))
+	want = []kb.Profile{
+		{ID: first, Name: "Review", Engine: kb.EngineClaude, Effort: effort.ID, Role: role},
+		{ID: second, Name: "local", Default: true, Engine: kb.EngineOpenCode, Effort: other.ID},
+	}
+	if got := k.Knowledge().Profiles; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after changing both: %+v, want %+v, with the one default", got, want)
+	}
+	third, err := k.AddProfile(kb.Profile{Name: "Third", Default: true})
+	must(t, err)
+	for _, p := range k.Knowledge().Profiles {
+		if p.Default != (p.ID == third) {
+			t.Errorf("profile %s default = %v after a new one was added as the default", p.Name, p.Default)
+		}
+	}
+	if after := testdb.KB(t, st).Knowledge().Profiles; !reflect.DeepEqual(after, k.Knowledge().Profiles) {
+		t.Errorf("after reopening: %+v, want %+v", after, k.Knowledge().Profiles)
+	}
+
+	must(t, k.Merge(other.ID, effort.ID))
+	if got := k.Knowledge().Profiles[1].Effort; got != effort.ID {
+		t.Errorf("a profile filed under a merged effort is filed under %q, want the effort it was merged into", got)
+	}
+	must(t, k.Delete(effort.ID))
+	must(t, k.Remove(kb.SectionRoles, role))
+	for _, p := range k.Knowledge().Profiles {
+		if p.Effort != "" || p.Role != "" {
+			t.Errorf("profile %s keeps effort %q and role %q after both were deleted", p.Name, p.Effort, p.Role)
+		}
+	}
+	must(t, k.RemoveProfile(first))
+	if left := k.Knowledge().Profiles; len(left) != 2 || left[0].ID != second {
+		t.Errorf("after removing the first: %+v", left)
+	}
+	if err := k.RemoveProfile(first); err == nil {
+		t.Error("removing a profile that is gone was accepted")
+	}
+}
+
+func TestHandoffs(t *testing.T) {
+	st := testdb.Open(t)
+	k := testdb.KB(t, st)
+	if got := k.Knowledge().Handoffs; got == nil || len(got) != 0 {
+		t.Errorf("Handoffs = %v before any is added, want an empty list", got)
+	}
+	first, err := k.AddHandoff(kb.Handoff{ID: "mine", Name: " Review ", Text: "\nPlease review this:\n\n---\n{{response}}\n---\n"})
+	must(t, err)
+	second, err := k.AddHandoff(kb.Handoff{Name: "Fixes", Text: "{{response}}"})
+	must(t, err)
+	want := []kb.Handoff{
+		{ID: first, Name: "Review", Text: "Please review this:\n\n---\n{{response}}\n---"},
+		{ID: second, Name: "Fixes", Text: "{{response}}"},
+	}
+	if got := k.Knowledge().Handoffs; first == "" || first == "mine" || first == second || !reflect.DeepEqual(got, want) {
+		t.Fatalf("Handoffs = %+v, want %+v", got, want)
+	}
+
+	set := func(h kb.Handoff) error {
+		return k.EditHandoff(h.ID, func(q *kb.Handoff) error { *q = h; return nil })
+	}
+	bad := map[string]kb.Handoff{
+		"no name":            {Text: "x"},
+		"a blank name":       {Name: "  ", Text: "x"},
+		"a name another has": {Name: "review", Text: "x"},
+		"no message":         {Name: "X"},
+		"a blank message":    {Name: "X", Text: " \n "},
+		"too long a message": {Name: "X", Text: strings.Repeat("é", kb.HandoffLimit+1)},
+	}
+	for name, h := range bad {
+		if _, err := k.AddHandoff(h); err == nil {
+			t.Errorf("a handoff with %s was accepted", name)
+		}
+		h.ID = second
+		if err := set(h); err == nil {
+			t.Errorf("a handoff changed to have %s was accepted", name)
+		}
+	}
+	if err := set(kb.Handoff{ID: "nope", Name: "X", Text: "x"}); err == nil {
+		t.Error("changing a handoff that does not exist was accepted")
+	}
+	if err := k.EditHandoff(second, func(h *kb.Handoff) error { h.Name = "Changed"; return errors.New("no") }); err == nil {
+		t.Error("an edit that failed was accepted")
+	}
+	if after := k.Knowledge().Handoffs; !reflect.DeepEqual(after, want) {
+		t.Errorf("after the rejected ones: %+v, want %+v", after, want)
+	}
+
+	must(t, k.EditHandoff(second, func(h *kb.Handoff) error {
+		h.ID, h.Name, h.Text = "other", "REVIEW 2", strings.Repeat("é", kb.HandoffLimit)
+		return nil
+	}))
+	want[1] = kb.Handoff{ID: second, Name: "REVIEW 2", Text: strings.Repeat("é", kb.HandoffLimit)}
+	if got := k.Knowledge().Handoffs; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after changing one: %+v, want %+v", got, want)
+	}
+	if after := testdb.KB(t, st).Knowledge().Handoffs; !reflect.DeepEqual(after, want) {
+		t.Errorf("after reopening: %+v, want %+v", after, want)
+	}
+	must(t, k.RemoveHandoff(first))
+	if got := k.Knowledge().Handoffs; !reflect.DeepEqual(got, want[1:]) {
+		t.Errorf("after removing one: %+v, want %+v", got, want[1:])
+	}
+	if err := k.RemoveHandoff(first); err == nil {
+		t.Error("removing a handoff that is gone was accepted")
+	}
 }

@@ -11,24 +11,31 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/jefflinse/slorp/internal/claude"
+	"github.com/jefflinse/slorp/internal/enrich"
 	"github.com/jefflinse/slorp/internal/hub"
 	"github.com/jefflinse/slorp/internal/integrations"
 	"github.com/jefflinse/slorp/internal/kb"
 	"github.com/jefflinse/slorp/internal/opencode"
+	"github.com/jefflinse/slorp/internal/terminal"
 )
 
 // modelName is what an agent's name for one of its models looks like.
 var modelName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,99}$`)
+
+// rewritable are the tasks the local model can be asked to write again for.
+var rewritable = []string{hub.ActDescribe, hub.ActFile, hub.ActRole, hub.ActNote, hub.ActBrief}
 
 // agents are the agents a bridge may report for.
 var agents = map[string]bool{claude.Agent: true, opencode.Agent: true}
@@ -36,6 +43,9 @@ var agents = map[string]bool{claude.Agent: true, opencode.Agent: true}
 const (
 	// nameLimit is how long a name may be, in runes.
 	nameLimit = 80
+	// promptLimit is how long instructions to the local model may be, in
+	// runes.
+	promptLimit = 20000
 	// maxLimits is how many usage windows one bridge may report.
 	maxLimits = 8
 	// startLimit is how long the first prompt of a session started here may
@@ -78,9 +88,16 @@ type Feeds interface {
 	Rescan()
 }
 
-// History reads what was said in a session from its agent's own record,
-// oldest first and at most limit of it.
-type History func(ctx context.Context, sessionID string, limit int) ([]hub.Exchange, error)
+// History reads a session's own record, as its agent keeps it. Either
+// reading is nil where the agent's record cannot give it.
+type History struct {
+	// Exchanges returns what was said in a session, oldest first and at
+	// most limit of it.
+	Exchanges func(ctx context.Context, sessionID string, limit int) ([]hub.Exchange, error)
+	// Reply returns in full the latest message the agent wrote in a session
+	// that ends with ends, empty when the record holds none.
+	Reply func(ctx context.Context, sessionID, ends string) (string, error)
+}
 
 type agentCapabilities struct {
 	History       bool `json:"history"`
@@ -88,6 +105,9 @@ type agentCapabilities struct {
 	Resume        bool `json:"resume"`
 	LaunchOptions bool `json:"launchOptions"`
 	ResumeCommand bool `json:"resumeCommand"`
+	// Attach is whether a session of its running in the background can be
+	// opened in a terminal.
+	Attach bool `json:"attach"`
 }
 
 // Launcher starts, reopens and stops one agent's sessions in the background.
@@ -104,6 +124,27 @@ type Launcher interface {
 	Stop(ctx context.Context, job string) error
 }
 
+// Terminals opens windows of the terminal emulators on this machine.
+type Terminals interface {
+	// Apps lists those installed, and Default names the one to use when
+	// the user has chosen none, empty when there are none.
+	Apps() []terminal.App
+	Default() string
+	// Open opens a new window of one of Apps and runs a shell command in it.
+	Open(ctx context.Context, app, command string) error
+}
+
+// machine is what the page is told of where Slorp runs: the system, the
+// terminal emulators it can open a session in, and the one it opens them in
+// until the user chooses another.
+type machine struct {
+	Platform string `json:"platform"`
+	Terminal struct {
+		Apps    []terminal.App `json:"apps"`
+		Default string         `json:"default"`
+	} `json:"terminal"`
+}
+
 // PluginManager installs and maintains an agent's bridge independently of launching sessions.
 type PluginManager interface {
 	// Install gives the agent the Slorp plugin, or turns it back on.
@@ -112,6 +153,14 @@ type PluginManager interface {
 	Update(ctx context.Context) error
 	// Uninstall takes the Slorp plugin away from the agent.
 	Uninstall(ctx context.Context) error
+}
+
+// Upgrader replaces the Slorp running with the newest release.
+type Upgrader interface {
+	// Upgrade installs the newest release, which Slorp runs once restarted.
+	Upgrade(ctx context.Context) error
+	// Restart starts Slorp again.
+	Restart()
 }
 
 // Delegates reads from an agent's own record the subagents its sessions
@@ -131,28 +180,45 @@ type Prober interface {
 	Probe(ctx context.Context, m *hub.ModelSettings) hub.ModelCheck
 }
 
-// modelURL returns the address of a model server as the user wrote it, in
-// the form Slorp keeps: with a scheme, and without the /v1 its API paths
-// begin with. Empty stays empty. It reports false for anything that is not
-// an http or https address.
-func modelURL(s string) (string, bool) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return "", true
+// prompts returns what the user has the local model told, in the form Slorp
+// keeps it: trimmed, and with nothing for a task whose instructions are
+// empty or Slorp's own. It is an error to name a task the model does not
+// do, to write more than promptLimit, or to say other than whether to
+// rewrite.
+func prompts(p hub.Prompts) (hub.Prompts, error) {
+	tidy := func(s string) (string, error) {
+		if s = strings.TrimSpace(strings.ReplaceAll(s, "\r\n", "\n")); utf8.RuneCountInString(s) > promptLimit {
+			return "", fmt.Errorf("instructions to the local model may be at most %d characters long", promptLimit)
+		}
+		return s, nil
 	}
-	if !strings.Contains(s, "://") {
-		s = "http://" + s
+	own := enrich.Defaults()
+	out := hub.Prompts{Tasks: map[string]string{}, Rewrite: p.Rewrite}
+	if !slices.Contains([]string{hub.RewriteAsk, hub.RewriteAlways, hub.RewriteNever}, p.Rewrite) {
+		return hub.Prompts{}, fmt.Errorf("whether to rewrite is %q, %q or %q", hub.RewriteAsk, hub.RewriteAlways, hub.RewriteNever)
 	}
-	u, err := url.Parse(s)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
-		return "", false
+	var err error
+	if out.Global, err = tidy(p.Global); err != nil {
+		return hub.Prompts{}, err
 	}
-	return u.Scheme + "://" + u.Host + strings.TrimSuffix(strings.TrimRight(u.Path, "/"), "/v1"), true
+	for task, text := range p.Tasks {
+		standing, known := own[task]
+		if !known {
+			return hub.Prompts{}, fmt.Errorf("the local model does no task called %q", task)
+		}
+		if text, err = tidy(text); err != nil {
+			return hub.Prompts{}, err
+		}
+		if text != "" && text != standing {
+			out.Tasks[task] = text
+		}
+	}
+	return out, nil
 }
 
-// directory returns path as the absolute directory it names, reading a
-// leading "~" as the user's home.
-func directory(path string) (string, error) {
+// absolute returns path as the absolute path it names, reading a leading "~"
+// as the user's home.
+func absolute(path string) (string, error) {
 	path = strings.TrimSpace(path)
 	if rest, ok := strings.CutPrefix(path, "~"); ok && (rest == "" || rest[0] == '/') {
 		home, err := os.UserHomeDir()
@@ -164,10 +230,19 @@ func directory(path string) (string, error) {
 	if !filepath.IsAbs(path) {
 		return "", errors.New("dir must be an absolute path, or start with ~")
 	}
+	return filepath.Clean(path), nil
+}
+
+// directory returns path as absolute does, when a directory is there.
+func directory(path string) (string, error) {
+	path, err := absolute(path)
+	if err != nil {
+		return "", err
+	}
 	if info, err := os.Stat(path); err != nil || !info.IsDir() {
 		return "", fmt.Errorf("%s is not a directory", path)
 	}
-	return filepath.Clean(path), nil
+	return path, nil
 }
 
 // Page serves built as the web UI, or the file at path when one is given,
@@ -185,13 +260,19 @@ func Page(built []byte, path string) http.Handler {
 // New serves the page and its API. history, launchers, plugins and delegates are by
 // agent; an agent with no history keeps no record Slorp can read, one with
 // no launcher has sessions Slorp can only watch, and one with no delegates
-// has subagents Slorp knows nothing of.
-func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history map[string]History, launchers map[string]Launcher, plugins map[string]PluginManager, delegates map[string]Delegates, prober Prober, page http.Handler) http.Handler {
+// has subagents Slorp knows nothing of. With no upgrader, Slorp cannot
+// upgrade itself.
+func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history map[string]History, launchers map[string]Launcher, plugins map[string]PluginManager, delegates map[string]Delegates, prober Prober, terminals Terminals, upgrader Upgrader, page http.Handler) http.Handler {
 	mux := http.NewServeMux()
+	here := machine{Platform: runtime.GOOS}
+	here.Terminal.Apps = []terminal.App{}
+	if terminals != nil {
+		here.Terminal.Apps, here.Terminal.Default = terminals.Apps(), terminals.Default()
+	}
 	epoch := strconv.FormatInt(time.Now().UnixNano(), 36)
 	capabilities := map[string]agentCapabilities{}
 	for agent, read := range history {
-		capabilities[agent] = agentCapabilities{History: read != nil}
+		capabilities[agent] = agentCapabilities{History: read.Exchanges != nil}
 	}
 	for agent, launcher := range launchers {
 		c := capabilities[agent]
@@ -199,9 +280,11 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		_, c.LaunchOptions = launcher.(launchCatalog)
 		_, c.ResumeCommand = launcher.(resumeCommander)
 		c.ResumeCommand = c.ResumeCommand || agent == claude.Agent && launcher != nil
+		_, c.Attach = launcher.(attachCommander)
+		c.Attach = c.Attach || agent == claude.Agent && launcher != nil
 		capabilities[agent] = c
 	}
-	lifecycleRoutes(mux, h, launchers)
+	lifecycleRoutes(mux, h, launchers, terminals)
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -211,9 +294,16 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 	mux.HandleFunc("GET /api/sessions", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, struct {
 			hub.State
+			machine
 			Integrations []integrations.Status        `json:"integrations"`
 			Capabilities map[string]agentCapabilities `json:"capabilities"`
-		}{h.State(), m.Status(r.Context()), capabilities})
+		}{h.State(), here, m.Status(r.Context()), capabilities})
+	})
+
+	mux.HandleFunc("GET /api/actions", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, struct {
+			Actions []hub.Action `json:"actions"`
+		}{h.Actions()})
 	})
 
 	mux.HandleFunc("GET /api/events", func(w http.ResponseWriter, r *http.Request) {
@@ -355,11 +445,8 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		}
 		// Without an id there is nothing to file yet; the session still
 		// shows up, sorted the way any other would be.
-		if id != "" && in.Effort != "" {
-			err = k.Assign(id, in.Effort)
-		}
-		if id != "" && in.Role != "" && err == nil {
-			err = k.SetRole(id, in.Role)
+		if id != "" {
+			err = k.File(id, in.Effort, in.Role)
 		}
 		if err != nil {
 			if agent == opencode.Agent {
@@ -479,7 +566,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 	// edited reports a knowledge-base change, republishing state on success.
 	edited := func(w http.ResponseWriter, err error) {
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, err.Error(), editFailed(err))
 			return
 		}
 		h.Touch()
@@ -526,6 +613,21 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		w.WriteHeader(http.StatusNoContent)
 	})
 
+	mux.HandleFunc("POST /api/upgrade", func(w http.ResponseWriter, r *http.Request) {
+		if upgrader == nil {
+			http.Error(w, "Slorp cannot upgrade itself here", http.StatusNotFound)
+			return
+		}
+		if err := upgrader.Upgrade(r.Context()); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		// The answer goes out before the restart closes the connection.
+		w.WriteHeader(http.StatusNoContent)
+		w.(http.Flusher).Flush()
+		upgrader.Restart()
+	})
+
 	mux.HandleFunc("POST /api/efforts", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Name  string `json:"name"`
@@ -557,11 +659,8 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		}
 		id := r.PathValue("id")
 		var err error
-		if in.Name != nil || in.About != nil || in.Color != nil || in.Glyph != nil {
-			err = k.Edit(id, kb.Changes{Name: in.Name, About: in.About, Color: in.Color, Glyph: in.Glyph})
-		}
-		if err == nil && in.Shelved != nil {
-			err = k.Shelve(id, *in.Shelved)
+		if in.Name != nil || in.About != nil || in.Color != nil || in.Glyph != nil || in.Shelved != nil {
+			err = k.Edit(id, kb.Changes{Name: in.Name, About: in.About, Color: in.Color, Glyph: in.Glyph, Shelved: in.Shelved})
 		}
 		if err == nil && !k.Has(id) {
 			err = errors.New("no such effort")
@@ -623,11 +722,97 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		if !readJSON(w, r, &in) {
 			return
 		}
+		if r.PathValue("section") == kb.SectionWorkspaces {
+			dir, err := directory(in.Dir)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			in.Dir = dir
+		}
 		edited(w, k.Add(r.PathValue("section"), in))
 	})
 
 	mux.HandleFunc("DELETE /api/kb/{section}/{id}", func(w http.ResponseWriter, r *http.Request) {
 		edited(w, k.Remove(r.PathValue("section"), r.PathValue("id")))
+	})
+
+	// profile lays what a request said of a profile over p, and makes its
+	// directory, which need not be there yet, absolute.
+	profile := func(said json.RawMessage, p *kb.Profile) error {
+		if err := json.Unmarshal(said, p); err != nil {
+			return errors.New("bad request body")
+		}
+		if p.Dir = strings.TrimSpace(p.Dir); p.Dir == "" {
+			return nil
+		}
+		dir, err := absolute(p.Dir)
+		p.Dir = dir
+		return err
+	}
+
+	mux.HandleFunc("POST /api/profiles", func(w http.ResponseWriter, r *http.Request) {
+		var said json.RawMessage
+		if !readJSON(w, r, &said) {
+			return
+		}
+		var p kb.Profile
+		err := profile(said, &p)
+		var id string
+		if err == nil {
+			id, err = k.AddProfile(p)
+		}
+		if err != nil {
+			http.Error(w, err.Error(), editFailed(err))
+			return
+		}
+		h.Touch()
+		writeJSON(w, http.StatusOK, map[string]string{"id": id})
+	})
+
+	// A change to a profile says only what is changed.
+	mux.HandleFunc("POST /api/profiles/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var said json.RawMessage
+		if !readJSON(w, r, &said) {
+			return
+		}
+		edited(w, k.EditProfile(r.PathValue("id"), func(p *kb.Profile) error { return profile(said, p) }))
+	})
+
+	mux.HandleFunc("DELETE /api/profiles/{id}", func(w http.ResponseWriter, r *http.Request) {
+		edited(w, k.RemoveProfile(r.PathValue("id")))
+	})
+
+	mux.HandleFunc("POST /api/handoffs", func(w http.ResponseWriter, r *http.Request) {
+		var in kb.Handoff
+		if !readJSON(w, r, &in) {
+			return
+		}
+		id, err := k.AddHandoff(in)
+		if err != nil {
+			http.Error(w, err.Error(), editFailed(err))
+			return
+		}
+		h.Touch()
+		writeJSON(w, http.StatusOK, map[string]string{"id": id})
+	})
+
+	// A change to a handoff says only what is changed.
+	mux.HandleFunc("POST /api/handoffs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var said json.RawMessage
+		if !readJSON(w, r, &said) {
+			return
+		}
+		edited(w, k.EditHandoff(r.PathValue("id"), func(h *kb.Handoff) error {
+			if json.Unmarshal(said, h) != nil {
+				return errors.New("bad request body")
+			}
+			return nil
+		}))
+	})
+
+	mux.HandleFunc("DELETE /api/handoffs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		edited(w, k.RemoveHandoff(r.PathValue("id")))
 	})
 
 	mux.HandleFunc("POST /api/sessions/{id}/effort", func(w http.ResponseWriter, r *http.Request) {
@@ -640,9 +825,37 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		edited(w, k.Assign(r.PathValue("id"), in.Effort))
 	})
 
-	// The page asks, for one session and only when the user says so, for its
-	// timeline to be filled in from the session's own record.
-	mux.HandleFunc("POST /api/sessions/{id}/backfill", func(w http.ResponseWriter, r *http.Request) {
+	// recorded reads an open session's latest exchanges from its agent's own
+	// record, and answers the request itself when it cannot.
+	recorded := func(w http.ResponseWriter, r *http.Request) (exchanges []hub.Exchange, ok bool) {
+		id := r.PathValue("id")
+		sessions := h.Sessions()
+		at := slices.IndexFunc(sessions, func(s hub.Session) bool { return s.ID == id })
+		if at < 0 {
+			http.Error(w, "no such session", http.StatusNotFound)
+			return nil, false
+		}
+		read := history[sessions[at].Agent].Exchanges
+		if read == nil {
+			http.Error(w, "this agent keeps no record Slorp can read", http.StatusBadRequest)
+			return nil, false
+		}
+		exchanges, err := read(r.Context(), id, hub.BackfillLimit)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return nil, false
+		}
+		if err := r.Context().Err(); err != nil {
+			http.Error(w, err.Error(), http.StatusRequestTimeout)
+			return nil, false
+		}
+		return exchanges, true
+	}
+
+	// The page asks for all of what a session last said, which Slorp keeps
+	// only the end of when it is long. whole is false when the rest could not
+	// be read from the session's own record, and why says what stood in the way.
+	mux.HandleFunc("GET /api/sessions/{id}/response", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		sessions := h.Sessions()
 		at := slices.IndexFunc(sessions, func(s hub.Session) bool { return s.ID == id })
@@ -650,26 +863,93 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			http.Error(w, "no such session", http.StatusNotFound)
 			return
 		}
-		read := history[sessions[at].Agent]
-		if read == nil {
-			http.Error(w, "this agent keeps no record Slorp can read", http.StatusBadRequest)
+		kept := sessions[at].LastReply
+		out := struct {
+			Text  string `json:"text"`
+			Whole bool   `json:"whole"`
+			Why   string `json:"why,omitempty"`
+		}{Text: kept, Whole: !replyCut(kept)}
+		if read := history[sessions[at].Agent].Reply; out.Whole {
+		} else if read == nil {
+			out.Why = "this agent keeps no record Slorp can read"
+		} else if said, err := read(r.Context(), id, strings.TrimLeft(kept, "…\uFFFD")); err != nil {
+			out.Why = err.Error()
+		} else if said == "" {
+			out.Why = "the session's record does not hold it"
+		} else {
+			out.Text, out.Whole = said, true
+		}
+		writeJSON(w, http.StatusOK, out)
+	})
+
+	// The page asks, for one session and only when the user says so, for its
+	// timeline to be filled in from the session's own record.
+	mux.HandleFunc("POST /api/sessions/{id}/backfill", func(w http.ResponseWriter, r *http.Request) {
+		exchanges, ok := recorded(w, r)
+		if !ok {
 			return
 		}
-		exchanges, err := read(r.Context(), id, hub.BackfillLimit)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
-		if err := r.Context().Err(); err != nil {
-			http.Error(w, err.Error(), http.StatusRequestTimeout)
-			return
-		}
-		queued, ok := h.Backfill(id, exchanges)
+		queued, ok := h.Backfill(r.PathValue("id"), exchanges)
 		if !ok {
 			http.Error(w, "the session closed while its history was being read", http.StatusConflict)
 			return
 		}
 		writeJSON(w, http.StatusAccepted, map[string]int{"exchanges": len(exchanges), "queued": queued})
+	})
+
+	// The page asks, only when the user says so, for what was said in a
+	// session before its latest exchange: everything from the earliest it
+	// already shows, said at from, and more before that, the latest first.
+	// The model is asked how each of those added came out. head is when the
+	// latest exchange was said, and more whether the record holds any earlier.
+	mux.HandleFunc("POST /api/sessions/{id}/exchanges", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			From time.Time `json:"from"`
+			More int       `json:"more"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		exchanges, ok := recorded(w, r)
+		if !ok {
+			return
+		}
+		said := slices.DeleteFunc(slices.Clone(exchanges), func(x hub.Exchange) bool { return x.Compacted != nil })
+		type exchange struct {
+			At     time.Time `json:"at"`
+			Prompt string    `json:"prompt"`
+			Reply  string    `json:"reply"`
+		}
+		out := struct {
+			Exchanges []exchange `json:"exchanges"`
+			Head      time.Time  `json:"head,omitzero"`
+			More      bool       `json:"more"`
+		}{Exchanges: []exchange{}}
+		var added []time.Time
+		if len(said) > 0 {
+			out.Head = said[len(said)-1].At
+			earlier := said[:len(said)-1]
+			shown := len(earlier)
+			if !in.From.IsZero() {
+				if i := slices.IndexFunc(earlier, func(x hub.Exchange) bool { return !x.At.Before(in.From) }); i >= 0 {
+					shown = i
+				}
+			}
+			first := max(0, shown-min(max(in.More, 0), hub.BackfillLimit))
+			out.More = first > 0
+			for i := len(earlier) - 1; i >= first; i-- {
+				x := earlier[i]
+				out.Exchanges = append(out.Exchanges, exchange{x.At, x.Prompt, x.Reply})
+				if i < shown {
+					added = append(added, x.At)
+				}
+			}
+		}
+		if _, ok := h.Recall(r.PathValue("id"), exchanges, added); !ok {
+			http.Error(w, "the session closed while its history was being read", http.StatusConflict)
+			return
+		}
+		writeJSON(w, http.StatusOK, out)
 	})
 
 	// The page searches the sessions, open and closed.
@@ -811,6 +1091,29 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			return
 		}
 		edited(w, k.AssignRepo(in.Repo, in.Effort))
+	})
+
+	// Files one pull request, named as "owner/name#number", on its own, and
+	// deleting that files it with its repository again.
+	mux.HandleFunc("POST /api/pulls/effort", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Pull   string `json:"pull"`
+			Effort string `json:"effort"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		edited(w, k.AssignPull(in.Pull, in.Effort))
+	})
+
+	mux.HandleFunc("DELETE /api/pulls/effort", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Pull string `json:"pull"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		edited(w, k.UnassignPull(in.Pull))
 	})
 
 	// One listed pull request with its discussion. Asking says the user is
@@ -1097,24 +1400,78 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			return
 		}
 		m.Recheck()
-		h.SetIntegration(r.PathValue("id"), in.Enabled)
+		if err := h.SetIntegration(r.PathValue("id"), in.Enabled); err != nil {
+			http.Error(w, err.Error(), editFailed(err))
+			return
+		}
 		feeds.Check()
 		w.WriteHeader(http.StatusNoContent)
 	})
 
+	// A save says only what it changes, which is laid over the settings as
+	// they are when it is kept.
 	mux.HandleFunc("POST /api/settings", func(w http.ResponseWriter, r *http.Request) {
-		in := h.Settings()
+		var said json.RawMessage
+		if !readJSON(w, r, &said) {
+			return
+		}
+		behind, err := h.UpdateSettings(func(in *hub.Settings) error {
+			if err := json.Unmarshal(said, in); err != nil {
+				return errors.New("bad request body")
+			}
+			var ok bool
+			if in.Model.URL, ok = enrich.ServerURL(in.Model.URL); !ok {
+				return errors.New("the model server's address must be an http or https one")
+			}
+			in.Model.Name = strings.TrimSpace(in.Model.Name)
+			if in.Terminal != "" && !slices.ContainsFunc(here.Terminal.Apps, func(a terminal.App) bool { return a.ID == in.Terminal }) {
+				return errors.New("no such terminal emulator is installed")
+			}
+			var err error
+			in.Prompts, err = prompts(in.Prompts)
+			return err
+		})
+		if err != nil {
+			http.Error(w, err.Error(), editFailed(err))
+			return
+		}
+		if len(behind) > 0 {
+			writeJSON(w, http.StatusOK, struct {
+				// Behind are the tasks for which what the model wrote was
+				// written under other instructions than it now has.
+				Behind []string `json:"behind"`
+			}{behind})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("POST /api/model/rewrite", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			// Tasks are those to write again for, none for all of them.
+			Tasks []string `json:"tasks"`
+		}
 		if !readJSON(w, r, &in) {
 			return
 		}
-		var ok bool
-		if in.Model.URL, ok = modelURL(in.Model.URL); !ok {
-			http.Error(w, "the model server's address must be an http or https one", http.StatusBadRequest)
+		for _, t := range in.Tasks {
+			if !slices.Contains(rewritable, t) {
+				http.Error(w, fmt.Sprintf("the local model keeps nothing written for a task called %q", t), http.StatusBadRequest)
+				return
+			}
+		}
+		if err := h.Rewrite(in.Tasks...); err != nil {
+			http.Error(w, err.Error(), editFailed(err))
 			return
 		}
-		in.Model.Name = strings.TrimSpace(in.Model.Name)
-		h.SetSettings(in)
 		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("GET /api/prompts", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, struct {
+			// Defaults are Slorp's own instructions for each task.
+			Defaults map[string]string `json:"defaults"`
+		}{enrich.Defaults()})
 	})
 
 	mux.HandleFunc("POST /api/model/check", func(w http.ResponseWriter, r *http.Request) {
@@ -1127,7 +1484,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		}
 		if in.Model != nil {
 			var ok bool
-			if in.Model.URL, ok = modelURL(in.Model.URL); !ok {
+			if in.Model.URL, ok = enrich.ServerURL(in.Model.URL); !ok {
 				http.Error(w, "the model server's address must be an http or https one", http.StatusBadRequest)
 				return
 			}
@@ -1182,6 +1539,23 @@ func localOnly(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// replyCut reports whether a session's last message, as Slorp keeps it, may
+// be only the end of what was said: a bridge sends at most claude.ReplyLimit
+// UTF-16 units of it, and a transcript gives that many runes.
+func replyCut(kept string) bool {
+	return len(utf16.Encode([]rune(kept))) >= claude.ReplyLimit
+}
+
+// editFailed is the status for an edit to the knowledge base or settings
+// that failed: the server's fault when it could not be saved, and otherwise
+// the request's.
+func editFailed(err error) int {
+	if errors.Is(err, kb.ErrNotSaved) || errors.Is(err, hub.ErrNotSaved) {
+		return http.StatusInternalServerError
+	}
+	return http.StatusBadRequest
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {

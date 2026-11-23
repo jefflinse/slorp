@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -24,12 +23,7 @@ func TestNativeConfigPrecedenceAndBundledRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, entry := range os.Environ() {
-		key, _, _ := strings.Cut(entry, "=")
-		if key != "PATH" && key != "TMPDIR" {
-			t.Setenv(key, "")
-		}
-	}
+	clearEnv(t)
 	a := fixture(t)
 	a.Bin = bin
 	t.Setenv("HOME", a.Home)

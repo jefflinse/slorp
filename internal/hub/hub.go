@@ -10,6 +10,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"maps"
 	"slices"
@@ -337,11 +339,12 @@ type Item struct {
 	// Source is the integration whose feed found the item.
 	Source string `json:"source,omitempty"`
 	URL    string `json:"url,omitempty"`
-	// Repo is the repository a feed item belongs to, which is what it is filed by.
+	// Repo is the repository a feed item belongs to, and Pull the pull
+	// request it is about, as "owner/name#number": it is filed with the
+	// pull request, or by the repository when it is about none.
 	Repo string `json:"repo,omitempty"`
-	// Pull and Point name the pull request, as "owner/name#number", and
-	// the point of its discussion an item was raised for.
-	Pull  string `json:"pull,omitempty"`
+	Pull string `json:"pull,omitempty"`
+	// Point is the point of the pull request's discussion an item was raised for.
 	Point string `json:"point,omitempty"`
 	// Effort is the effort the item is filed under, empty when unsorted.
 	Effort    string `json:"effort"`
@@ -362,8 +365,8 @@ type feed struct {
 	FeedStatus
 }
 
-// PullRequest is an open pull request an integration listed, filed like the
-// feed items from its repository.
+// PullRequest is an open pull request an integration listed, filed where
+// the user put it or else with its repository.
 type PullRequest struct {
 	integrations.PullRequest
 	Source    string `json:"source"`
@@ -641,6 +644,72 @@ type Settings struct {
 	Integrations map[string]bool `json:"integrations"`
 	// IntegrationsRevision counts changes to Integrations.
 	IntegrationsRevision int `json:"integrationsRevision"`
+	// Terminal names the terminal emulator sessions are opened in, empty
+	// for whichever Slorp was started from.
+	Terminal string `json:"terminal,omitempty"`
+	// Prompts is what the user has the local model told.
+	Prompts Prompts `json:"prompts"`
+	// Rewritten counts, by task, the times the model has been asked to
+	// write again what it wrote for it.
+	Rewritten map[string]int `json:"rewritten"`
+}
+
+// Whether what the model wrote is written again when its instructions
+// change, as a Prompts' Rewrite.
+const (
+	// RewriteAsk leaves it to be asked of the user.
+	RewriteAsk    = "ask"
+	RewriteAlways = "always"
+	RewriteNever  = "never"
+)
+
+// PromptLookup is the task of choosing what to look up before a session is
+// described. The other tasks go by the Kind of the Action they end in.
+const PromptLookup = "lookup"
+
+// Prompts is what the user has the local model told, in place of and ahead
+// of Slorp's own instructions.
+type Prompts struct {
+	// Global goes ahead of the instructions for every task.
+	Global string `json:"global"`
+	// Tasks holds the instructions the user wrote for a task, by the task,
+	// in place of Slorp's own. A task with none goes by Slorp's.
+	Tasks map[string]string `json:"tasks"`
+	// Rewrite is whether what the model already wrote is written again
+	// when any of this changes.
+	Rewrite string `json:"rewrite"`
+}
+
+// behind lists the tasks for which what the model wrote was written under
+// instructions that differ between was and now, in the form Rewrite takes
+// them. The tasks done only when asked for leave nothing behind.
+func (was Prompts) behind(now Prompts) []string {
+	differs := func(tasks ...string) bool {
+		return slices.ContainsFunc(tasks, func(t string) bool { return was.Tasks[t] != now.Tasks[t] })
+	}
+	var out []string
+	for _, t := range []struct {
+		task    string
+		changed bool
+	}{
+		{ActDescribe, was.Global != now.Global || differs(ActDescribe, PromptLookup)},
+		{ActFile, differs(ActFile)}, {ActRole, differs(ActRole)}, {ActNote, differs(ActNote)},
+		{ActBrief, was.Global != now.Global || differs(ActBrief)},
+	} {
+		if t.changed {
+			out = append(out, t.task)
+		}
+	}
+	return leading(out)
+}
+
+// leading returns tasks without those that follow from another of them: a
+// session described again is then filed, given a role and noted again.
+func leading(tasks []string) []string {
+	if !slices.Contains(tasks, ActDescribe) {
+		return tasks
+	}
+	return slices.DeleteFunc(slices.Clone(tasks), func(t string) bool { return t == ActFile || t == ActRole || t == ActNote })
 }
 
 // Cache is where the hub keeps what should outlive a restart.
@@ -750,6 +819,10 @@ type Hub struct {
 	rostered map[string]bool
 	// plugins is what each agent last said of its Slorp plugin.
 	plugins map[string]Plugin
+	// release is the release of Slorp running, as last reported.
+	release Release
+	// actions is what the local model has done, the oldest first.
+	actions []Action
 	// origins holds, for each session something is known of, the session
 	// it continues, empty for one that continues none.
 	origins map[string]string
@@ -771,6 +844,7 @@ func New(k *kb.Store, c Cache) *Hub {
 		discussed: map[string]*pullDoc{}, discussFailed: map[string]time.Time{}}
 	h.loadSubagents()
 	h.loadLifecycle()
+	h.loadActions()
 	h.warn(c.Each("pull", func(id string, body []byte) {
 		var d pullDoc
 		if json.Unmarshal(body, &d) == nil {
@@ -828,6 +902,13 @@ func New(k *kb.Store, c Cache) *Hub {
 	if h.settings.Integrations == nil {
 		h.settings.Integrations = map[string]bool{}
 	}
+	if h.settings.Prompts.Tasks == nil {
+		h.settings.Prompts.Tasks = map[string]string{}
+	}
+	if h.settings.Rewritten == nil {
+		h.settings.Rewritten = map[string]int{}
+	}
+	h.settings.Prompts.Rewrite = cmp.Or(h.settings.Prompts.Rewrite, RewriteAsk)
 	return h
 }
 
@@ -957,6 +1038,30 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 	}
 	h.sweep(agent)
 	h.fold(agent)
+	h.changed()
+}
+
+// Release says which release of Slorp is running and whether a newer one
+// is out.
+type Release struct {
+	// Version is the release running, empty for a build that is not one.
+	Version string `json:"version,omitempty"`
+	// Latest is the newest release, when it is newer than Version.
+	Latest string `json:"latest,omitempty"`
+	// Manual says why Slorp cannot install Latest itself, empty when it can.
+	Manual string `json:"manual,omitempty"`
+}
+
+// SetRelease records which release of Slorp is running and whether a newer
+// one is out.
+func (h *Hub) SetRelease(r Release) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.release == r {
+		return
+	}
+	h.release = r
+	h.last = ""
 	h.changed()
 }
 
@@ -1232,39 +1337,115 @@ func (h *Hub) Done(requestID string) {
 	}
 }
 
+// Settings returns the user's preferences, as a copy the caller may change.
 func (h *Hub) Settings() Settings {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.settings
+	return h.settings.clone()
+}
+
+// clone returns s sharing nothing the hub changes in place.
+func (s Settings) clone() Settings {
+	s.Integrations, s.Prompts.Tasks, s.Rewritten = maps.Clone(s.Integrations), maps.Clone(s.Prompts.Tasks), maps.Clone(s.Rewritten)
+	return s
 }
 
 // SetSettings replaces the user's preferences, leaving which integrations
-// are on to SetIntegration.
-func (h *Hub) SetSettings(s Settings) {
+// are on to SetIntegration and what is written again to Rewrite. It returns
+// the tasks for which what the model wrote is left behind its instructions,
+// which is none of them where the user has such writing always written
+// again, or an error wrapping ErrNotSaved when nothing is changed.
+func (h *Hub) SetSettings(s Settings) ([]string, error) {
+	return h.UpdateSettings(func(now *Settings) error {
+		*now = s
+		return nil
+	})
+}
+
+// UpdateSettings has change edit a copy of the user's preferences as they
+// are, and keeps what comes of it as SetSettings would, all under the hub's
+// lock: no other change comes between. Nothing changes when change fails.
+func (h *Hub) UpdateSettings(change func(*Settings) error) ([]string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	s.Integrations, s.IntegrationsRevision = h.settings.Integrations, h.settings.IntegrationsRevision
-	h.settings = s
-	h.saveSettings()
+	said := h.settings.clone()
+	if err := change(&said); err != nil {
+		return nil, err
+	}
+	s, kept := said.clone(), h.settings.clone()
+	s.Integrations, s.IntegrationsRevision, s.Rewritten = kept.Integrations, kept.IntegrationsRevision, kept.Rewritten
+	s.Prompts.Tasks = maps.Clone(s.Prompts.Tasks)
+	if s.Prompts.Tasks == nil {
+		s.Prompts.Tasks = map[string]string{}
+	}
+	s.Prompts.Rewrite = cmp.Or(s.Prompts.Rewrite, RewriteAsk)
+	behind := h.settings.Prompts.behind(s.Prompts)
+	if s.Prompts.Rewrite == RewriteAlways {
+		for _, t := range behind {
+			s.Rewritten[t]++
+		}
+		behind = nil
+	}
+	if err := h.keepSettings(s); err != nil {
+		return nil, err
+	}
+	return behind, nil
+}
+
+// Rewrite has the model write again what it wrote for tasks, or with none
+// for every task: its descriptions of open sessions with their filings,
+// roles and effort notes, and its briefs of pull requests. Days of the
+// journal and earlier history are written only when asked for.
+func (h *Hub) Rewrite(tasks ...string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(tasks) == 0 {
+		tasks = []string{ActDescribe, ActBrief}
+	}
+	s := h.settings.clone()
+	for _, t := range leading(tasks) {
+		s.Rewritten[t]++
+	}
+	return h.keepSettings(s)
+}
+
+// rewritten marks the times the model has been asked to write again for
+// task: empty until it is, so that what was written before stands.
+func (h *Hub) rewritten(task string) string {
+	if n := h.settings.Rewritten[task]; n > 0 {
+		return "~" + strconv.Itoa(n)
+	}
+	return ""
 }
 
 // SetIntegration turns one integration on or off. Every session is then
 // described again, since what the model can look up has changed.
-func (h *Hub) SetIntegration(id string, on bool) {
+func (h *Hub) SetIntegration(id string, on bool) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.settings.Integrations[id] == on {
-		return
+		return nil
 	}
-	h.settings.Integrations[id] = on
-	h.settings.IntegrationsRevision++
-	h.saveSettings()
+	s := h.settings.clone()
+	s.Integrations[id] = on
+	s.IntegrationsRevision++
+	return h.keepSettings(s)
 }
 
-func (h *Hub) saveSettings() {
-	h.warn(h.cache.Put("setting", "main", h.settings))
+// ErrNotSaved is wrapped by the error of a change to the settings that could
+// not be saved, which is then not made.
+var ErrNotSaved = errors.New("the settings could not be saved")
+
+// keepSettings saves s, and only then makes it the user's preferences. s
+// shares nothing with the settings it replaces.
+func (h *Hub) keepSettings(s Settings) error {
+	if err := h.cache.Put("setting", "main", s); err != nil {
+		return fmt.Errorf("%w: %w", ErrNotSaved, err)
+	}
+	h.settings = s
 	h.last = ""
 	h.changed()
+	return nil
 }
 
 // Looked records a lookup for the user to see.
@@ -1418,12 +1599,12 @@ func (h *Hub) fed() []Item {
 	out := []Item{}
 	for _, id := range sources {
 		for _, it := range h.feeds[id].items {
-			it.Effort, it.EffortVia = h.fileRepo(it.Repo)
+			it.Effort, it.EffortVia = h.filePull(it.Repo, it.Pull)
 			out = append(out, it)
 		}
 		for _, p := range h.feeds[id].pulls {
 			pr := PullRequest{PullRequest: p, Source: id}
-			pr.Effort, pr.EffortVia = h.fileRepo(p.Repo)
+			pr.Effort, pr.EffortVia = h.filePull(p.Repo, pullName(p))
 			h.discuss(&pr)
 			out = append(out, raised(pr)...)
 		}
@@ -1439,7 +1620,7 @@ func (h *Hub) pulls() []PullRequest {
 	for id, f := range h.feeds {
 		for _, p := range f.pulls {
 			pr := PullRequest{PullRequest: p, Source: id}
-			pr.Effort, pr.EffortVia = h.fileRepo(p.Repo)
+			pr.Effort, pr.EffortVia = h.filePull(p.Repo, pullName(p))
 			h.discuss(&pr)
 			out = append(out, pr)
 		}
@@ -1457,9 +1638,16 @@ func (h *Hub) pulls() []PullRequest {
 	return out
 }
 
-// fileRepo reports the effort a repository's items belong under, empty when
-// neither the user nor a directory rule says.
-func (h *Hub) fileRepo(repo string) (effort, via string) {
+// pullName names a pull request as "owner/name#number".
+func pullName(p integrations.PullRequest) string {
+	return p.Repo + "#" + strconv.Itoa(p.Number)
+}
+
+// filePull reports the effort something from a repository belongs under:
+// where the user filed the pull request it is about, if pull names one, or
+// else where its repository's items go. Both are empty when neither the user
+// nor a directory rule says.
+func (h *Hub) filePull(repo, pull string) (effort, via string) {
 	var held []string
 	for dir, repos := range h.clones {
 		for _, r := range repos {
@@ -1469,7 +1657,11 @@ func (h *Hub) fileRepo(repo string) (effort, via string) {
 			}
 		}
 	}
-	if effort, via, ok := h.kb.ResolveRepo(repo, held); ok {
+	resolve := h.kb.ResolveRepo
+	if pull != "" {
+		repo, resolve = pull, h.kb.ResolvePull
+	}
+	if effort, via, ok := resolve(repo, held); ok {
 		return effort, via
 	}
 	return "", ""
@@ -1498,6 +1690,8 @@ type State struct {
 	Knowledge  kb.Knowledge `json:"knowledge"`
 	// Lookups are the most recent ones, newest last.
 	Lookups []Lookup `json:"lookups"`
+	// Actions are the last few things the local model did, the latest first.
+	Actions []Action `json:"actions"`
 	// Feeds says how each integration's last collection went, by integration.
 	Feeds map[string]FeedStatus `json:"feeds"`
 	// PullRequests are the open ones the integrations listed.
@@ -1513,6 +1707,9 @@ type State struct {
 	// Plugins says, for each agent that can be asked, whether it has the
 	// Slorp plugin.
 	Plugins map[string]Plugin `json:"plugins"`
+	// Release is the release of Slorp running, and the newer one when
+	// there is one.
+	Release Release `json:"release"`
 }
 
 func (h *Hub) State() State {
@@ -1524,7 +1721,7 @@ func (h *Hub) State() State {
 		feeds[id] = f.FeedStatus
 	}
 	return State{Sessions: sessions, Items: append(items(sessions), h.fed()...), Efforts: h.efforts(sessions), Summarizer: h.summ,
-		Settings: h.settings, Knowledge: h.kb.Knowledge(), Lookups: append([]Lookup{}, h.lookups...), Feeds: feeds, PullRequests: h.pulls(), Limits: h.limited(), ProviderLimits: h.providerLimited(time.Now()), Journal: h.journal(), Archive: h.archives(), Plugins: maps.Clone(h.plugins)}
+		Settings: h.settings.clone(), Knowledge: h.kb.Knowledge(), Lookups: append([]Lookup{}, h.lookups...), Actions: h.acted(recentActions), Feeds: feeds, PullRequests: h.pulls(), Limits: h.limited(), ProviderLimits: h.providerLimited(time.Now()), Journal: h.journal(), Archive: h.archives(), Plugins: maps.Clone(h.plugins), Release: h.release}
 }
 
 func (h *Hub) efforts(sessions []Session) []Effort {
@@ -1555,8 +1752,8 @@ func (h *Hub) efforts(sessions []Session) []Effort {
 }
 
 // MergeEfforts moves everything filed under one effort to another and
-// removes the first: its filings, directories, questions and what it
-// watches, its closed sessions, and its part of each day of the journal.
+// removes the first: its filings, directories and questions, its closed
+// sessions, and its part of each day of the journal.
 // What the model wrote of where it stood is dropped.
 func (h *Hub) MergeEfforts(from, into string) error {
 	if err := h.kb.Merge(from, into); err != nil {
@@ -1577,16 +1774,17 @@ func (h *Hub) MergeEfforts(from, into string) error {
 		}
 	}
 	for day, w := range h.wrapups {
-		moved := false
+		if !slices.ContainsFunc(w.Efforts, func(e WrapupEffort) bool { return e.ID == from }) {
+			continue
+		}
+		w.Efforts = slices.Clone(w.Efforts)
 		for i := range w.Efforts {
 			if w.Efforts[i].ID == from {
-				w.Efforts[i].ID, moved = into, true
+				w.Efforts[i].ID = into
 			}
 		}
-		if moved {
-			h.wrapups[day] = w
-			h.warn(h.cache.Put("wrapup", day, w))
-		}
+		h.wrapups[day] = w
+		h.warn(h.cache.Put("wrapup", day, w))
 	}
 	delete(h.notes, from)
 	h.warn(h.cache.Delete("note", from))
@@ -1608,7 +1806,7 @@ func (h *Hub) Touch() {
 
 // routeKey identifies what a model's filing guess was based on.
 func (h *Hub) routeKey(s *Session) string {
-	return s.insightKey + ":" + strconv.Itoa(h.kb.Revision())
+	return s.insightKey + ":" + strconv.Itoa(h.kb.Revision()) + h.rewritten(ActFile)
 }
 
 // Unrouted lists described sessions that still need the model to guess an effort.
@@ -1656,7 +1854,7 @@ func (h *Hub) Unroled() []Unroled {
 		return out
 	}
 	for _, s := range h.sessions {
-		key := s.insightKey + ":" + strconv.Itoa(h.kb.RoleRevision())
+		key := s.insightKey + ":" + strconv.Itoa(h.kb.RoleRevision()) + h.rewritten(ActRole)
 		if s.insightKey != s.key || s.roleKey == key {
 			continue
 		}
@@ -1691,7 +1889,7 @@ func (h *Hub) Unnoted() []Unnoted {
 	for _, e := range h.kb.Efforts() {
 		var members []Session
 		var questions []string
-		key := e.Name + "\x00" + e.About
+		key := e.Name + "\x00" + e.About + h.rewritten(ActNote)
 		for _, q := range know.Questions {
 			if q.Effort == e.ID {
 				questions = append(questions, q.Text)
@@ -2106,7 +2304,7 @@ func (h *Hub) Subscribe() (<-chan struct{}, func()) {
 
 func (h *Hub) changed() {
 	now := time.Now()
-	context := ":" + strconv.Itoa(h.kb.ContextRevision()) + "." + strconv.Itoa(h.settings.IntegrationsRevision)
+	context := ":" + strconv.Itoa(h.kb.ContextRevision()) + "." + strconv.Itoa(h.settings.IntegrationsRevision) + h.rewritten(ActDescribe)
 	for _, s := range h.sessions {
 		if k := contentKey(s) + context; k != s.key {
 			s.key, s.keySince = k, now

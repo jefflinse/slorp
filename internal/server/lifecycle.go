@@ -9,10 +9,12 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/jefflinse/slorp/internal/claude"
 	"github.com/jefflinse/slorp/internal/hub"
+	"github.com/jefflinse/slorp/internal/terminal"
 )
 
 type launchCatalog interface {
@@ -21,6 +23,75 @@ type launchCatalog interface {
 
 type resumeCommander interface {
 	ResumeCommand(id, dir string) string
+}
+
+// attachCommander is a launcher whose running sessions can be opened in a
+// terminal: AttachCommand gives the shell command that opens the one running
+// as job, and ok is false when it runs none.
+type attachCommander interface {
+	AttachCommand(job string) (command string, ok bool, err error)
+}
+
+// resumeCommand is the shell command that resumes one of an agent's closed
+// sessions in a terminal, in the directory it worked in. ok is false for an
+// agent that has none.
+func resumeCommand(launchers map[string]Launcher, agent, id, dir string) (command string, ok bool) {
+	if launcher, ok := launchers[agent].(resumeCommander); ok {
+		return launcher.ResumeCommand(id, dir), true
+	}
+	if agent == claude.Agent && launchers[agent] != nil {
+		return "cd -- " + hub.ShellQuote(dir) + " && " + hub.ShellQuote(claudeBin(launchers)) + " --resume " + hub.ShellQuote(id), true
+	}
+	return "", false
+}
+
+func claudeBin(launchers map[string]Launcher) string {
+	if a, ok := launchers[claude.Agent].(*claude.Adapter); ok {
+		return a.Bin
+	}
+	return "claude"
+}
+
+var (
+	errNoSession     = errors.New("no such session")
+	errOpenElsewhere = errors.New("this session is open in a terminal of its own; only a background or a closed session can be opened in another")
+	errNoCommand     = errors.New("this agent has no resume command")
+)
+
+// terminalCommand is the shell command that opens a session in a terminal:
+// one that attaches to a session running in the background, or the one that
+// resumes a closed session. A session open in a terminal of its own has
+// none.
+func terminalCommand(h *hub.Hub, launchers map[string]Launcher, id string) (string, error) {
+	for _, s := range h.Sessions() {
+		if s.ID != id {
+			continue
+		}
+		if s.Job == "" {
+			return "", errOpenElsewhere
+		}
+		if l, ok := launchers[s.Agent].(attachCommander); ok {
+			if command, ok, err := l.AttachCommand(s.Job); ok || err != nil {
+				return command, err
+			}
+		}
+		if s.Agent != claude.Agent {
+			return "", errOpenElsewhere
+		}
+		attach := hub.ShellQuote(claudeBin(launchers)) + " attach " + hub.ShellQuote(s.Job)
+		if s.Cwd == "" {
+			return attach, nil
+		}
+		return "cd -- " + hub.ShellQuote(s.Cwd) + " && " + attach, nil
+	}
+	s, ok := h.Archive(id)
+	if !ok {
+		return "", errNoSession
+	}
+	if command, ok := resumeCommand(launchers, s.Agent, id, s.Cwd); ok {
+		return command, nil
+	}
+	return "", errNoCommand
 }
 
 func lifecycleError(w http.ResponseWriter, err error, id string) {
@@ -120,7 +191,7 @@ func journalLifecycle(h *hub.Hub, w http.ResponseWriter, r *http.Request, key, f
 	return response, r.WithContext(ctx), finish, true
 }
 
-func lifecycleRoutes(mux *http.ServeMux, h *hub.Hub, launchers map[string]Launcher) {
+func lifecycleRoutes(mux *http.ServeMux, h *hub.Hub, launchers map[string]Launcher, terminals Terminals) {
 	mux.HandleFunc("GET /api/agents/{agent}/launch-options", func(w http.ResponseWriter, r *http.Request) {
 		catalog, ok := launchers[r.PathValue("agent")].(launchCatalog)
 		if !ok {
@@ -156,19 +227,48 @@ func lifecycleRoutes(mux *http.ServeMux, h *hub.Hub, launchers map[string]Launch
 			http.Error(w, "no such session", http.StatusNotFound)
 			return
 		}
-		var command string
-		if launcher, ok := launchers[agent].(resumeCommander); ok {
-			command = launcher.ResumeCommand(id, dir)
-		} else if agent == claude.Agent && launchers[agent] != nil {
-			bin := "claude"
-			if a, ok := launchers[agent].(*claude.Adapter); ok {
-				bin = a.Bin
-			}
-			command = "cd -- " + hub.ShellQuote(dir) + " && " + hub.ShellQuote(bin) + " --resume " + hub.ShellQuote(id)
-		} else {
+		command, ok := resumeCommand(launchers, agent, id, dir)
+		if !ok {
 			http.Error(w, "this agent has no resume command", http.StatusBadRequest)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"cwd": dir, "command": command})
+	})
+
+	// Opens a session in a window of the user's terminal emulator. The
+	// command run there is Slorp's own; the request names only the session.
+	mux.HandleFunc("POST /api/sessions/{id}/terminal", func(w http.ResponseWriter, r *http.Request) {
+		var in struct{}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		app := ""
+		if terminals != nil {
+			app = h.Settings().Terminal
+			if !slices.ContainsFunc(terminals.Apps(), func(a terminal.App) bool { return a.ID == app }) {
+				app = terminals.Default()
+			}
+		}
+		if app == "" {
+			http.Error(w, "Slorp knows no terminal emulator on this machine", http.StatusBadRequest)
+			return
+		}
+		command, err := terminalCommand(h, launchers, r.PathValue("id"))
+		switch {
+		case errors.Is(err, errNoSession):
+			http.Error(w, err.Error(), http.StatusNotFound)
+		case errors.Is(err, errOpenElsewhere):
+			http.Error(w, err.Error(), http.StatusConflict)
+		case errors.Is(err, errNoCommand):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		case err != nil:
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		default:
+			if err := terminals.Open(r.Context(), app, command); err != nil {
+				http.Error(w, err.Error(), http.StatusBadGateway)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}
 	})
 }

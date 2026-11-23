@@ -467,7 +467,9 @@ func TestSettingsPersist(t *testing.T) {
 	if !h.Settings().AnswerPermissions {
 		t.Fatal("answering permissions from Slorp should start on")
 	}
-	h.SetSettings(Settings{AnswerPermissions: false})
+	if _, err := h.SetSettings(Settings{AnswerPermissions: false}); err != nil {
+		t.Fatal(err)
+	}
 	if New(k, st).Settings().AnswerPermissions {
 		t.Error("the setting did not survive a restart")
 	}
@@ -482,7 +484,7 @@ func TestIntegrationSettings(t *testing.T) {
 		t.Fatal("setup: the session should be described")
 	}
 
-	h.SetIntegration("github", true)
+	must(t, h.SetIntegration("github", true))
 	quieten(h, "s1")
 	if len(h.Undescribed()) != 1 {
 		t.Error("turning an integration on did not queue sessions to be described again with it")
@@ -492,13 +494,15 @@ func TestIntegrationSettings(t *testing.T) {
 	}
 	describe(h, "s1", KindReview)
 
-	h.SetIntegration("github", true)
+	must(t, h.SetIntegration("github", true))
 	quieten(h, "s1")
 	if len(h.Undescribed()) != 0 {
 		t.Error("setting an integration to what it already was queued everything again")
 	}
 
-	h.SetSettings(Settings{AnswerPermissions: false})
+	if _, err := h.SetSettings(Settings{AnswerPermissions: false}); err != nil {
+		t.Fatal(err)
+	}
 	if got := h.Settings(); !got.Integrations["github"] || got.AnswerPermissions {
 		t.Errorf("changing another setting disturbed the integrations: %+v", got)
 	}
@@ -638,7 +642,9 @@ func TestAQuestionIsAnsweredByPickingItsOptions(t *testing.T) {
 	if h.Answer(command.ID, map[string][]string{"Which soup?": {"Tomato"}, "Which sides?": {"Pickle"}}) {
 		t.Error("a permission prompt was answered as if it were a question")
 	}
-	h.SetSettings(Settings{AnswerPermissions: false})
+	if _, err := h.SetSettings(Settings{AnswerPermissions: false}); err != nil {
+		t.Fatal(err)
+	}
 	if p := h.Ask(agent, "s2", Pending{Tool: "AskUserQuestion", Input: sandwich, Question: true}, true); p.Answerable {
 		t.Error("the setting to keep prompts in the terminal was ignored for a question")
 	}
@@ -660,7 +666,9 @@ func TestAskDecidesWhoMayAnswer(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h, _, _ := newHub(t)
-			h.SetSettings(Settings{AnswerPermissions: tt.setting})
+			if _, err := h.SetSettings(Settings{AnswerPermissions: tt.setting}); err != nil {
+				t.Fatal(err)
+			}
 			p := h.Ask(agent, "s1", Pending{Tool: "Bash", Summary: "ls", Input: "ls"}, tt.canAnswer)
 			s := session(t, h, "s1")
 			if p.Answerable != tt.want || s.Pending == nil || s.Pending.Answerable != tt.want {
@@ -1369,8 +1377,44 @@ func TestFeedItemsFileByRepository(t *testing.T) {
 	must(t, k.AssignRepo("acme/widgets", ""))
 	h.Touch()
 	got = filed()
-	if got["gh-3"] != [2]string{b, kb.ViaUser} || got["gh-1"] != [2]string{"", kb.ViaUser} {
+	if got["gh-3"] != [2]string{b, kb.ViaRepo} || got["gh-1"] != [2]string{"", kb.ViaRepo} {
 		t.Errorf("after the user filed them: %v, want their choices over the rule", got)
+	}
+}
+
+func TestAPullRequestFiledOnItsOwnLeavesItsRepository(t *testing.T) {
+	h, k, _ := newHub(t)
+	a, b := effort(t, k, "A"), effort(t, k, "B")
+	must(t, k.AssignRepo("acme/widgets", a))
+	about := found("gh-1", "Acme/Widgets")
+	about.Pull = "Acme/Widgets#2"
+	at := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	h.SetFeed("github", []Item{about, found("gh-2", "acme/widgets")}, []integrations.PullRequest{pull("Acme/Widgets", 2, true, at), pull("acme/widgets", 3, true, at)}, nil)
+	filed := func() map[string][2]string {
+		out := map[string][2]string{}
+		for _, it := range feedItems(h) {
+			out[it.ID] = [2]string{it.Effort, it.EffortVia}
+		}
+		for _, p := range h.State().PullRequests {
+			out["#"+strconv.Itoa(p.Number)] = [2]string{p.Effort, p.EffortVia}
+		}
+		return out
+	}
+	with := [2]string{a, kb.ViaRepo}
+
+	if got, want := filed(), map[string][2]string{"gh-1": with, "gh-2": with, "#2": with, "#3": with}; !reflect.DeepEqual(got, want) {
+		t.Errorf("before any pull request is filed: %v, want everything with the repository", got)
+	}
+	must(t, k.AssignPull("acme/widgets#2", b))
+	h.Touch()
+	own := [2]string{b, kb.ViaUser}
+	if got, want := filed(), map[string][2]string{"gh-1": own, "gh-2": with, "#2": own, "#3": with}; !reflect.DeepEqual(got, want) {
+		t.Errorf("after the user filed #2: %v, want it and what is about it moved, and the rest left with the repository", got)
+	}
+	must(t, k.UnassignPull("acme/widgets#2"))
+	h.Touch()
+	if got, want := filed(), map[string][2]string{"gh-1": with, "gh-2": with, "#2": with, "#3": with}; !reflect.DeepEqual(got, want) {
+		t.Errorf("after its filing was forgotten: %v, want everything with the repository again", got)
 	}
 }
 
@@ -1514,6 +1558,30 @@ func TestSetPlugin(t *testing.T) {
 	h.SetPlugin(agent, want)
 	if got := h.State().Plugins[agent]; got != want || !told() {
 		t.Errorf("plugin = %+v, want %+v and subscribers told", got, want)
+	}
+}
+
+func TestSetRelease(t *testing.T) {
+	h, _, _ := newHub(t)
+	ticks, stop := h.Subscribe()
+	defer stop()
+	told := func() bool {
+		select {
+		case <-ticks:
+			return true
+		default:
+			return false
+		}
+	}
+
+	want := Release{Version: "v0.2.0", Latest: "v0.3.0"}
+	h.SetRelease(want)
+	if got := h.State().Release; got != want || !told() {
+		t.Errorf("release = %+v, want %+v and subscribers told", got, want)
+	}
+	h.SetRelease(want)
+	if told() {
+		t.Error("subscribers were told of a release that had not changed")
 	}
 }
 

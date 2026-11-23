@@ -104,7 +104,7 @@ func (p *Poller) Step(ctx context.Context, now bool) {
 		for i, it := range found.Items {
 			sum := sha1.Sum([]byte(it.Key))
 			items[i] = hub.Item{ID: f.ID + "-" + hex.EncodeToString(sum[:6]), Kind: it.Kind, Urgency: it.Urgency, Title: it.Title,
-				Ask: it.Ask, Summary: it.Summary, URL: it.URL, Repo: it.Repo, At: it.At}
+				Ask: it.Ask, Summary: it.Summary, URL: it.URL, Repo: it.Repo, Pull: it.Pull, At: it.At}
 		}
 		p.Hub.SetFeed(f.ID, items, found.PullRequests, err)
 	}

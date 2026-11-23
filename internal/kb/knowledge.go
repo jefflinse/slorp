@@ -3,21 +3,12 @@ package kb
 import (
 	"cmp"
 	"errors"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 )
-
-// Watch is a Slack person, channel or DM worth checking for an effort.
-type Watch struct {
-	ID string `json:"id"`
-	// Type is "person", "channel" or "dm".
-	Type    string   `json:"type"`
-	Name    string   `json:"name"`
-	Why     string   `json:"why"`
-	Efforts []string `json:"efforts"`
-}
 
 // Question is something the user has not decided yet.
 type Question struct {
@@ -47,6 +38,13 @@ type Role struct {
 	Attention string `json:"attention"`
 }
 
+// Workspace is a directory the user works in, by a name of their own.
+type Workspace struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Dir  string `json:"dir"`
+}
+
 // What a role lets through to the user's attention.
 const (
 	AttentionAll     = "all"
@@ -56,45 +54,60 @@ const (
 
 // Knowledge is everything in the knowledge base besides the efforts.
 type Knowledge struct {
-	Watch     []Watch    `json:"watch"`
 	Questions []Question `json:"questions"`
 	// Context is read by the model before it describes any session.
 	Context []Fact `json:"context"`
 	// Routing is read by the model when it files a session under an effort.
 	Routing []Fact `json:"routing"`
 	Roles   []Role `json:"roles"`
+	// Workspaces are offered wherever a directory is asked for.
+	Workspaces []Workspace `json:"workspaces"`
+	// Profiles are offered when a session is started.
+	Profiles []Profile `json:"profiles"`
+	// Handoffs are offered when what a session said is sent to another.
+	Handoffs []Handoff `json:"handoffs"`
 }
 
 // Sections of the knowledge base, as Add and Remove name them.
 const (
-	SectionWatch     = "watch"
-	SectionQuestions = "questions"
-	SectionContext   = "context"
-	SectionRouting   = "routing"
-	SectionRoles     = "roles"
+	SectionQuestions  = "questions"
+	SectionContext    = "context"
+	SectionRouting    = "routing"
+	SectionRoles      = "roles"
+	SectionWorkspaces = "workspaces"
 )
 
 // Entry is what Add takes; each section reads the fields it has. A role's
-// Type is its attention and its Text what it is about.
+// Type is its attention and its Text what it is about. A workspace's Dir is
+// an absolute directory no other workspace has.
 type Entry struct {
 	Type   string `json:"type"`
 	Name   string `json:"name"`
-	Why    string `json:"why"`
 	Effort string `json:"effort"`
 	Text   string `json:"text"`
 	Origin string `json:"origin"`
+	Dir    string `json:"dir"`
 }
 
 func (s *Store) Knowledge() Knowledge {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	k := s.f.Knowledge
+	profiles := append([]Profile{}, k.Profiles...)
+	for i, p := range profiles {
+		if p.Temperature != nil {
+			t := *p.Temperature
+			profiles[i].Temperature = &t
+		}
+	}
 	return Knowledge{
-		Watch:     append([]Watch{}, k.Watch...),
-		Questions: append([]Question{}, k.Questions...),
-		Context:   append([]Fact{}, k.Context...),
-		Routing:   append([]Fact{}, k.Routing...),
-		Roles:     append([]Role{}, k.Roles...),
+		Questions:  append([]Question{}, k.Questions...),
+		Context:    append([]Fact{}, k.Context...),
+		Routing:    append([]Fact{}, k.Routing...),
+		Roles:      append([]Role{}, k.Roles...),
+		Workspaces: append([]Workspace{}, k.Workspaces...),
+		Profiles:   profiles,
+		Handoffs:   append([]Handoff{}, k.Handoffs...),
 	}
 }
 
@@ -109,19 +122,50 @@ func validAttention(a string) bool {
 	return a == AttentionAll || a == AttentionStopped || a == AttentionNone
 }
 
+// File files a session under an effort and gives it a role on the user's
+// say-so, both in one change or neither. An empty effortID or roleID leaves
+// that as it is.
+func (s *Store) File(sessionID, effortID, roleID string) error {
+	if effortID == "" && roleID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.update(func(f *file) error {
+		if effortID != "" {
+			if f.index(effortID) < 0 {
+				return errors.New("no such effort")
+			}
+			f.Assignments[sessionID] = effortID
+		}
+		if roleID != "" {
+			if f.role(roleID) == nil {
+				return errors.New("no such role")
+			}
+			if f.SessionRoles == nil {
+				f.SessionRoles = map[string]string{}
+			}
+			f.SessionRoles[sessionID] = roleID
+		}
+		return nil
+	})
+}
+
 // SetRole gives a session a role on the user's say-so. An empty roleID
 // records that the user wants it to have none.
 func (s *Store) SetRole(sessionID, roleID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if roleID != "" && s.role(roleID) == nil {
-		return errors.New("no such role")
-	}
-	if s.f.SessionRoles == nil {
-		s.f.SessionRoles = map[string]string{}
-	}
-	s.f.SessionRoles[sessionID] = roleID
-	return s.save()
+	return s.update(func(f *file) error {
+		if roleID != "" && f.role(roleID) == nil {
+			return errors.New("no such role")
+		}
+		if f.SessionRoles == nil {
+			f.SessionRoles = map[string]string{}
+		}
+		f.SessionRoles[sessionID] = roleID
+		return nil
+	})
 }
 
 // RoleOf reports the role the user gave a session, empty for none. ok is
@@ -130,7 +174,7 @@ func (s *Store) RoleOf(sessionID string) (role Role, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	id, found := s.f.SessionRoles[sessionID]
-	if r := s.role(id); r != nil {
+	if r := s.f.role(id); r != nil {
 		return *r, true
 	}
 	return Role{}, found
@@ -141,47 +185,51 @@ func (s *Store) RoleOf(sessionID string) (role Role, ok bool) {
 func (s *Store) Carry(from, to string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	moved := false
-	for _, said := range []map[string]string{s.f.Assignments, s.f.SessionRoles} {
-		v, ok := said[from]
-		if !ok {
-			continue
-		}
-		if _, has := said[to]; !has {
-			said[to] = v
-		}
-		delete(said, from)
-		moved = true
-	}
-	if !moved {
+	_, filed := s.f.Assignments[from]
+	_, given := s.f.SessionRoles[from]
+	if !filed && !given {
 		return nil
 	}
-	return s.save()
+	return s.update(func(f *file) error {
+		for _, said := range []map[string]string{f.Assignments, f.SessionRoles} {
+			v, ok := said[from]
+			if !ok {
+				continue
+			}
+			if _, has := said[to]; !has {
+				said[to] = v
+			}
+			delete(said, from)
+		}
+		return nil
+	})
 }
 
 // HasRole reports whether a role with that ID exists.
 func (s *Store) HasRole(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.role(id) != nil
+	return s.f.role(id) != nil
 }
 
 // SetRoleAttention changes which of a role's sessions may ask for the user.
 func (s *Store) SetRoleAttention(roleID, attention string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	r := s.role(roleID)
-	if r == nil || !validAttention(attention) {
-		return errors.New("needs an existing role and an attention of all, stopped or none")
-	}
-	r.Attention = attention
-	return s.save()
+	return s.update(func(f *file) error {
+		r := f.role(roleID)
+		if r == nil || !validAttention(attention) {
+			return errors.New("needs an existing role and an attention of all, stopped or none")
+		}
+		r.Attention = attention
+		return nil
+	})
 }
 
-func (s *Store) role(id string) *Role {
-	for i := range s.f.Knowledge.Roles {
-		if s.f.Knowledge.Roles[i].ID == id {
-			return &s.f.Knowledge.Roles[i]
+func (f *file) role(id string) *Role {
+	for i := range f.Knowledge.Roles {
+		if f.Knowledge.Roles[i].ID == id {
+			return &f.Knowledge.Roles[i]
 		}
 	}
 	return nil
@@ -198,67 +246,76 @@ func (s *Store) ContextRevision() int {
 func (s *Store) Add(section string, e Entry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	text, name := strings.TrimSpace(e.Text), strings.TrimSpace(e.Name)
-	if e.Effort != "" && s.index(e.Effort) < 0 {
-		return errors.New("no such effort")
-	}
-	s.f.Seq++
-	id := section[:1] + strconv.Itoa(s.f.Seq)
-	k := &s.f.Knowledge
-	switch {
-	case section == SectionWatch && name != "" && (e.Type == "person" || e.Type == "channel" || e.Type == "dm"):
-		w := Watch{ID: id, Type: e.Type, Name: name, Why: strings.TrimSpace(e.Why), Efforts: []string{}}
-		if e.Effort != "" {
-			w.Efforts = []string{e.Effort}
+	return s.update(func(f *file) error {
+		text, name := strings.TrimSpace(e.Text), strings.TrimSpace(e.Name)
+		if e.Effort != "" && f.index(e.Effort) < 0 {
+			return errors.New("no such effort")
 		}
-		k.Watch = append(k.Watch, w)
-	case section == SectionQuestions && text != "":
-		k.Questions = append(k.Questions, Question{ID: id, Text: text, Effort: e.Effort, Origin: strings.TrimSpace(e.Origin), At: time.Now()})
-	case section == SectionContext && text != "":
-		k.Context = append(k.Context, Fact{ID: id, Text: text})
-		s.f.ContextRevision++
-	case section == SectionRouting && text != "":
-		k.Routing = append(k.Routing, Fact{ID: id, Text: text})
-		s.f.Revision++
-	case section == SectionRoles && name != "" && (e.Type == "" || validAttention(e.Type)):
-		k.Roles = append(k.Roles, Role{ID: id, Name: name, About: text, Attention: cmp.Or(e.Type, AttentionAll)})
-		s.f.RoleRevision++
-	default:
-		return errors.New("that entry is missing something, or the section does not exist")
-	}
-	return s.save()
+		f.Seq++
+		id := section[:1] + strconv.Itoa(f.Seq)
+		k := &f.Knowledge
+		switch {
+		case section == SectionQuestions && text != "":
+			k.Questions = append(k.Questions, Question{ID: id, Text: text, Effort: e.Effort, Origin: strings.TrimSpace(e.Origin), At: time.Now()})
+		case section == SectionContext && text != "":
+			k.Context = append(k.Context, Fact{ID: id, Text: text})
+			f.ContextRevision++
+		case section == SectionRouting && text != "":
+			k.Routing = append(k.Routing, Fact{ID: id, Text: text})
+			f.Revision++
+		case section == SectionRoles && name != "" && (e.Type == "" || validAttention(e.Type)):
+			k.Roles = append(k.Roles, Role{ID: id, Name: name, About: text, Attention: cmp.Or(e.Type, AttentionAll)})
+			f.RoleRevision++
+		case section == SectionWorkspaces && name != "" && filepath.IsAbs(e.Dir):
+			dir := filepath.Clean(e.Dir)
+			if slices.ContainsFunc(k.Workspaces, func(w Workspace) bool { return w.Dir == dir }) {
+				return errors.New("a workspace already has that directory")
+			}
+			k.Workspaces = append(k.Workspaces, Workspace{ID: id, Name: name, Dir: dir})
+		default:
+			return errors.New("that entry is missing something, or the section does not exist")
+		}
+		return nil
+	})
 }
 
 // Remove deletes one entry from a section.
 func (s *Store) Remove(section, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k := &s.f.Knowledge
-	found := false
-	switch section {
-	case SectionWatch:
-		k.Watch, found = without(k.Watch, func(w Watch) bool { return w.ID == id })
-	case SectionQuestions:
-		k.Questions, found = without(k.Questions, func(q Question) bool { return q.ID == id })
-	case SectionContext:
-		k.Context, found = without(k.Context, func(f Fact) bool { return f.ID == id })
-		s.f.ContextRevision++
-	case SectionRouting:
-		k.Routing, found = without(k.Routing, func(f Fact) bool { return f.ID == id })
-		s.f.Revision++
-	case SectionRoles:
-		k.Roles, found = without(k.Roles, func(r Role) bool { return r.ID == id })
-		for session, role := range s.f.SessionRoles {
-			if role == id {
-				delete(s.f.SessionRoles, session)
+	return s.update(func(f *file) error {
+		k := &f.Knowledge
+		found := false
+		switch section {
+		case SectionQuestions:
+			k.Questions, found = without(k.Questions, func(q Question) bool { return q.ID == id })
+		case SectionContext:
+			k.Context, found = without(k.Context, func(f Fact) bool { return f.ID == id })
+			f.ContextRevision++
+		case SectionRouting:
+			k.Routing, found = without(k.Routing, func(f Fact) bool { return f.ID == id })
+			f.Revision++
+		case SectionRoles:
+			k.Roles, found = without(k.Roles, func(r Role) bool { return r.ID == id })
+			for i := range k.Profiles {
+				if k.Profiles[i].Role == id {
+					k.Profiles[i].Role = ""
+				}
 			}
+			for session, role := range f.SessionRoles {
+				if role == id {
+					delete(f.SessionRoles, session)
+				}
+			}
+			f.RoleRevision++
+		case SectionWorkspaces:
+			k.Workspaces, found = without(k.Workspaces, func(w Workspace) bool { return w.ID == id })
 		}
-		s.f.RoleRevision++
-	}
-	if !found {
-		return errors.New("no such entry")
-	}
-	return s.save()
+		if !found {
+			return errors.New("no such entry")
+		}
+		return nil
+	})
 }
 
 // forget drops every reference to a deleted effort.
@@ -268,8 +325,10 @@ func (k *Knowledge) forget(effortID string) {
 			k.Questions[i].Effort = ""
 		}
 	}
-	for i := range k.Watch {
-		k.Watch[i].Efforts, _ = without(k.Watch[i].Efforts, func(id string) bool { return id == effortID })
+	for i := range k.Profiles {
+		if k.Profiles[i].Effort == effortID {
+			k.Profiles[i].Effort = ""
+		}
 	}
 }
 
@@ -280,12 +339,9 @@ func (k *Knowledge) move(from, into string) {
 			k.Questions[i].Effort = into
 		}
 	}
-	for i := range k.Watch {
-		if kept, found := without(k.Watch[i].Efforts, func(id string) bool { return id == from }); found {
-			if !slices.Contains(kept, into) {
-				kept = append(kept, into)
-			}
-			k.Watch[i].Efforts = kept
+	for i := range k.Profiles {
+		if k.Profiles[i].Effort == from {
+			k.Profiles[i].Effort = into
 		}
 	}
 }

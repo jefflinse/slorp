@@ -48,6 +48,21 @@ type Filled struct {
 // them, and queues the exchanges that were answered but never described. It
 // returns how many are queued, and false when the session is not open.
 func (h *Hub) Backfill(sessionID string, exchanges []Exchange) (queued int, ok bool) {
+	return h.fill(sessionID, exchanges, nil)
+}
+
+// Recall is Backfill for only the exchanges said at the given times: of
+// what the timeline lacks it adds those alone, and of what was never
+// described it queues those alone, behind whatever is already waiting.
+func (h *Hub) Recall(sessionID string, exchanges []Exchange, at []time.Time) (queued int, ok bool) {
+	return h.fill(sessionID, exchanges, func(x Exchange) bool {
+		return slices.ContainsFunc(at, x.At.Equal)
+	})
+}
+
+// fill is Backfill when want is nil, and otherwise Recall of the exchanges
+// want picks out.
+func (h *Hub) fill(sessionID string, exchanges []Exchange, want func(Exchange) bool) (queued int, ok bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	s, ok := h.sessions[sessionID]
@@ -88,6 +103,8 @@ func (h *Hub) Backfill(sessionID string, exchanges []Exchange) (queued int, ok b
 					merged.ObservedAt = old.At
 				}
 				had = slices.Delete(had, i, i+1)
+			} else if want != nil {
+				continue
 			}
 			timeline = append(timeline, Moment{At: merged.At, Compacted: &merged})
 			continue
@@ -112,6 +129,7 @@ func (h *Hub) Backfill(sessionID string, exchanges []Exchange) (queued int, ok b
 				})
 			})
 		}
+		known := i >= 0
 		if i >= 0 {
 			m.Line, m.Summary = had[i].Line, had[i].Summary
 			for _, alias := range had[i].Aliases {
@@ -128,9 +146,14 @@ func (h *Hub) Backfill(sessionID string, exchanges []Exchange) (queued int, ok b
 			if m.Line == "" {
 				m.Line, m.Summary = old.Line, old.Summary
 			}
+			known = true
 			return true
 		})
-		if m.Line == "" && x.Reply != "" {
+		wanted := want == nil || want(x)
+		if !known && !wanted {
+			continue
+		}
+		if m.Line == "" && x.Reply != "" && wanted {
 			queue = append(queue, x)
 		}
 		timeline = append(timeline, m)
@@ -142,6 +165,15 @@ func (h *Hub) Backfill(sessionID string, exchanges []Exchange) (queued int, ok b
 	s.Timeline = timeline[max(0, len(timeline)-timelineLimit):]
 	if h.backfill == nil {
 		h.backfill = map[string][]Exchange{}
+	}
+	if want != nil {
+		waiting := h.backfill[sessionID]
+		for _, x := range queue {
+			if !slices.ContainsFunc(waiting, func(w Exchange) bool { return w.At.Equal(x.At) && w.Prompt == x.Prompt }) {
+				waiting = append(waiting, x)
+			}
+		}
+		queue = waiting
 	}
 	h.backfill[sessionID] = queue
 	h.remember(s)

@@ -108,7 +108,7 @@ func (e *Enricher) wrapup(ctx context.Context, model string, log hub.DayLog) (he
 			Open []string `json:"open"`
 		} `json:"efforts"`
 	}
-	if err := e.ask(ctx, model, wrapupSystem, b.String(), "wrapup", schema, &out); err != nil {
+	if err := e.ask(ctx, model, hub.ActWrapup, b.String(), "wrapup", schema, &out); err != nil {
 		return "", nil, nil, err
 	}
 	for _, wrote := range out.Efforts {

@@ -16,9 +16,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jefflinse/slorp/internal/claude"
 	"github.com/jefflinse/slorp/internal/hub"
 	"github.com/jefflinse/slorp/internal/integrations"
 	"github.com/jefflinse/slorp/internal/kb"
+	"github.com/jefflinse/slorp/internal/store"
+	"github.com/jefflinse/slorp/internal/terminal"
 	"github.com/jefflinse/slorp/internal/testdb"
 )
 
@@ -37,6 +40,10 @@ type fixture struct {
 	launcher *launcher
 	// prober is what the server asked to have tried of the local model.
 	prober *prober
+	// terminals is what the server asked to have opened in a terminal.
+	terminals *terminals
+	// store is where the hub and knowledge base are kept.
+	store *store.Store
 }
 
 // launcher records what it was asked to start, reopen, stop and install.
@@ -115,26 +122,46 @@ func fixtureWithHistory(t *testing.T, histories map[string]History, extraPlugins
 		Scope: func(string) (string, bool) { return "", true },
 		Tools: []integrations.Tool{{Name: "fake_lookup", Description: "Look something up."}},
 	})
-	rec, launch, probe := &record{}, &launcher{}, &prober{}
+	rec, launch, probe, terms := &record{}, &launcher{}, &prober{}, &terminals{}
 	plugins := map[string]PluginManager{"claude": launch}
 	for _, extra := range extraPlugins {
 		for agent, plugin := range extra {
 			plugins[agent] = plugin
 		}
 	}
-	readers := map[string]History{"claude": rec.read}
+	readers := map[string]History{"claude": {Exchanges: rec.read, Reply: rec.reply}}
 	for agent, reader := range histories {
 		readers[agent] = reader
 	}
-	srv := httptest.NewServer(New(h, k, tools, feeds, readers, map[string]Launcher{"claude": launch}, plugins, map[string]Delegates{"claude": rec}, probe, Page([]byte("<title>slorp</title>"), "")))
+	srv := httptest.NewServer(New(h, k, tools, feeds, readers, map[string]Launcher{"claude": launch}, plugins, map[string]Delegates{"claude": rec}, probe, terms, nil, Page([]byte("<title>slorp</title>"), "")))
 	t.Cleanup(srv.Close)
-	return &fixture{t, srv, h, k, feeds, probes, rec, launch, probe}
+	return &fixture{t, srv, h, k, feeds, probes, rec, launch, probe, terms, st}
+}
+
+// terminals stands in for the terminal emulators on a machine: two of them,
+// the second the one Slorp was started from.
+type terminals struct {
+	opened [][2]string
+	err    error
+}
+
+func (t *terminals) Apps() []terminal.App {
+	return []terminal.App{{ID: "one", Name: "One"}, {ID: "two", Name: "Two"}}
+}
+
+func (t *terminals) Default() string { return "two" }
+
+func (t *terminals) Open(_ context.Context, app, command string) error {
+	t.opened = append(t.opened, [2]string{app, command})
+	return t.err
 }
 
 type record struct {
 	exchanges []hub.Exchange
-	err       error
-	asked     []string
+	// said is the whole of what the session last said, as its record has it.
+	said  string
+	err   error
+	asked []string
 	// subagents are what each session is read as having started, by
 	// session, and reports what each reported, by session and subagent.
 	subagents map[string][]hub.Subagent
@@ -151,6 +178,14 @@ func (r *record) Report(sessionID, id string) (hub.SubagentReport, bool) {
 func (r *record) read(_ context.Context, sessionID string, limit int) ([]hub.Exchange, error) {
 	r.asked = append(r.asked, sessionID+" "+strconv.Itoa(limit))
 	return r.exchanges, r.err
+}
+
+func (r *record) reply(_ context.Context, sessionID, ends string) (string, error) {
+	r.asked = append(r.asked, sessionID+" ends "+strconv.Itoa(len(ends)))
+	if r.err != nil || !strings.HasSuffix(r.said, ends) {
+		return "", r.err
+	}
+	return r.said, nil
 }
 
 // do sends a request the way the web UI or a bridge would. edit may change
@@ -511,7 +546,7 @@ func TestRefusesRequestsAWebPageElsewhereCouldCause(t *testing.T) {
 func TestStateIsShapedForTheUI(t *testing.T) {
 	f := newFixture(t)
 	_, body := f.do("GET", "/api/sessions", "", nil)
-	for _, field := range []string{`"sessions":[]`, `"items":[]`, `"efforts":[]`, `"watch":[]`, `"questions":[]`, `"context":[]`, `"routing":[]`, `"answerPermissions":true`, `"lookups":[]`, `"integrations":[{`, `"feeds":{}`, `"watches":[]`, `"plugins":{}`} {
+	for _, field := range []string{`"sessions":[]`, `"items":[]`, `"efforts":[]`, `"questions":[]`, `"context":[]`, `"routing":[]`, `"answerPermissions":true`, `"lookups":[]`, `"integrations":[{`, `"feeds":{}`, `"watches":[]`, `"plugins":{}`} {
 		if !strings.Contains(body, field) {
 			t.Errorf("empty state lacks %s, which the page reads without checking: %s", field, body)
 		}
@@ -1059,13 +1094,13 @@ func TestFeedItemsOverHTTP(t *testing.T) {
 	if code := f.post("/api/repos/effort", `{"repo":"acme/widgets","effort":"widgets"}`); code != 204 {
 		t.Fatalf("file a repository = %d", code)
 	}
-	if it := f.state().Items[0]; it.Effort != "widgets" || it.EffortVia != kb.ViaUser {
+	if it := f.state().Items[0]; it.Effort != "widgets" || it.EffortVia != kb.ViaRepo {
 		t.Errorf("item filed %q via %q, want the user's filing of its repository", it.Effort, it.EffortVia)
 	}
 	if f.feeds.rescans != before+1 {
 		t.Errorf("%d rescans after a filing, want 1: an edit may change which directories matter", f.feeds.rescans-before)
 	}
-	if code := f.post("/api/repos/effort", `{"repo":"acme/widgets","effort":""}`); code != 204 || f.state().Items[0].EffortVia != kb.ViaUser || f.state().Items[0].Effort != "" {
+	if code := f.post("/api/repos/effort", `{"repo":"acme/widgets","effort":""}`); code != 204 || f.state().Items[0].EffortVia != kb.ViaRepo || f.state().Items[0].Effort != "" {
 		t.Errorf("leaving a repository unsorted = %d, item %+v", code, f.state().Items[0])
 	}
 	if code := f.post("/api/repos/effort", `{"repo":"acme/widgets","effort":"nope"}`); code != 400 {
@@ -1076,6 +1111,34 @@ func TestFeedItemsOverHTTP(t *testing.T) {
 	}
 	if code := f.post("/api/repos/effort", `{`); code != 400 {
 		t.Errorf("a malformed filing = %d, want 400", code)
+	}
+
+	before = f.feeds.rescans
+	if code := f.post("/api/pulls/effort", `{"pull":"acme/widgets#7","effort":"widgets"}`); code != 204 {
+		t.Fatalf("file a pull request = %d", code)
+	}
+	if p := f.state().PullRequests[0]; p.Effort != "widgets" || p.EffortVia != kb.ViaUser {
+		t.Errorf("pull request filed %q via %q, want the user's filing of it", p.Effort, p.EffortVia)
+	}
+	if it := f.state().Items[0]; it.Effort != "" || it.EffortVia != kb.ViaRepo {
+		t.Errorf("item filed %q via %q, want it left with its repository: it is about no pull request", it.Effort, it.EffortVia)
+	}
+	if f.feeds.rescans != before+1 {
+		t.Errorf("%d rescans after a filing, want 1", f.feeds.rescans-before)
+	}
+	if code, _ := f.do("DELETE", "/api/pulls/effort", `{"pull":"acme/widgets#7"}`, nil); code != 204 {
+		t.Errorf("forgetting a pull request's filing = %d, want 204", code)
+	}
+	if p := f.state().PullRequests[0]; p.Effort != "" || p.EffortVia != kb.ViaRepo {
+		t.Errorf("pull request filed %q via %q after its filing was forgotten, want it with its repository", p.Effort, p.EffortVia)
+	}
+	for _, body := range []string{`{"pull":"acme/widgets#7","effort":"nope"}`, `{"pull":"acme/widgets","effort":"widgets"}`, `{`} {
+		if code := f.post("/api/pulls/effort", body); code != 400 {
+			t.Errorf("filing %s = %d, want 400", body, code)
+		}
+	}
+	if code, _ := f.do("DELETE", "/api/pulls/effort", `{`, nil); code != 400 {
+		t.Errorf("a malformed forgetting = %d, want 400", code)
 	}
 }
 
@@ -1393,30 +1456,6 @@ func TestStoppingAndReopeningASession(t *testing.T) {
 	}
 }
 
-func TestModelURL(t *testing.T) {
-	tests := []struct {
-		in, want string
-		ok       bool
-	}{
-		{"", "", true},
-		{"  http://localhost:1234  ", "http://localhost:1234", true},
-		{"http://localhost:11434/v1", "http://localhost:11434", true},
-		{"http://localhost:11434/v1/", "http://localhost:11434", true},
-		{"localhost:8080", "http://localhost:8080", true},
-		{"https://models.example/openai/v1?key=1#top", "https://models.example/openai", true},
-		{"http://127.0.0.1:1234/", "http://127.0.0.1:1234", true},
-		{"ftp://localhost:21", "", false},
-		{"http://", "", false},
-		{"http://user:secret@localhost:1234", "", false},
-		{"http://local host", "", false},
-	}
-	for _, tt := range tests {
-		if got, ok := modelURL(tt.in); got != tt.want || ok != tt.ok {
-			t.Errorf("modelURL(%q) = %q, %v; want %q, %v", tt.in, got, ok, tt.want, tt.ok)
-		}
-	}
-}
-
 func TestChoosingTheLocalModel(t *testing.T) {
 	f := newFixture(t)
 	if code := f.post("/api/settings", `{"model":{"url":" localhost:11434/v1/ ","name":" qwen "}}`); code != 204 {
@@ -1543,5 +1582,194 @@ func TestABridgeReportsItsSubagents(t *testing.T) {
 	f.post("/api/bridge/permission", `{"sessionId":"s1","tool":"Bash","summary":"rm -rf build","input":"rm -rf build","canAnswer":true,"agentId":"a1"}`)
 	if p := f.state().Sessions[0].Pending; p == nil || p.AgentID != "a1" {
 		t.Errorf("pending = %+v, want it to name the subagent that asked", p)
+	}
+}
+
+func TestWorkspacesOverHTTP(t *testing.T) {
+	f := newFixture(t)
+	dir := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
+	if _, body := f.do("GET", "/api/sessions", "", nil); !strings.Contains(body, `"workspaces":[]`) {
+		t.Errorf("state lacks an empty list of workspaces, which the page reads: %s", body)
+	}
+	if code := f.post("/api/kb/workspaces", `{"name":"Here","dir":`+strconv.Quote(dir+"/")+`}`); code != 204 {
+		t.Fatalf("add a workspace = %d", code)
+	}
+	got := f.state().Knowledge.Workspaces
+	if len(got) != 1 || got[0].Name != "Here" || got[0].Dir != dir {
+		t.Fatalf("workspaces = %+v, want the one added, in the directory as it is", got)
+	}
+	for name, body := range map[string]string{
+		"a directory that is not there": `{"name":"Gone","dir":` + strconv.Quote(filepath.Join(dir, "missing")) + `}`,
+		"a relative directory":          `{"name":"Rel","dir":"work"}`,
+		"no name":                       `{"name":"","dir":` + strconv.Quote(dir) + `}`,
+		"a directory another has":       `{"name":"Again","dir":` + strconv.Quote(dir) + `}`,
+	} {
+		if code := f.post("/api/kb/workspaces", body); code != 400 {
+			t.Errorf("a workspace with %s = %d, want 400", name, code)
+		}
+	}
+	if code, _ := f.do("DELETE", "/api/kb/workspaces/"+got[0].ID, "", nil); code != 204 || len(f.state().Knowledge.Workspaces) != 0 {
+		t.Errorf("remove a workspace = %d, leaving %+v", code, f.state().Knowledge.Workspaces)
+	}
+}
+
+func TestProfilesOverHTTP(t *testing.T) {
+	f := newFixture(t)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip(err)
+	}
+	if _, body := f.do("GET", "/api/sessions", "", nil); !strings.Contains(body, `"profiles":[]`) {
+		t.Errorf("state lacks an empty list of profiles, which the page reads: %s", body)
+	}
+	code, body := f.do("POST", "/api/profiles", `{"name":"Review","default":true,"engine":"claude","dir":"~/not/there/yet/","model":"opus","thinking":true,"temperature":0.4}`, nil)
+	var made struct{ ID string }
+	if err := json.Unmarshal([]byte(body), &made); code != 200 || err != nil || made.ID == "" {
+		t.Fatalf("add a profile = %d %s, want its id", code, body)
+	}
+	got := f.state().Knowledge.Profiles
+	if len(got) != 1 || got[0].ID != made.ID || got[0].Dir != filepath.Join(home, "not/there/yet") || !got[0].Default || got[0].Model != "opus" || got[0].Temperature == nil || *got[0].Temperature != 0.4 {
+		t.Fatalf("profiles = %+v, want the one added, with its directory made absolute", got)
+	}
+	for name, body := range map[string]string{
+		"no name":              `{"name":""}`,
+		"a name another has":   `{"name":"review"}`,
+		"a relative directory": `{"name":"Rel","dir":"work"}`,
+		"an unknown effort":    `{"name":"Filed","effort":"nope"}`,
+	} {
+		if code := f.post("/api/profiles", body); code != 400 {
+			t.Errorf("a profile with %s = %d, want 400", name, code)
+		}
+	}
+	if code := f.post("/api/profiles/"+made.ID, `{"id":"other","name":"Reviews","engine":"local","temperature":null}`); code != 204 {
+		t.Fatalf("change a profile = %d", code)
+	}
+	got = f.state().Knowledge.Profiles
+	if len(got) != 1 || got[0].ID != made.ID || got[0].Name != "Reviews" || got[0].Engine != "local" || got[0].Temperature != nil ||
+		got[0].Dir != filepath.Join(home, "not/there/yet") || !got[0].Default || got[0].Model != "opus" || !got[0].Thinking {
+		t.Errorf("profiles = %+v, want the one there was, changed only in what was said of it", got)
+	}
+	if code := f.post("/api/profiles/"+made.ID, `{"dir":"","default":false}`); code != 204 || f.state().Knowledge.Profiles[0].Dir != "" || f.state().Knowledge.Profiles[0].Default {
+		t.Errorf("leave a profile's directory open = %d, leaving %+v", code, f.state().Knowledge.Profiles)
+	}
+	for name, body := range map[string]string{"a relative directory": `{"dir":"work"}`, "no name": `{"name":" "}`, "what is not JSON": `{`} {
+		if code := f.post("/api/profiles/"+made.ID, body); code != 400 {
+			t.Errorf("a profile changed to have %s = %d, want 400", name, code)
+		}
+	}
+	if code := f.post("/api/profiles/nope", `{"name":"X"}`); code != 400 {
+		t.Errorf("change a profile that does not exist = %d, want 400", code)
+	}
+	if code, _ := f.do("DELETE", "/api/profiles/"+made.ID, "", nil); code != 204 || len(f.state().Knowledge.Profiles) != 0 {
+		t.Errorf("remove a profile = %d, leaving %+v", code, f.state().Knowledge.Profiles)
+	}
+}
+
+func TestHandoffsOverHTTP(t *testing.T) {
+	f := newFixture(t)
+	if _, body := f.do("GET", "/api/sessions", "", nil); !strings.Contains(body, `"handoffs":[]`) {
+		t.Errorf("state lacks an empty list of handoffs, which the page reads: %s", body)
+	}
+	code, body := f.do("POST", "/api/handoffs", `{"name":"Review","text":"Please review:\n{{response}}"}`, nil)
+	var made struct{ ID string }
+	if err := json.Unmarshal([]byte(body), &made); code != 200 || err != nil || made.ID == "" {
+		t.Fatalf("add a handoff = %d %s, want its id", code, body)
+	}
+	got := f.state().Knowledge.Handoffs
+	if len(got) != 1 || got[0].ID != made.ID || got[0].Name != "Review" || got[0].Text != "Please review:\n{{response}}" {
+		t.Fatalf("handoffs = %+v, want the one added", got)
+	}
+	for name, body := range map[string]string{"no name": `{"text":"x"}`, "a name another has": `{"name":"review","text":"x"}`, "no message": `{"name":"Empty"}`, "what is not JSON": `{`} {
+		if code := f.post("/api/handoffs", body); code != 400 {
+			t.Errorf("a handoff with %s = %d, want 400", name, code)
+		}
+	}
+	if code := f.post("/api/handoffs/"+made.ID, `{"id":"other","name":"Reviews"}`); code != 204 {
+		t.Fatalf("rename a handoff = %d", code)
+	}
+	got = f.state().Knowledge.Handoffs
+	if len(got) != 1 || got[0].ID != made.ID || got[0].Name != "Reviews" || got[0].Text != "Please review:\n{{response}}" {
+		t.Errorf("handoffs = %+v, want the one there was, changed only in its name", got)
+	}
+	for name, body := range map[string]string{"no name": `{"name":" "}`, "no message": `{"text":""}`, "what is not JSON": `{`} {
+		if code := f.post("/api/handoffs/"+made.ID, body); code != 400 {
+			t.Errorf("a handoff changed to have %s = %d, want 400", name, code)
+		}
+	}
+	if code := f.post("/api/handoffs/nope", `{"name":"X"}`); code != 400 {
+		t.Errorf("change a handoff that does not exist = %d, want 400", code)
+	}
+	if code, _ := f.do("DELETE", "/api/handoffs/"+made.ID, "", nil); code != 204 || len(f.state().Knowledge.Handoffs) != 0 {
+		t.Errorf("remove a handoff = %d, leaving %+v", code, f.state().Knowledge.Handoffs)
+	}
+}
+
+func TestWholeResponseIsReadFromTheRecord(t *testing.T) {
+	f := newFixture(t)
+	f.connect("s1")
+	ask := func() (out struct {
+		Text  string
+		Whole bool
+		Why   string
+	}) {
+		t.Helper()
+		code, body := f.do("GET", "/api/sessions/s1/response", "", nil)
+		if err := json.Unmarshal([]byte(body), &out); code != 200 || err != nil {
+			t.Fatalf("GET response = %d %s", code, body)
+		}
+		return out
+	}
+	say := func(text string) {
+		t.Helper()
+		said, _ := json.Marshal(text)
+		if code := f.post("/api/bridge/event", `{"sessionId":"s1","type":"turn.complete","text":`+string(said)+`}`); code != 204 {
+			t.Fatalf("turn.complete = %d", code)
+		}
+	}
+
+	say("Done.")
+	if got := ask(); got.Text != "Done." || !got.Whole || got.Why != "" || len(f.record.asked) != 0 {
+		t.Errorf("a short response = %+v after reading %v, want it as kept with nothing read", got, f.record.asked)
+	}
+
+	long := "It starts here. " + strings.Repeat("y", claude.ReplyLimit)
+	say(long)
+	if kept := f.state().Sessions[0].LastReply; kept != "…"+strings.Repeat("y", claude.ReplyLimit) {
+		t.Fatalf("kept %d runes of a long response, want only its end", len([]rune(kept)))
+	}
+	f.record.said = long
+	if got := ask(); got.Text != long || !got.Whole || got.Why != "" {
+		t.Errorf("a long response = %d runes, whole %v, %q; want all of it from the record", len([]rune(got.Text)), got.Whole, got.Why)
+	}
+	if want := []string{"s1 ends " + strconv.Itoa(claude.ReplyLimit)}; !reflect.DeepEqual(f.record.asked, want) {
+		t.Errorf("the record was asked %v, want %v: for what ends as the kept response does, without its mark", f.record.asked, want)
+	}
+
+	f.record.said = "Something else was said since."
+	if got := ask(); got.Text != "…"+strings.Repeat("y", claude.ReplyLimit) || got.Whole || got.Why == "" {
+		t.Errorf("a response the record lacks = whole %v, %q; want what is kept and why", got.Whole, got.Why)
+	}
+	f.record.said, f.record.err = long, errors.New("the transcript is gone")
+	if got := ask(); got.Whole || got.Why != "the transcript is gone" {
+		t.Errorf("a record that cannot be read = whole %v, %q; want why", got.Whole, got.Why)
+	}
+
+	exact := strings.Repeat("y", claude.ReplyLimit)
+	f.record.said, f.record.err = exact, nil
+	say(exact)
+	if got := ask(); got.Text != exact || !got.Whole {
+		t.Errorf("a response as long as is kept = whole %v, want it checked against the record and found whole", got.Whole)
+	}
+	f.post("/api/bridge/poll", `{"agent":"opencode","sessionId":"ses_other"}`)
+	said, _ := json.Marshal(long)
+	f.post("/api/bridge/event", `{"agent":"opencode","sessionId":"ses_other","type":"turn.complete","text":`+string(said)+`}`)
+	if code, body := f.do("GET", "/api/sessions/ses_other/response", "", nil); code != 200 || !strings.Contains(body, `"whole":false`) || !strings.Contains(body, "keeps no record") {
+		t.Errorf("a long response from an agent whose record cannot be read = %d %.200s, want what is kept and why", code, body)
+	}
+	if code, _ := f.do("GET", "/api/sessions/nope/response", "", nil); code != 404 {
+		t.Errorf("a session there is none of = %d, want 404", code)
 	}
 }

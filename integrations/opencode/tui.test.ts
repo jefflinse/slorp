@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict'
-import { test, type TestContext } from 'node:test'
+import { after, before, test, type TestContext } from 'node:test'
 import plugin from './tui.ts'
 import { parsePresence } from './presence.ts'
 import { Native, maxRelayInFlight } from './native.ts'
+
+// Each test chooses its own native endpoint: one the caller set is put back after.
+const inheritedEndpoint = process.env.SLORP_OPENCODE_URL
+before(() => { delete process.env.SLORP_OPENCODE_URL })
+after(() => { if (inheritedEndpoint === undefined) delete process.env.SLORP_OPENCODE_URL; else process.env.SLORP_OPENCODE_URL = inheritedEndpoint })
 
 const settle = async () => { for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve)) }
 const metadata = (id = 'sesFirst') => ({ id, location: { directory: '/server/project' }, projectID: 'project' })

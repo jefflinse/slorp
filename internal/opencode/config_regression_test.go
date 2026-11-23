@@ -41,6 +41,27 @@ func TestConfigSnapshotDiscoveryOnly(t *testing.T) {
 	}
 }
 
+// Inside a Slorp-managed session the parent environment carries a managed
+// run's overrides; the snapshot follows them as native OpenCode would.
+func TestConfigSnapshotFollowsInheritedManagedOverrides(t *testing.T) {
+	a := fixture(t)
+	put(t, filepath.Join(a.Home, ".opencode", "agents", "project.md"), "---\nmode: primary\n---\nproject")
+	managedHome := t.TempDir()
+	t.Setenv("OPENCODE_TEST_HOME", managedHome)
+	t.Setenv("OPENCODE_CONFIG_PROJECT_DISABLE", "true")
+	r := &runtime{private: t.TempDir(), dir: a.Home, cmd: a.command(context.Background())}
+	s, err := a.snapshotConfig(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(r.dir, ".opencode", "agents", "project.md")); !os.IsNotExist(err) {
+		t.Errorf("project configuration was copied with project configuration disabled: %v", err)
+	}
+	if home := s.paths[filepath.Join(r.private, "sources", "home")]; home != managedHome {
+		t.Errorf("snapshot home stands for %q, want the inherited %q", home, managedHome)
+	}
+}
+
 func TestConfigSnapshotIgnoresReplacedGlobalDirectory(t *testing.T) {
 	a := fixture(t)
 	put(t, filepath.Join(a.ConfigDir, "opencode.json"), strings.Repeat("x", 17<<20))
@@ -93,6 +114,34 @@ func TestConfigResolvedTemplatesAndRemoteOrigin(t *testing.T) {
 		server.Close()
 		if err == nil || !strings.Contains(err.Error(), "remote-origin or inline Slorp") {
 			t.Fatalf("remote Slorp should fail explicitly: %v", err)
+		}
+	}
+}
+
+func TestRuntimeConfigNeverUnloadsAnIdleDirectory(t *testing.T) {
+	a := fixture(t)
+	t.Setenv("OPENCODE_TEST_HOME", "")
+	for name, config := range map[string]map[string]any{
+		"unset":  {},
+		"chosen": {"experimental": map[string]any{"location_idle_timeout": "5 minutes", "subagent_depth": 2}},
+	} {
+		r := &runtime{private: t.TempDir(), dir: a.Home, cmd: a.command(context.Background())}
+		if err := a.runtimeConfig(r, config); err != nil {
+			t.Fatal(name, err)
+		}
+		data, err := os.ReadFile(filepath.Join(r.private, "opencode.json"))
+		if err != nil {
+			t.Fatal(name, err)
+		}
+		var got struct{ Experimental map[string]any }
+		if err := json.Unmarshal(data, &got); err != nil {
+			t.Fatal(name, err)
+		}
+		if timeout, ok := got.Experimental["location_idle_timeout"]; !ok || timeout != false {
+			t.Errorf("%s: idle timeout is %v, want false", name, timeout)
+		}
+		if name == "chosen" && got.Experimental["subagent_depth"] != float64(2) {
+			t.Errorf("another experimental setting was lost: %v", got.Experimental)
 		}
 	}
 }

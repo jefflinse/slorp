@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -23,8 +24,10 @@ import (
 	"github.com/jefflinse/slorp/internal/integrations"
 	"github.com/jefflinse/slorp/internal/kb"
 	"github.com/jefflinse/slorp/internal/opencode"
+	"github.com/jefflinse/slorp/internal/release"
 	"github.com/jefflinse/slorp/internal/server"
 	"github.com/jefflinse/slorp/internal/store"
+	"github.com/jefflinse/slorp/internal/terminal"
 )
 
 //go:embed index.html
@@ -54,10 +57,22 @@ func importJSON(st *store.Store, path string) {
 }
 
 func main() {
+	exe, restart := run()
+	if !restart {
+		return
+	}
+	log.Printf("slorp restarting as %s", exe)
+	log.Fatalf("restart: %v", syscall.Exec(exe, os.Args, os.Environ()))
+}
+
+// run serves Slorp until it is stopped, and returns its executable and
+// whether to start it again, as it is to be once upgraded.
+func run() (exe string, restart bool) {
 	addr := flag.String("addr", "127.0.0.1:4747", "loopback address to listen on")
 	ui := flag.String("ui", "", "path to a web UI page to serve in place of the one built in, read afresh for each request")
 	claudeBin := flag.String("claude", "claude", "Claude Code executable")
 	opencodeBin := flag.String("opencode", "opencode", "OpenCode executable")
+	goBin := flag.String("go", "go", "Go command, which looks for newer releases of Slorp and installs them; empty never looks")
 	llm := flag.String("llm", enrich.DefaultURL, "OpenAI-compatible local model server, in place of the one chosen in Settings; empty runs without a model")
 	model := flag.String("model", "", "model to summarize with, in place of the one chosen in Settings (default: whichever one is loaded)")
 	data := flag.String("data", "", "directory for Slorp's database (default: ~/.slorp)")
@@ -67,6 +82,14 @@ func main() {
 	host, _, err := net.SplitHostPort(*addr)
 	if ip := net.ParseIP(host); err != nil || ip == nil || !ip.IsLoopback() {
 		log.Fatalf("-addr must be a loopback address, got %q", *addr)
+	}
+	started := enrich.Startup{URL: *llm, Model: *model}
+	flag.Visit(func(f *flag.Flag) {
+		started.URLGiven = started.URLGiven || f.Name == "llm"
+		started.ModelGiven = started.ModelGiven || f.Name == "model"
+	})
+	if started, err = started.Checked(); err != nil {
+		log.Fatalf("-llm: %v", err)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -113,13 +136,22 @@ func main() {
 		ConfigDir: filepath.Join(configHome, "opencode"), ExtraConfigDir: os.Getenv("OPENCODE_CONFIG_DIR"), ConfigFile: os.Getenv("OPENCODE_CONFIG")}
 	defer func() { stop(); oc.Shutdown() }()
 	go oc.Run(ctx)
-	started := enrich.Startup{URL: *llm, Model: *model}
-	flag.Visit(func(f *flag.Flag) {
-		started.URLGiven = started.URLGiven || f.Name == "llm"
-		started.ModelGiven = started.ModelGiven || f.Name == "model"
-	})
 	summarizer := &enrich.Enricher{Hub: h, Resolve: started.Config, Offer: tools.Offer}
 	go summarizer.Run(ctx)
+
+	version := release.Installed()
+	if exe, err = os.Executable(); err == nil {
+		exe, err = filepath.EvalSymlinks(exe)
+	}
+	if err != nil {
+		log.Printf("release: Slorp cannot tell where it runs from, so it will not look for newer releases: %v", err)
+		version = ""
+	}
+	h.SetRelease(hub.Release{Version: version})
+	var again atomic.Bool
+	releases := &release.Checker{Version: version, Exe: exe, Go: *goBin, Every: 24 * time.Hour, Report: h.SetRelease,
+		Relaunch: func() { again.Store(true); stop() }}
+	go releases.Run(ctx)
 
 	poller := feed.New(h, tools, func() (dirs []string) {
 		for _, e := range k.Efforts() {
@@ -130,12 +162,15 @@ func main() {
 	go poller.Run(ctx)
 
 	history := map[string]server.History{
-		claude.Agent: func(_ context.Context, id string, limit int) ([]hub.Exchange, error) {
-			return transcripts.Exchanges(id, limit)
+		claude.Agent: {
+			Exchanges: func(_ context.Context, id string, limit int) ([]hub.Exchange, error) {
+				return transcripts.Exchanges(id, limit)
+			},
+			Reply: func(_ context.Context, id, ends string) (string, error) { return transcripts.Reply(id, ends) },
 		},
-		opencode.Agent: oc.Exchanges,
+		opencode.Agent: {Exchanges: oc.Exchanges, Reply: oc.Reply},
 	}
-	srv := &http.Server{Addr: *addr, Handler: server.New(h, k, tools, poller, history, map[string]server.Launcher{claude.Agent: transcripts, opencode.Agent: oc}, map[string]server.PluginManager{claude.Agent: transcripts, opencode.Agent: oc}, map[string]server.Delegates{claude.Agent: transcripts}, summarizer, server.Page(page, *ui))}
+	srv := &http.Server{Addr: *addr, Handler: server.New(h, k, tools, poller, history, map[string]server.Launcher{claude.Agent: transcripts, opencode.Agent: oc}, map[string]server.PluginManager{claude.Agent: transcripts, opencode.Agent: oc}, map[string]server.Delegates{claude.Agent: transcripts}, summarizer, terminal.New(), releases, server.Page(page, *ui))}
 	go func() {
 		<-ctx.Done()
 		srv.Close()
@@ -144,4 +179,5 @@ func main() {
 	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 		log.Printf("server: %v", err)
 	}
+	return exe, again.Load()
 }
