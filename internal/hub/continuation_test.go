@@ -65,7 +65,7 @@ func TestAContinuationStoppedPartWayIsTakenUpAgain(t *testing.T) {
 			t.Fatalf("%d open and %d closed sessions, want the one conversation open and nothing closed", len(got.Sessions), len(got.Archive))
 		}
 		s := got.Sessions[0]
-		if s.ID != "new" || s.Label != "Flange work" || s.Effort != effort || s.Role != role || prompts(s) != "add flanges | now add washers" {
+		if s.ID != "new" || s.Label != "Flange work" || s.Effort != effort || s.Role != role || prompts(s) != "add flanges | add bolts | now add washers" {
 			t.Errorf("session %q is %q under %q as %q with %q; want the new id with the old one's name, filing and turns", s.ID, s.Label, s.Effort, s.Role, prompts(s))
 		}
 		if len(s.Subagents) != 1 || s.Subagents[0].ID != "child" {
@@ -93,6 +93,10 @@ func TestAContinuationStoppedPartWayIsTakenUpAgain(t *testing.T) {
 				h := New(k, c)
 				e, r := effort(t, k, "Widgets"), role(t, k, "Reviewer", "")
 				h.SetRoster(agent, []Session{said("old", "add flanges", began)})
+				// A second turn said at the same moment as the first.
+				h.mu.Lock()
+				h.sessions["old"].Timeline = append(h.sessions["old"].Timeline, Moment{At: began, Prompt: "add bolts"})
+				h.mu.Unlock()
 				h.Rename("old", "Flange work")
 				must(t, k.Assign("old", e))
 				must(t, k.SetRole("old", r))

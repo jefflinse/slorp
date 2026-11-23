@@ -59,13 +59,16 @@ func (s *Store) Put(kind, id string, v any) error {
 	return err
 }
 
-// Doc is a document for PutAll: Value stored as the document of Kind and ID.
+// Doc is a document for PutAll: Value stored as the document of Kind and
+// ID, or with Delete the document of Kind and ID removed.
 type Doc struct {
 	Kind, ID string
 	Value    any
+	Delete   bool
 }
 
-// PutAll stores each of docs as Put would, all of them or none.
+// PutAll stores or deletes each of docs as Put or Delete would, all of them
+// or none.
 func (s *Store) PutAll(docs ...Doc) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -73,6 +76,12 @@ func (s *Store) PutAll(docs ...Doc) error {
 	}
 	defer tx.Rollback()
 	for _, d := range docs {
+		if d.Delete {
+			if _, err := tx.Exec(`DELETE FROM docs WHERE kind = ? AND id = ?`, d.Kind, d.ID); err != nil {
+				return err
+			}
+			continue
+		}
 		b, err := json.Marshal(d.Value)
 		if err != nil {
 			return err

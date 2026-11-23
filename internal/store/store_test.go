@@ -164,18 +164,24 @@ func TestEachDirectoryKeepsItsOwnDatabase(t *testing.T) {
 
 func TestPutAllKeepsAllOrNone(t *testing.T) {
 	st := testdb.Open(t)
-	if err := st.PutAll(store.Doc{Kind: "thing", ID: "a", Value: doc{1}}, store.Doc{Kind: "other", ID: "b", Value: doc{2}}); err != nil {
+	if err := st.PutAll(store.Doc{Kind: "thing", ID: "a", Value: doc{1}}, store.Doc{Kind: "other", ID: "b", Value: doc{2}}, store.Doc{Kind: "gone", ID: "c", Value: doc{3}}); err != nil {
 		t.Fatal(err)
 	}
-	// The first is written before the second fails.
-	if err := st.PutAll(store.Doc{Kind: "thing", ID: "a", Value: doc{3}}, store.Doc{Kind: "other", ID: "b", Value: func() {}}); err == nil {
+	// The first two are done before the third fails.
+	if err := st.PutAll(store.Doc{Kind: "gone", ID: "c", Delete: true}, store.Doc{Kind: "thing", ID: "a", Value: doc{4}}, store.Doc{Kind: "other", ID: "b", Value: func() {}}); err == nil {
 		t.Fatal("storing what cannot be encoded succeeded")
 	}
-	for kind, want := range map[[2]string]int{{"thing", "a"}: 1, {"other", "b"}: 2} {
+	for kind, want := range map[[2]string]int{{"thing", "a"}: 1, {"other", "b"}: 2, {"gone", "c"}: 3} {
 		var got doc
 		if found, err := st.Get(kind[0], kind[1], &got); err != nil || !found || got.N != want {
 			t.Errorf("%s %s = %+v, %v, %v after a failed PutAll; want %d", kind[0], kind[1], got, found, err, want)
 		}
+	}
+	if err := st.PutAll(store.Doc{Kind: "gone", ID: "c", Delete: true}); err != nil {
+		t.Fatal(err)
+	}
+	if found, err := st.Get("gone", "c", &doc{}); err != nil || found {
+		t.Errorf("a document PutAll deleted is found %v, %v", found, err)
 	}
 }
 

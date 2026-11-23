@@ -128,7 +128,7 @@ func (h *Hub) UpsertSubagent(agent, sessionID string, revision int64, a Subagent
 func (h *Hub) RetainedSubagentReport(agent, sessionID, childID string) (SubagentReport, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for _, id := range h.carried(sessionID) {
+	for _, id := range h.owned(sessionID) {
 		if r, ok := h.retained[id][childID]; ok && r.Agent == agent && r.Report != nil {
 			return *r.Report, true
 		}
@@ -139,7 +139,7 @@ func (h *Hub) RetainedSubagentReport(agent, sessionID, childID string) (Subagent
 func (h *Hub) mergeSubagents(root, agent string, source []Subagent, connected bool) []Subagent {
 	out := cloneSubagents(source)
 	var retained []subagentRecord
-	for _, id := range h.carried(root) {
+	for _, id := range h.owned(root) {
 		for _, r := range h.retained[id] {
 			retained = append(retained, r)
 		}

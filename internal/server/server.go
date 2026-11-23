@@ -978,7 +978,11 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			return
 		}
 		if d := delegates[a.Agent]; d != nil {
-			a.Subagents = archiveSubagents(d.Subagents(a.ID), a.Subagents)
+			var source []hub.Subagent
+			for _, id := range h.SubagentSessions(a.ID) {
+				source = append(source, d.Subagents(id)...)
+			}
+			a.Subagents = archiveSubagents(source, a.Subagents)
 		}
 		writeJSON(w, http.StatusOK, a)
 	})
@@ -1003,12 +1007,13 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			http.Error(w, "no such session with subagents Slorp can read", http.StatusNotFound)
 			return
 		}
-		report, ok := d.Report(id, r.PathValue("sub"))
-		if !ok {
-			http.Error(w, "no such subagent", http.StatusNotFound)
-			return
+		for _, under := range h.SubagentSessions(id) {
+			if report, ok := d.Report(under, r.PathValue("sub")); ok {
+				writeJSON(w, http.StatusOK, report)
+				return
+			}
 		}
-		writeJSON(w, http.StatusOK, report)
+		http.Error(w, "no such subagent", http.StatusNotFound)
 	})
 
 	// The page asks for a day, named as "2006-01-02", to be wrapped up.

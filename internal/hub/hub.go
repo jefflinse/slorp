@@ -140,6 +140,8 @@ type Session struct {
 	roleKey    string
 	given      string
 	pinned     string
+	// took lists the sessions this one has taken up, whose subagents are its own.
+	took []string
 	// attention is what the session's role lets through, when the user chose it.
 	attention string
 }
@@ -741,6 +743,7 @@ type sessionDoc struct {
 	RoleKey    string    `json:"roleKey"`
 	Given      string    `json:"given"`
 	Pinned     string    `json:"pinned"`
+	Took       []string  `json:"took,omitempty"`
 	Timeline   []Moment  `json:"timeline,omitempty"`
 	// The rest is the session as it was when last stored, for when it is
 	// no longer open to ask. Ended is zero while it is open.
@@ -874,6 +877,12 @@ func New(k *kb.Store, c Cache) *Hub {
 			h.discussed[id] = &d
 		}
 	}))
+	h.warn(c.Each("reply", func(id string, body []byte) {
+		var r Reply
+		if json.Unmarshal(body, &r) == nil {
+			h.replies = append(h.replies, &r)
+		}
+	}))
 	h.warn(c.Each("session", func(id string, body []byte) {
 		var d sessionDoc
 		switch {
@@ -902,12 +911,6 @@ func New(k *kb.Store, c Cache) *Hub {
 		var n note
 		if json.Unmarshal(body, &n) == nil {
 			h.notes[id] = n
-		}
-	}))
-	h.warn(c.Each("reply", func(id string, body []byte) {
-		var r Reply
-		if json.Unmarshal(body, &r) == nil {
-			h.replies = append(h.replies, &r)
 		}
 	}))
 	for _, r := range h.replies {
@@ -978,7 +981,7 @@ func (h *Hub) recall(s *Session) (bool, error) {
 	}
 	s.Insight, s.insightKey, s.guess, s.guessKey, s.insightAt = d.Insight, d.InsightKey, d.Guess, d.GuessKey, d.InsightAt
 	s.roleGuess, s.roleKey = d.RoleGuess, d.RoleKey
-	s.given, s.pinned, s.Timeline = d.Given, d.Pinned, tidy(d.Timeline)
+	s.given, s.pinned, s.took, s.Timeline = d.Given, d.Pinned, d.Took, tidy(d.Timeline)
 	if d.Managed || s.managed {
 		s.managed = true
 		s.Cwd, s.Branch, s.Title = d.Cwd, d.Branch, d.Title
@@ -1029,7 +1032,7 @@ func (h *Hub) doc(s *Session) sessionDoc {
 	return sessionDoc{Managed: s.managed, Title: s.Title, Model: s.Model, Reasoning: s.Reasoning, ActiveAt: s.ActiveAt,
 		LastPrompt: s.LastPrompt, LastReply: s.LastReply, PromptAt: s.PromptAt,
 		Insight: s.Insight, InsightKey: s.insightKey, Guess: s.guess, GuessKey: s.guessKey, InsightAt: s.insightAt,
-		RoleGuess: s.roleGuess, RoleKey: s.roleKey, Given: s.given, Pinned: s.pinned, Timeline: s.Timeline, Label: label, Effort: effort,
+		RoleGuess: s.roleGuess, RoleKey: s.roleKey, Given: s.given, Pinned: s.pinned, Took: s.took, Timeline: s.Timeline, Label: label, Effort: effort,
 		Agent: s.Agent, Cwd: s.Cwd, Branch: s.Branch, StartedAt: s.StartedAt, Used: s.Used, CostUSD: s.CostUSD}
 }
 
@@ -1066,7 +1069,7 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 			s.key, s.keySince, s.insightKey, s.Insight = old.key, old.keySince, old.insightKey, old.Insight
 			s.guess, s.guessKey, s.insightAt = old.guess, old.guessKey, old.insightAt
 			s.roleGuess, s.roleKey = old.roleGuess, old.roleKey
-			s.given, s.pinned, s.Timeline = old.given, old.pinned, old.Timeline
+			s.given, s.pinned, s.took, s.Timeline = old.given, old.pinned, old.took, old.Timeline
 			s.ContextWindow, s.CostUSD = old.ContextWindow, old.CostUSD
 			// The roster stops saying "waiting" once the terminal's dialog is
 			// answered. A request it has not caught up with yet is kept.
