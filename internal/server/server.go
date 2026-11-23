@@ -530,16 +530,16 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 				return
 			}
 		}
+		if h.HeldOpen(r.PathValue("id")) {
+			lifecycleError(w, fmt.Errorf("%w: the session is reported open elsewhere", hub.ErrLifecycleConflict), r.PathValue("id"))
+			return
+		}
 		if !ok {
 			if agent == opencode.Agent {
 				lifecycleError(w, hub.ErrLifecycleConflict, r.PathValue("id"))
 				return
 			}
 			http.Error(w, "no such closed session", http.StatusNotFound)
-			return
-		}
-		if h.HeldOpen(a.ID) {
-			lifecycleError(w, fmt.Errorf("%w: the session is reported open elsewhere", hub.ErrLifecycleConflict), a.ID)
 			return
 		}
 		if a.Agent == opencode.Agent && key != "" {

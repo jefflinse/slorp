@@ -60,8 +60,8 @@ var (
 
 // terminalCommand is the shell command that opens a session in a terminal:
 // one that attaches to a session running in the background, or the one that
-// resumes a closed session. A session open in a terminal of its own has
-// none.
+// resumes a closed session. A session open in a terminal of its own, or
+// reported open in one though not yet known, has none.
 func terminalCommand(h *hub.Hub, launchers map[string]Launcher, id string) (string, error) {
 	for _, s := range h.Sessions() {
 		if s.ID != id {
@@ -83,6 +83,9 @@ func terminalCommand(h *hub.Hub, launchers map[string]Launcher, id string) (stri
 			return attach, nil
 		}
 		return "cd -- " + hub.ShellQuote(s.Cwd) + " && " + attach, nil
+	}
+	if h.HeldOpen(id) {
+		return "", errOpenElsewhere
 	}
 	s, ok := h.Archive(id)
 	if !ok {
