@@ -164,10 +164,13 @@ func (s *Store) Create(name, about string) (Effort, error) {
 
 // Edit gives an effort another name, description, colour or glyph, or
 // shelves it or brings it back, all in one change or none. Its ID stays as
-// it was made.
+// it was made. Shelving alone what is already so changes nothing.
 func (s *Store) Edit(id string, c Changes) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if i := s.f.index(id); i >= 0 && c == (Changes{Shelved: c.Shelved}) && c.Shelved != nil && *c.Shelved == s.f.Efforts[i].Shelved {
+		return nil
+	}
 	return s.update(func(f *file) error {
 		i := f.index(id)
 		if i < 0 {

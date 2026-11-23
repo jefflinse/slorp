@@ -174,9 +174,13 @@ func TestAnEffortEditIsMadeWholeOrNotAtAll(t *testing.T) {
 	}
 	srv := httptest.NewServer(New(hub.New(k, st), k, integrations.NewManager(func() map[string]bool { return nil }), &asked{}, nil, nil, nil, nil, nil, nil, nil, Page(nil, "")))
 	t.Cleanup(srv.Close)
-	edit := func() int {
+	edit := func(body ...string) int {
 		t.Helper()
-		res, err := srv.Client().Post(srv.URL+"/api/efforts/"+e.ID, "application/json", strings.NewReader(`{"name":"Gadgets","shelved":true}`))
+		said := `{"name":"Gadgets","shelved":true}`
+		if len(body) > 0 {
+			said = body[0]
+		}
+		res, err := srv.Client().Post(srv.URL+"/api/efforts/"+e.ID, "application/json", strings.NewReader(said))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -213,5 +217,15 @@ func TestAnEffortEditIsMadeWholeOrNotAtAll(t *testing.T) {
 		if got := stands(k); got.Name != "Gadgets" || !got.Shelved {
 			t.Errorf("%s effort after renaming and shelving: %+v; want both", name, got)
 		}
+	}
+
+	// Shelving alone what is already shelved writes nothing; anything else
+	// with it still does.
+	p.fail, p.puts = true, 0
+	if code := edit(`{"shelved":true}`); code != http.StatusNoContent || p.puts != 0 {
+		t.Errorf("shelving a shelved effort = %d after %d writes, want 204 after none", code, p.puts)
+	}
+	if code := edit(`{"name":"Sprockets","shelved":true}`); code != http.StatusInternalServerError || p.puts != 1 {
+		t.Errorf("renaming a shelved effort and shelving it = %d after %d writes, want 500 after one", code, p.puts)
 	}
 }
