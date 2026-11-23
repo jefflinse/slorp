@@ -53,6 +53,27 @@ func (s *Store) Put(kind, id string, v any) error {
 	return err
 }
 
+// PutAll stores each of docs as the document of that kind and its id,
+// replacing any other, all of them or none.
+func (s *Store) PutAll(kind string, docs map[string]any) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for id, v := range docs {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT INTO docs (kind, id, body) VALUES (?, ?, ?)
+			ON CONFLICT (kind, id) DO UPDATE SET body = excluded.body, updated_at = CURRENT_TIMESTAMP`, kind, id, string(b)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // Get decodes the document into v and reports whether it exists.
 func (s *Store) Get(kind, id string, v any) (bool, error) {
 	var body string

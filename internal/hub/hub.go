@@ -716,6 +716,7 @@ func leading(tasks []string) []string {
 type Cache interface {
 	Get(kind, id string, v any) (bool, error)
 	Put(kind, id string, v any) error
+	PutAll(kind string, docs map[string]any) error
 	Each(kind string, fn func(id string, body []byte)) error
 	Delete(kind, id string) error
 }

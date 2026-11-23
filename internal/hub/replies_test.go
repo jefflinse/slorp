@@ -28,7 +28,90 @@ func (c *faultyReplies) Put(kind, id string, v any) error {
 	return c.Store.Put(kind, id, v)
 }
 
+func (c *faultyReplies) PutAll(kind string, docs map[string]any) error {
+	if kind == "reply" && c.fail != nil {
+		c.n++
+		if c.fail(c.n) {
+			return errors.New("disk full")
+		}
+	}
+	return c.Store.PutAll(kind, docs)
+}
+
 func (c *faultyReplies) failing(fail func(n int) bool) { c.n, c.fail = 0, fail }
+
+func TestWhatWaitsForASessionGoesWithTheRunThatTakesItOver(t *testing.T) {
+	st := testdb.Open(t)
+	k := testdb.KB(t, st)
+	c := &faultyReplies{Store: st}
+	h := New(k, c)
+	queuedElsewhere := func(id string) Reply {
+		t.Helper()
+		h.Apply("opencode", id, func(s *Session) { s.LastPrompt = "in a terminal" })
+		r, err := h.Enqueue(id, "queued in "+id)
+		must(t, err)
+		h.Retire("opencode", -time.Second)
+		return r
+	}
+	saved := func(id string) Reply {
+		t.Helper()
+		var r Reply
+		if found, err := st.Get("reply", id, &r); err != nil || !found {
+			t.Fatalf("reply %s is not saved: %v", id, err)
+		}
+		return r
+	}
+	afterRestart := func(id string) []Reply {
+		t.Helper()
+		restarted := New(k, st)
+		restarted.Apply("opencode", id, func(s *Session) { s.LastPrompt = "in a terminal again" })
+		got, err := restarted.Claim(id)
+		must(t, err)
+		return got
+	}
+
+	// Stopped before its first poll, where the drop could not be saved.
+	stopped := queuedElsewhere("ses_stopped")
+	must(t, h.OpenManaged("opencode", "ses_stopped", "job", "token-stopped", nil))
+	if r := saved(stopped.ID); r.Owner != OwnerRun || r.State != Queued {
+		t.Errorf("a waiting reply when a run took its session over is saved as %+v, want queued for the run", r)
+	}
+	c.failing(always)
+	h.CloseManaged("token-stopped")
+	c.failing(nil)
+	if got := afterRestart("ses_stopped"); len(got) != 0 {
+		t.Errorf("a reply cancelled with the run that took it over came back after a restart: %+v", got)
+	}
+
+	// Claimed by the run, which then crashed.
+	crashed := queuedElsewhere("ses_crashed")
+	must(t, h.OpenManaged("opencode", "ses_crashed", "job", "token-crashed", nil))
+	if got, err := h.Claim("ses_crashed"); err != nil || len(got) != 1 || got[0].ID != crashed.ID {
+		t.Fatalf("the run claimed %+v, %v; want the reply that was waiting", got, err)
+	}
+	afterRestart("ses_crashed")
+	if r := saved(crashed.ID); r.State != Dropped {
+		t.Errorf("a reply claimed by a run that crashed is %s after a restart, want dropped", r.State)
+	}
+
+	// Not taken over, when what waits could not be given to the run.
+	kept := queuedElsewhere("ses_kept")
+	c.failing(always)
+	if err := h.OpenManaged("opencode", "ses_kept", "job", "token-kept", nil); !errors.Is(err, ErrNotSaved) {
+		t.Fatalf("taking over a session whose replies cannot be given to the run = %v, want ErrNotSaved", err)
+	}
+	c.failing(nil)
+	if _, release, err := h.BridgeLease(context.Background(), "token-kept", "opencode", "ses_kept", "", "/api/bridge/poll"); err == nil {
+		release()
+		t.Error("a run was opened though what waited for its session could not be given to it")
+	}
+	if r := saved(kept.ID); r.Owner != OwnerBridge || r.State != Queued {
+		t.Errorf("a reply after a failed takeover is saved as %+v, want still queued for the terminal", r)
+	}
+	if got := afterRestart("ses_kept"); len(got) != 1 || got[0].ID != kept.ID {
+		t.Errorf("after a failed takeover and a restart the terminal was handed %+v, want its reply", got)
+	}
+}
 
 func always(int) bool { return true }
 

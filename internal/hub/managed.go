@@ -26,6 +26,9 @@ func (h *Hub) OpenManaged(agent, id, job, token string, update func(*Session)) e
 	if h.sessions[id] != nil || h.runs[token] != nil || h.unmanagedAdmissions[id] != 0 {
 		return ErrLifecycleConflict
 	}
+	if err := h.takeReplies(id); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	run := &managedRun{agent: agent, root: id, ctx: ctx, cancel: cancel}
 	if h.runs == nil {
@@ -95,6 +98,31 @@ func (h *Hub) CloseManaged(token string) {
 		delete(h.sessions, s.ID)
 		h.changed()
 	}
+}
+
+// takeReplies makes the run about to be opened for a session the owner of
+// what is waiting for it, as if queued for the run, all of it or, with an
+// error wrapping ErrNotSaved, none.
+func (h *Hub) takeReplies(id string) error {
+	taken := map[string]any{}
+	var waiting []*Reply
+	for _, r := range h.replies {
+		if r.SessionID == id && (r.State == Queued || r.State == Claimed) && r.Owner != OwnerRun {
+			owned := *r
+			owned.Owner = OwnerRun
+			taken[r.ID], waiting = owned, append(waiting, r)
+		}
+	}
+	if len(taken) == 0 {
+		return nil
+	}
+	if err := h.cache.PutAll("reply", taken); err != nil {
+		return fmt.Errorf("the replies waiting for %s %w: %w", id, ErrNotSaved, err)
+	}
+	for _, r := range waiting {
+		r.Owner = OwnerRun
+	}
+	return nil
 }
 
 func (h *Hub) dropReplies(id string) {

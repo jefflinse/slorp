@@ -140,6 +140,22 @@ func TestEachIsNotProlongedByWhatIsAdded(t *testing.T) {
 	}
 }
 
+func TestPutAllKeepsAllOrNone(t *testing.T) {
+	st := testdb.Open(t)
+	if err := st.PutAll("thing", map[string]any{"a": doc{1}, "b": doc{2}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutAll("thing", map[string]any{"a": doc{3}, "b": func() {}}); err == nil {
+		t.Fatal("storing what cannot be encoded succeeded")
+	}
+	for id, want := range map[string]int{"a": 1, "b": 2} {
+		var got doc
+		if found, err := st.Get("thing", id, &got); err != nil || !found || got.N != want {
+			t.Errorf("%s = %+v, %v, %v after a failed PutAll; want %d", id, got, found, err, want)
+		}
+	}
+}
+
 func TestDelete(t *testing.T) {
 	st := testdb.Open(t)
 	st.Put("thing", "a", doc{1})
