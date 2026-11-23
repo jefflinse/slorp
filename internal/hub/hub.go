@@ -823,7 +823,11 @@ type Hub struct {
 	// sessions are known.
 	archive   map[string]sessionDoc
 	unsettled map[string]sessionDoc
-	started   time.Time
+	// unread holds the sessions reported open whose kept record could not
+	// be read, until it can be, their agent's roster leaves them out, or
+	// their bridge falls silent.
+	unread  map[string]unreadReport
+	started time.Time
 	// backfill holds, by session, the exchanges waiting for the model to
 	// say how each came out.
 	backfill map[string][]Exchange
@@ -843,6 +847,13 @@ type Hub struct {
 	retainedErr error
 }
 
+// unreadReport is which agent last reported a session whose kept record
+// could not be read, and when.
+type unreadReport struct {
+	agent string
+	at    time.Time
+}
+
 type note struct {
 	Key string `json:"key"`
 	Note
@@ -852,7 +863,7 @@ type note struct {
 func New(k *kb.Store, c Cache) *Hub {
 	h := &Hub{sessions: map[string]*Session{}, subs: map[chan struct{}]struct{}{}, kb: k, notes: map[string]note{},
 		cache: c, settings: Settings{AnswerPermissions: true}, waiters: map[string]chan Decision{}, feeds: map[string]*feed{}, wrapups: map[string]Wrapup{},
-		archive: map[string]sessionDoc{}, unsettled: map[string]sessionDoc{}, started: time.Now(), origins: map[string]string{}, plugins: map[string]Plugin{},
+		archive: map[string]sessionDoc{}, unsettled: map[string]sessionDoc{}, unread: map[string]unreadReport{}, started: time.Now(), origins: map[string]string{}, plugins: map[string]Plugin{},
 		discussed: map[string]*pullDoc{}, discussFailed: map[string]time.Time{}}
 	h.loadSubagents()
 	h.loadLifecycle()
@@ -927,15 +938,18 @@ func (h *Hub) warn(err error) {
 	}
 }
 
-// restore gives a session seen for the first time what the model last wrote
-// about it. It reports false, with s and what is kept of it unchanged, when
-// that cannot be read, and the session is then not to be admitted.
-func (h *Hub) restore(s *Session) bool {
+// restore gives a session agent reports, seen for the first time, what the
+// model last wrote about it. It reports false, with s and what is kept of it
+// unchanged, when that cannot be read; the session is then not to be
+// admitted, and is held as unread.
+func (h *Hub) restore(agent string, s *Session) bool {
 	found, err := h.recall(s)
 	if err != nil {
 		h.warn(fmt.Errorf("session %s could not be read: %w", s.ID, err))
+		h.unread[s.ID] = unreadReport{agent: agent, at: time.Now()}
 		return false
 	}
+	delete(h.unread, s.ID)
 	if found {
 		delete(h.unsettled, s.ID)
 		if _, back := h.archive[s.ID]; back {
@@ -1058,10 +1072,15 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 			if s.LastPrompt == "" {
 				s.LastPrompt, s.PromptAt = old.LastPrompt, old.PromptAt
 			}
-		} else if !h.restore(&s) {
+		} else if !h.restore(agent, &s) {
 			continue
 		}
 		h.sessions[s.ID] = &s
+	}
+	for id, u := range h.unread {
+		if u.agent == agent && !seen[id] {
+			delete(h.unread, id)
+		}
 	}
 	for id, s := range h.sessions {
 		if s.Agent == agent && !seen[id] {
@@ -1135,7 +1154,7 @@ func (h *Hub) Apply(agent, id string, fn func(*Session)) (created bool) {
 	if !ok {
 		now := time.Now()
 		s = &Session{ID: id, Agent: agent, Kind: "interactive", Status: Idle, StartedAt: now, ActiveAt: now}
-		if !h.restore(s) {
+		if !h.restore(agent, s) {
 			return false
 		}
 		h.sessions[id] = s
@@ -1159,6 +1178,11 @@ func (h *Hub) Retire(agent string, silence time.Duration) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.prunePermissionDecisions(time.Now())
+	for id, u := range h.unread {
+		if u.agent == agent && time.Since(u.at) > silence {
+			delete(h.unread, id)
+		}
+	}
 	for id, s := range h.sessions {
 		if s.Agent == agent && s.run == "" && time.Since(s.bridgeSeen) > silence {
 			h.leave(s)

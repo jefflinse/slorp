@@ -181,7 +181,7 @@ func (h *Hub) worthKeeping(id string, d sessionDoc) bool {
 // again was settled as it was restored.
 func (h *Hub) sweep(agent string) {
 	for id, d := range h.unsettled {
-		if d.Agent != agent {
+		if _, held := h.unread[id]; held || d.Agent != agent {
 			continue
 		}
 		delete(h.unsettled, id)

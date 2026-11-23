@@ -74,6 +74,13 @@ func (h *Hub) fold(agent string) {
 			heirs[r] = s
 		}
 	}
+	// Which session takes a root is not known while one reported in it
+	// could not be read.
+	for id, u := range h.unread {
+		if u.agent == agent {
+			delete(heirs, h.root(id))
+		}
+	}
 	var closed []string
 	for id, d := range h.archive {
 		if d.Agent == agent && heirs[h.root(id)] != nil {

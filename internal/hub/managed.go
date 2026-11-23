@@ -64,6 +64,7 @@ func (h *Hub) OpenManaged(agent, id, job, token string, update func(*Session)) e
 	}
 	delete(h.unsettled, id)
 	delete(h.archive, id)
+	delete(h.unread, id)
 	ctx, cancel := context.WithCancel(context.Background())
 	if h.runs == nil {
 		h.runs = map[string]*managedRun{}

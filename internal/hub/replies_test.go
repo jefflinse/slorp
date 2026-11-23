@@ -14,17 +14,19 @@ import (
 // faultyReplies keeps the hub in a store, failing each write of a reply for
 // which fail, given its number counted from when fail was set, says so, every
 // write of a session while sessions is set, and every read of a session while
-// unreadable is set. It counts the sessions put and the batches written.
+// unreadable is set or of the one unreadableID names. It counts the
+// sessions put and the batches written.
 type faultyReplies struct {
 	*store.Store
 	fail                 func(n int) bool
 	n                    int
 	sessions, unreadable bool
+	unreadableID         string
 	sessionPuts, batches int
 }
 
 func (c *faultyReplies) Get(kind, id string, v any) (bool, error) {
-	if kind == "session" && c.unreadable {
+	if kind == "session" && (c.unreadable || id == c.unreadableID) {
 		return false, errors.New("disk unreadable")
 	}
 	return c.Store.Get(kind, id, v)
