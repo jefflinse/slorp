@@ -50,6 +50,11 @@ func TestAProbeFinishesWithTheServerItBeganWith(t *testing.T) {
 			}
 			io.WriteString(w, `{"data":[{"id":"a"}]}`)
 		case "/v1/chat/completions":
+			var in struct{ Model string }
+			if json.NewDecoder(r.Body).Decode(&in) != nil || in.Model != "a" {
+				http.Error(w, "no such model", http.StatusNotFound)
+				return
+			}
 			io.WriteString(w, `{"choices":[{"message":{"content":"pong"}}]}`)
 		default:
 			http.NotFound(w, r)
