@@ -2,6 +2,7 @@ package hub
 
 import (
 	"cmp"
+	"fmt"
 	"slices"
 )
 
@@ -91,7 +92,7 @@ func (h *Hub) fold(agent string) {
 		return cmp.Or(h.archive[b].Ended.Compare(h.archive[a].Ended), cmp.Compare(a, b))
 	})
 	for _, id := range closed {
-		h.inherit(heirs[h.root(id)], id, h.archive[id])
+		h.warn(h.inherit(heirs[h.root(id)], id, h.archive[id]))
 	}
 	// What the user said of a session that left nothing worth keeping
 	// still holds for the one that continues it.
@@ -107,35 +108,66 @@ func (h *Hub) fold(agent string) {
 }
 
 // inherit gives an open session what a closed one held, where it has none
-// of its own, and forgets the closed one.
-func (h *Hub) inherit(s *Session, id string, d sessionDoc) {
-	s.Timeline = join(d.Timeline, s.Timeline)
-	if s.given == "" {
-		s.given = d.Given
+// of its own, and forgets the closed one. Each step is saved before the next
+// is taken, the open one first and the closed one's record last; at the
+// first that cannot be, it stops and says why, leaving the closed one to be
+// taken up again, which repeats nothing already done.
+func (h *Hub) inherit(s *Session, id string, d sessionDoc) error {
+	next := *s
+	next.Timeline = join(d.Timeline, s.Timeline)
+	if next.given == "" {
+		next.given = d.Given
 	}
-	if s.pinned == "" {
-		s.pinned = d.Pinned
+	if next.pinned == "" {
+		next.pinned = d.Pinned
 	}
-	if s.Insight == nil {
-		s.Insight, s.insightKey, s.insightAt = d.Insight, d.InsightKey, d.InsightAt
+	if next.Insight == nil {
+		next.Insight, next.insightKey, next.insightAt = d.Insight, d.InsightKey, d.InsightAt
 	}
-	if s.guess == "" {
-		s.guess, s.guessKey = d.Guess, d.GuessKey
+	if next.guess == "" {
+		next.guess, next.guessKey = d.Guess, d.GuessKey
 	}
-	if s.roleGuess == "" {
-		s.roleGuess, s.roleKey = d.RoleGuess, d.RoleKey
+	if next.roleGuess == "" {
+		next.roleGuess, next.roleKey = d.RoleGuess, d.RoleKey
 	}
-	h.warn(h.kb.Carry(id, s.ID))
+	if err := h.checkpoint(&next); err != nil {
+		return fmt.Errorf("continuing %s in %s: %w", id, s.ID, err)
+	}
+	*s = next
+	h.last = ""
+	if err := h.kb.Carry(id, s.ID); err != nil {
+		return fmt.Errorf("continuing %s in %s: %w", id, s.ID, err)
+	}
 	for _, r := range h.replies {
 		if r.SessionID == id {
-			r.SessionID = s.ID
-			h.warn(h.cache.Put("reply", r.ID, r))
+			moved := *r
+			moved.SessionID = s.ID
+			if err := h.saveReply(moved); err != nil {
+				return fmt.Errorf("continuing %s in %s: %w", id, s.ID, err)
+			}
+			*r = moved
 		}
 	}
+	if err := h.cache.Delete("session", id); err != nil {
+		return fmt.Errorf("continuing %s in %s: %w", id, s.ID, err)
+	}
 	delete(h.archive, id)
-	h.warn(h.cache.Delete("session", id))
-	h.remember(s)
-	h.last = ""
+	return nil
+}
+
+// carried lists a session and the sessions it continues that it has taken
+// up, whose retained subagents are its own.
+func (h *Hub) carried(id string) []string {
+	out := []string{id}
+	for from := h.origins[id]; from != "" && len(out) <= lineageDepth; from = h.origins[from] {
+		_, open := h.sessions[from]
+		_, closed := h.archive[from]
+		_, held := h.unread[from]
+		if !open && !closed && !held {
+			out = append(out, from)
+		}
+	}
+	return out
 }
 
 // join is two timelines as one, oldest first, cut to the latest moments a

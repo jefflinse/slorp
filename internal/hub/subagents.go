@@ -128,16 +128,23 @@ func (h *Hub) UpsertSubagent(agent, sessionID string, revision int64, a Subagent
 func (h *Hub) RetainedSubagentReport(agent, sessionID, childID string) (SubagentReport, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	r, ok := h.retained[sessionID][childID]
-	if !ok || r.Agent != agent || r.Report == nil {
-		return SubagentReport{}, false
+	for _, id := range h.carried(sessionID) {
+		if r, ok := h.retained[id][childID]; ok && r.Agent == agent && r.Report != nil {
+			return *r.Report, true
+		}
 	}
-	return *r.Report, true
+	return SubagentReport{}, false
 }
 
 func (h *Hub) mergeSubagents(root, agent string, source []Subagent, connected bool) []Subagent {
 	out := cloneSubagents(source)
-	for _, r := range h.retained[root] {
+	var retained []subagentRecord
+	for _, id := range h.carried(root) {
+		for _, r := range h.retained[id] {
+			retained = append(retained, r)
+		}
+	}
+	for _, r := range retained {
 		if r.Agent != agent {
 			continue
 		}
@@ -159,7 +166,7 @@ func (h *Hub) mergeSubagents(root, agent string, source []Subagent, connected bo
 		}
 		out = append(out, a)
 	}
-	if len(h.retained[root]) > 0 {
+	if len(retained) > 0 {
 		slices.SortStableFunc(out, func(a, b Subagent) int {
 			return cmp.Or(a.StartedAt.Compare(b.StartedAt), cmp.Compare(a.ID, b.ID))
 		})
