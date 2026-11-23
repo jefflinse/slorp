@@ -43,7 +43,8 @@ func TestBriefRetryWaitsAndClearsOnSuccess(t *testing.T) {
 		t.Fatal("expected a brief to be ready")
 	}
 
-	for i, minutes := range []time.Duration{1, 2, 4, 8, 16, 32, 64, 128, 256, 360, 360} {
+	delays := []time.Duration{1, 2, 4, 8, 16, 32, 64, 128, 256, 360, 360}
+	for i, minutes := range delays {
 		e.step(ctx)
 		state := e.retries[key]
 		if want := minutes * time.Minute; state.wait != want {
@@ -55,6 +56,10 @@ func TestBriefRetryWaitsAndClearsOnSuccess(t *testing.T) {
 		}
 		state.readyAt = time.Now().Add(-time.Second)
 		e.retries[key] = state
+	}
+	if actions := e.Hub.Actions(); len(actions) != 1 || actions[0].Kind != hub.ActBrief ||
+		actions[0].Tries != len(delays) || !strings.Contains(actions[0].Error, "ran out of tokens") {
+		t.Fatalf("model log = %+v, want one brief failure counting every retry", actions)
 	}
 
 	f.content, f.finish = `{"stands":"Ready for review.","next":"The reviewer goes next.","points":[]}`, "stop"
