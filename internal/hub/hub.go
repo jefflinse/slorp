@@ -927,10 +927,15 @@ func (h *Hub) warn(err error) {
 	}
 }
 
-// restore gives a session seen for the first time what the model last wrote about it.
-func (h *Hub) restore(s *Session) {
+// restore gives a session seen for the first time what the model last wrote
+// about it. It reports false, with s and what is kept of it unchanged, when
+// that cannot be read, and the session is then not to be admitted.
+func (h *Hub) restore(s *Session) bool {
 	found, err := h.recall(s)
-	h.warn(err)
+	if err != nil {
+		h.warn(fmt.Errorf("session %s could not be read: %w", s.ID, err))
+		return false
+	}
 	if found {
 		delete(h.unsettled, s.ID)
 		if _, back := h.archive[s.ID]; back {
@@ -938,6 +943,7 @@ func (h *Hub) restore(s *Session) {
 			h.remember(s)
 		}
 	}
+	return true
 }
 
 // recall gives s what was kept of it, and reports whether anything was. When
@@ -1019,6 +1025,7 @@ func (h *Hub) filed(s *Session) (effort, via string) {
 
 // SetRoster replaces the known sessions of one agent with the live set an
 // adapter observed. Fields only a bridge can report survive the replacement.
+// A session first seen whose kept record cannot be read is left out until it can.
 func (h *Hub) SetRoster(agent string, live []Session) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -1051,8 +1058,8 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 			if s.LastPrompt == "" {
 				s.LastPrompt, s.PromptAt = old.LastPrompt, old.PromptAt
 			}
-		} else {
-			h.restore(&s)
+		} else if !h.restore(&s) {
+			continue
 		}
 		h.sessions[s.ID] = &s
 	}
@@ -1116,7 +1123,8 @@ func (h *Hub) Rostered(agent string) {
 
 // Apply records a bridge's report about one session. It creates the session
 // if nothing has listed it yet, and reports whether it did. A report about a
-// session its agent's roster does not list is dropped.
+// session its agent's roster does not list is dropped, as is one about a
+// session first seen whose kept record cannot be read.
 func (h *Hub) Apply(agent, id string, fn func(*Session)) (created bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -1127,7 +1135,9 @@ func (h *Hub) Apply(agent, id string, fn func(*Session)) (created bool) {
 	if !ok {
 		now := time.Now()
 		s = &Session{ID: id, Agent: agent, Kind: "interactive", Status: Idle, StartedAt: now, ActiveAt: now}
-		h.restore(s)
+		if !h.restore(s) {
+			return false
+		}
 		h.sessions[id] = s
 	}
 	s.bridgeSeen = time.Now()
