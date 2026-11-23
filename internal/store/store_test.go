@@ -107,7 +107,7 @@ func TestEachLetsGoOfTheStoreWhileCallingBack(t *testing.T) {
 	}
 }
 
-func TestEachStopsAtWhatWasThereWhenCalled(t *testing.T) {
+func TestEachIsNotProlongedByWhatIsAdded(t *testing.T) {
 	st := testdb.Open(t)
 	const n = 200
 	for i := range n {

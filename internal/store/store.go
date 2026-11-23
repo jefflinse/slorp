@@ -74,11 +74,13 @@ const (
 	eachQuery = `SELECT rowid, id, body FROM docs WHERE kind = ? AND rowid > ? AND rowid <= ? ORDER BY rowid LIMIT ?`
 )
 
-// Each calls fn with every document of a kind that was there when it was
-// called, oldest first. The store holds no connection while fn runs, so fn
-// may use the store and take other locks whose holders are waiting on it.
-// Documents are read a page at a time, not as one snapshot: one changed or
-// deleted while Each runs is seen as it is when its page is read.
+// Each calls fn with the documents of a kind, oldest first, read a page at a
+// time up to the highest rowid the kind had when Each was called. The store
+// holds no connection while fn runs, so fn may use the store and take other
+// locks whose holders are waiting on it. Each is bounded but not a snapshot:
+// a document is seen as it is when its page is read, one deleted before then
+// is not seen, and one added since is seen only if it reuses a rowid within
+// the bound.
 func (s *Store) Each(kind string, fn func(id string, body []byte)) error {
 	type doc struct {
 		id   string
