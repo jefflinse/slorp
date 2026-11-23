@@ -19,6 +19,10 @@ type Store struct {
 
 // Open opens the database at path, creating it and its directory if needed.
 func Open(path string) (*Store, error) {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
@@ -55,21 +59,26 @@ func (s *Store) Put(kind, id string, v any) error {
 	return err
 }
 
-// PutAll stores each of docs as the document of that kind and its id,
-// replacing any other, all of them or none.
-func (s *Store) PutAll(kind string, docs map[string]any) error {
+// Doc is a document for PutAll: Value stored as the document of Kind and ID.
+type Doc struct {
+	Kind, ID string
+	Value    any
+}
+
+// PutAll stores each of docs as Put would, all of them or none.
+func (s *Store) PutAll(docs ...Doc) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	for id, v := range docs {
-		b, err := json.Marshal(v)
+	for _, d := range docs {
+		b, err := json.Marshal(d.Value)
 		if err != nil {
 			return err
 		}
 		if _, err := tx.Exec(`INSERT INTO docs (kind, id, body) VALUES (?, ?, ?)
-			ON CONFLICT (kind, id) DO UPDATE SET body = excluded.body, updated_at = CURRENT_TIMESTAMP`, kind, id, string(b)); err != nil {
+			ON CONFLICT (kind, id) DO UPDATE SET body = excluded.body, updated_at = CURRENT_TIMESTAMP`, d.Kind, d.ID, string(b)); err != nil {
 			return err
 		}
 	}

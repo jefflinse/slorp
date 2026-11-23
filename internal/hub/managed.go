@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/jefflinse/slorp/internal/store"
 )
 
 type managedRun struct {
@@ -17,6 +19,9 @@ type managedRun struct {
 }
 
 // OpenManaged registers live ownership, never recovered from a persisted job or PID.
+// The session and every reply waiting for it are saved as the run's in one
+// write before the run is registered; when that cannot be saved, nothing
+// changes and the error wraps ErrNotSaved.
 func (h *Hub) OpenManaged(agent, id, job, token string, update func(*Session)) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -26,28 +31,37 @@ func (h *Hub) OpenManaged(agent, id, job, token string, update func(*Session)) e
 	if h.sessions[id] != nil || h.runs[token] != nil || h.unmanagedAdmissions[id] != 0 {
 		return ErrLifecycleConflict
 	}
-	if err := h.takeReplies(id); err != nil {
-		return err
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	run := &managedRun{agent: agent, root: id, ctx: ctx, cancel: cancel}
-	if h.runs == nil {
-		h.runs = map[string]*managedRun{}
-	}
-	h.runs[token] = run
 	now := time.Now()
 	s := &Session{ID: id, Agent: agent, Kind: "background", Status: Idle, StartedAt: now, ActiveAt: now, managed: true}
-	h.restore(s)
+	h.recall(s)
 	s.managed, s.run, s.Job, s.CanStop = true, token, job, true
 	if update != nil {
 		update(s)
 	}
-	h.sessions[id] = s
-	err := h.checkpoint(s)
-	h.changed()
-	if err != nil {
-		return fmt.Errorf("persisting managed session %s: %w", id, err)
+	docs := []store.Doc{{Kind: "session", ID: id, Value: h.doc(s)}}
+	var waiting []*Reply
+	for _, r := range h.replies {
+		if r.SessionID == id && (r.State == Queued || r.State == Claimed) && r.Owner != OwnerRun {
+			owned := *r
+			owned.Owner = OwnerRun
+			docs, waiting = append(docs, store.Doc{Kind: "reply", ID: r.ID, Value: owned}), append(waiting, r)
+		}
 	}
+	if err := h.cache.PutAll(docs...); err != nil {
+		return fmt.Errorf("managed session %s %w: %w", id, ErrNotSaved, err)
+	}
+	for _, r := range waiting {
+		r.Owner = OwnerRun
+	}
+	delete(h.unsettled, id)
+	delete(h.archive, id)
+	ctx, cancel := context.WithCancel(context.Background())
+	if h.runs == nil {
+		h.runs = map[string]*managedRun{}
+	}
+	h.runs[token] = &managedRun{agent: agent, root: id, ctx: ctx, cancel: cancel}
+	h.sessions[id] = s
+	h.changed()
 	return nil
 }
 
@@ -98,31 +112,6 @@ func (h *Hub) CloseManaged(token string) {
 		delete(h.sessions, s.ID)
 		h.changed()
 	}
-}
-
-// takeReplies makes the run about to be opened for a session the owner of
-// what is waiting for it, as if queued for the run, all of it or, with an
-// error wrapping ErrNotSaved, none.
-func (h *Hub) takeReplies(id string) error {
-	taken := map[string]any{}
-	var waiting []*Reply
-	for _, r := range h.replies {
-		if r.SessionID == id && (r.State == Queued || r.State == Claimed) && r.Owner != OwnerRun {
-			owned := *r
-			owned.Owner = OwnerRun
-			taken[r.ID], waiting = owned, append(waiting, r)
-		}
-	}
-	if len(taken) == 0 {
-		return nil
-	}
-	if err := h.cache.PutAll("reply", taken); err != nil {
-		return fmt.Errorf("the replies waiting for %s %w: %w", id, ErrNotSaved, err)
-	}
-	for _, r := range waiting {
-		r.Owner = OwnerRun
-	}
-	return nil
 }
 
 func (h *Hub) dropReplies(id string) {

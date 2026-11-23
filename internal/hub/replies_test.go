@@ -11,14 +11,19 @@ import (
 )
 
 // faultyReplies keeps the hub in a store, failing each write of a reply for
-// which fail, given its number counted from when fail was set, says so.
+// which fail, given its number counted from when fail was set, says so, and
+// every write of a session while sessions is set.
 type faultyReplies struct {
 	*store.Store
-	fail func(n int) bool
-	n    int
+	fail     func(n int) bool
+	n        int
+	sessions bool
 }
 
 func (c *faultyReplies) Put(kind, id string, v any) error {
+	if kind == "session" && c.sessions {
+		return errors.New("disk full")
+	}
 	if kind == "reply" && c.fail != nil {
 		c.n++
 		if c.fail(c.n) {
@@ -28,14 +33,21 @@ func (c *faultyReplies) Put(kind, id string, v any) error {
 	return c.Store.Put(kind, id, v)
 }
 
-func (c *faultyReplies) PutAll(kind string, docs map[string]any) error {
-	if kind == "reply" && c.fail != nil {
+func (c *faultyReplies) PutAll(docs ...store.Doc) error {
+	replies := false
+	for _, d := range docs {
+		if d.Kind == "session" && c.sessions {
+			return errors.New("disk full")
+		}
+		replies = replies || d.Kind == "reply"
+	}
+	if replies && c.fail != nil {
 		c.n++
 		if c.fail(c.n) {
 			return errors.New("disk full")
 		}
 	}
-	return c.Store.PutAll(kind, docs)
+	return c.Store.PutAll(docs...)
 }
 
 func (c *faultyReplies) failing(fail func(n int) bool) { c.n, c.fail = 0, fail }
@@ -110,6 +122,25 @@ func TestWhatWaitsForASessionGoesWithTheRunThatTakesItOver(t *testing.T) {
 	}
 	if got := afterRestart("ses_kept"); len(got) != 1 || got[0].ID != kept.ID {
 		t.Errorf("after a failed takeover and a restart the terminal was handed %+v, want its reply", got)
+	}
+
+	// Not taken over, when the session could not be kept as the run's.
+	unkept := queuedElsewhere("ses_unkept")
+	c.sessions = true
+	if err := h.OpenManaged("opencode", "ses_unkept", "job", "token-unkept", nil); !errors.Is(err, ErrNotSaved) {
+		t.Fatalf("taking over a session that cannot be saved = %v, want ErrNotSaved", err)
+	}
+	c.sessions = false
+	if _, release, err := h.BridgeLease(context.Background(), "token-unkept", "opencode", "ses_unkept", "", "/api/bridge/poll"); err == nil {
+		release()
+		t.Error("a run was opened though its session could not be saved")
+	}
+	h.CloseManaged("token-unkept")
+	if r := saved(unkept.ID); r.Owner != OwnerBridge || r.State != Queued {
+		t.Errorf("a reply after a takeover whose session could not be saved is saved as %+v, want still queued for the terminal", r)
+	}
+	if got := afterRestart("ses_unkept"); len(got) != 1 || got[0].ID != unkept.ID {
+		t.Errorf("after a takeover whose session could not be saved and a restart the terminal was handed %+v, want its reply", got)
 	}
 }
 

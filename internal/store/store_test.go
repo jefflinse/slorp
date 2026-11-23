@@ -164,17 +164,37 @@ func TestEachDirectoryKeepsItsOwnDatabase(t *testing.T) {
 
 func TestPutAllKeepsAllOrNone(t *testing.T) {
 	st := testdb.Open(t)
-	if err := st.PutAll("thing", map[string]any{"a": doc{1}, "b": doc{2}}); err != nil {
+	if err := st.PutAll(store.Doc{Kind: "thing", ID: "a", Value: doc{1}}, store.Doc{Kind: "other", ID: "b", Value: doc{2}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.PutAll("thing", map[string]any{"a": doc{3}, "b": func() {}}); err == nil {
+	// The first is written before the second fails.
+	if err := st.PutAll(store.Doc{Kind: "thing", ID: "a", Value: doc{3}}, store.Doc{Kind: "other", ID: "b", Value: func() {}}); err == nil {
 		t.Fatal("storing what cannot be encoded succeeded")
 	}
-	for id, want := range map[string]int{"a": 1, "b": 2} {
+	for kind, want := range map[[2]string]int{{"thing", "a"}: 1, {"other", "b"}: 2} {
 		var got doc
-		if found, err := st.Get("thing", id, &got); err != nil || !found || got.N != want {
-			t.Errorf("%s = %+v, %v, %v after a failed PutAll; want %d", id, got, found, err, want)
+		if found, err := st.Get(kind[0], kind[1], &got); err != nil || !found || got.N != want {
+			t.Errorf("%s %s = %+v, %v, %v after a failed PutAll; want %d", kind[0], kind[1], got, found, err, want)
 		}
+	}
+}
+
+func TestARelativePathIsUnderTheWorkingDirectory(t *testing.T) {
+	t.Chdir(t.TempDir())
+	st, err := store.Open(filepath.Join("data dir%20", "slorp.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Put("thing", "a", doc{7}); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	if _, err := os.Stat(filepath.Join("data dir%20", "slorp.db")); err != nil {
+		t.Fatalf("no database where the relative path names: %v", err)
+	}
+	var got doc
+	if found, err := testdb.OpenAt(t, filepath.Join("data dir%20", "slorp.db")).Get("thing", "a", &got); err != nil || !found || got.N != 7 {
+		t.Errorf("reopened = %+v, %v, %v; want what was written", got, found, err)
 	}
 }
 

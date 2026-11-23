@@ -23,6 +23,7 @@ import (
 
 	"github.com/jefflinse/slorp/internal/integrations"
 	"github.com/jefflinse/slorp/internal/kb"
+	"github.com/jefflinse/slorp/internal/store"
 )
 
 type Status string
@@ -716,7 +717,7 @@ func leading(tasks []string) []string {
 type Cache interface {
 	Get(kind, id string, v any) (bool, error)
 	Put(kind, id string, v any) error
-	PutAll(kind string, docs map[string]any) error
+	PutAll(docs ...store.Doc) error
 	Each(kind string, fn func(id string, body []byte)) error
 	Delete(kind, id string) error
 }
@@ -928,10 +929,21 @@ func (h *Hub) warn(err error) {
 
 // restore gives a session seen for the first time what the model last wrote about it.
 func (h *Hub) restore(s *Session) {
+	if h.recall(s) {
+		delete(h.unsettled, s.ID)
+		if _, back := h.archive[s.ID]; back {
+			delete(h.archive, s.ID)
+			h.remember(s)
+		}
+	}
+}
+
+// recall gives s what was kept of it, and reports whether anything was.
+func (h *Hub) recall(s *Session) bool {
 	var d sessionDoc
 	if ok, err := h.cache.Get("session", s.ID, &d); err != nil || !ok {
 		h.warn(err)
-		return
+		return false
 	}
 	s.Insight, s.insightKey, s.guess, s.guessKey, s.insightAt = d.Insight, d.InsightKey, d.Guess, d.GuessKey, d.InsightAt
 	s.roleGuess, s.roleKey = d.RoleGuess, d.RoleKey
@@ -947,11 +959,7 @@ func (h *Hub) restore(s *Session) {
 		s.Model, s.Reasoning = d.Model, d.Reasoning
 		s.LastPrompt, s.LastReply, s.PromptAt = d.LastPrompt, d.LastReply, d.PromptAt
 	}
-	delete(h.unsettled, s.ID)
-	if _, back := h.archive[s.ID]; back {
-		delete(h.archive, s.ID)
-		h.remember(s)
-	}
+	return true
 }
 
 func (h *Hub) remember(s *Session) {
