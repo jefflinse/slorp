@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,6 +35,66 @@ func serving(t *testing.T, model string) string {
 	}))
 	t.Cleanup(srv.Close)
 	return srv.URL
+}
+
+func TestAProbeFinishesWithTheServerItBeganWith(t *testing.T) {
+	listing, release := make(chan struct{}), make(chan struct{})
+	var armed atomic.Bool
+	var listed, released sync.Once
+	a := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			if armed.Load() {
+				listed.Do(func() { close(listing) })
+				<-release
+			}
+			io.WriteString(w, `{"data":[{"id":"a"}]}`)
+		case "/v1/chat/completions":
+			io.WriteString(w, `{"choices":[{"message":{"content":"pong"}}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(a.Close)
+	t.Cleanup(func() { released.Do(func() { close(release) }) })
+	st := testdb.Open(t)
+	h := hub.New(testdb.KB(t, st), st)
+	choose := func(m hub.ModelSettings) {
+		t.Helper()
+		if _, err := h.UpdateSettings(func(s *hub.Settings) error { s.Model = m; return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b := hub.ModelSettings{URL: serving(t, "b"), Name: "b"}
+	choose(hub.ModelSettings{URL: a.URL, Name: "a"})
+	e := &Enricher{Hub: h, Resolve: Startup{}.Config, failed: map[string]time.Time{}}
+	e.step(context.Background())
+
+	armed.Store(true)
+	probed := make(chan hub.ModelCheck, 1)
+	go func() { probed <- e.Probe(context.Background(), nil) }()
+	select {
+	case <-listing:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the probe never asked the first server what it offers")
+	}
+	choose(b)
+	e.step(context.Background())
+	if e.BaseURL != b.URL {
+		t.Fatalf("the worker is on %s, want it moved to %s", e.BaseURL, b.URL)
+	}
+	released.Do(func() { close(release) })
+	select {
+	case check := <-probed:
+		if check.URL != a.URL || check.Model != "a" || !check.Answered {
+			t.Errorf("a probe begun on the first server finished as %s with %q, answered %v, %s", check.URL, check.Model, check.Answered, check.Error)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the probe never finished")
+	}
+	if check := e.Probe(context.Background(), nil); check.URL != b.URL || check.Model != "b" || !check.Answered {
+		t.Errorf("the next probe tried %s with %q, answered %v, %s; want the second server", check.URL, check.Model, check.Answered, check.Error)
+	}
 }
 
 func TestAProbeUsesOneServerAndItsModelWhileTheWorkerChangesThem(t *testing.T) {
