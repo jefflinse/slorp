@@ -20,8 +20,9 @@ type managedRun struct {
 
 // OpenManaged registers live ownership, never recovered from a persisted job or PID.
 // The session and every reply waiting for it are saved as the run's in one
-// write before the run is registered; when that cannot be saved, nothing
-// changes and the error wraps ErrNotSaved.
+// write before the run is registered; when what was kept of the session
+// cannot be read, or that cannot be saved, nothing changes, and in the latter
+// case the error wraps ErrNotSaved.
 func (h *Hub) OpenManaged(agent, id, job, token string, update func(*Session)) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -33,12 +34,19 @@ func (h *Hub) OpenManaged(agent, id, job, token string, update func(*Session)) e
 	}
 	now := time.Now()
 	s := &Session{ID: id, Agent: agent, Kind: "background", Status: Idle, StartedAt: now, ActiveAt: now, managed: true}
-	h.recall(s)
+	if _, err := h.recall(s); err != nil {
+		return fmt.Errorf("managed session %s could not be read: %w", id, err)
+	}
 	s.managed, s.run, s.Job, s.CanStop = true, token, job, true
 	if update != nil {
 		update(s)
 	}
-	docs := []store.Doc{{Kind: "session", ID: id, Value: h.doc(s)}}
+	doc := h.doc(s)
+	kept, err := fingerprint(doc)
+	if err != nil {
+		return fmt.Errorf("managed session %s %w: %w", id, ErrNotSaved, err)
+	}
+	docs := []store.Doc{{Kind: "session", ID: id, Value: doc}}
 	var waiting []*Reply
 	for _, r := range h.replies {
 		if r.SessionID == id && (r.State == Queued || r.State == Claimed) && r.Owner != OwnerRun {
@@ -50,6 +58,7 @@ func (h *Hub) OpenManaged(agent, id, job, token string, update func(*Session)) e
 	if err := h.cache.PutAll(docs...); err != nil {
 		return fmt.Errorf("managed session %s %w: %w", id, ErrNotSaved, err)
 	}
+	s.persisted = kept
 	for _, r := range waiting {
 		r.Owner = OwnerRun
 	}

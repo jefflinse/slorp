@@ -929,7 +929,9 @@ func (h *Hub) warn(err error) {
 
 // restore gives a session seen for the first time what the model last wrote about it.
 func (h *Hub) restore(s *Session) {
-	if h.recall(s) {
+	found, err := h.recall(s)
+	h.warn(err)
+	if found {
 		delete(h.unsettled, s.ID)
 		if _, back := h.archive[s.ID]; back {
 			delete(h.archive, s.ID)
@@ -938,12 +940,12 @@ func (h *Hub) restore(s *Session) {
 	}
 }
 
-// recall gives s what was kept of it, and reports whether anything was.
-func (h *Hub) recall(s *Session) bool {
+// recall gives s what was kept of it, and reports whether anything was. When
+// what was kept cannot be read, s is unchanged and the error says why.
+func (h *Hub) recall(s *Session) (bool, error) {
 	var d sessionDoc
 	if ok, err := h.cache.Get("session", s.ID, &d); err != nil || !ok {
-		h.warn(err)
-		return false
+		return false, err
 	}
 	s.Insight, s.insightKey, s.guess, s.guessKey, s.insightAt = d.Insight, d.InsightKey, d.Guess, d.GuessKey, d.InsightAt
 	s.roleGuess, s.roleKey = d.RoleGuess, d.RoleKey
@@ -959,7 +961,7 @@ func (h *Hub) recall(s *Session) bool {
 		s.Model, s.Reasoning = d.Model, d.Reasoning
 		s.LastPrompt, s.LastReply, s.PromptAt = d.LastPrompt, d.LastReply, d.PromptAt
 	}
-	return true
+	return true, nil
 }
 
 func (h *Hub) remember(s *Session) {
@@ -968,11 +970,10 @@ func (h *Hub) remember(s *Session) {
 
 func (h *Hub) checkpoint(s *Session) error {
 	doc := h.doc(s)
-	b, err := json.Marshal(doc)
+	fingerprint, err := fingerprint(doc)
 	if err != nil {
 		return err
 	}
-	fingerprint := sha256.Sum256(b)
 	if s.persisted == fingerprint {
 		return nil
 	}
@@ -981,6 +982,15 @@ func (h *Hub) checkpoint(s *Session) error {
 	}
 	s.persisted = fingerprint
 	return nil
+}
+
+// fingerprint identifies what is stored of a session, as checkpoint compares it.
+func fingerprint(d sessionDoc) ([sha256.Size]byte, error) {
+	b, err := json.Marshal(d)
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	return sha256.Sum256(b), nil
 }
 
 // doc is what is stored of a session while it is open.

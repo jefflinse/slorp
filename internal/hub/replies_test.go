@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -11,18 +12,30 @@ import (
 )
 
 // faultyReplies keeps the hub in a store, failing each write of a reply for
-// which fail, given its number counted from when fail was set, says so, and
-// every write of a session while sessions is set.
+// which fail, given its number counted from when fail was set, says so, every
+// write of a session while sessions is set, and every read of a session while
+// unreadable is set. It counts the sessions put and the batches written.
 type faultyReplies struct {
 	*store.Store
-	fail     func(n int) bool
-	n        int
-	sessions bool
+	fail                 func(n int) bool
+	n                    int
+	sessions, unreadable bool
+	sessionPuts, batches int
+}
+
+func (c *faultyReplies) Get(kind, id string, v any) (bool, error) {
+	if kind == "session" && c.unreadable {
+		return false, errors.New("disk unreadable")
+	}
+	return c.Store.Get(kind, id, v)
 }
 
 func (c *faultyReplies) Put(kind, id string, v any) error {
 	if kind == "session" && c.sessions {
 		return errors.New("disk full")
+	}
+	if kind == "session" {
+		c.sessionPuts++
 	}
 	if kind == "reply" && c.fail != nil {
 		c.n++
@@ -47,6 +60,7 @@ func (c *faultyReplies) PutAll(docs ...store.Doc) error {
 			return errors.New("disk full")
 		}
 	}
+	c.batches++
 	return c.Store.PutAll(docs...)
 }
 
@@ -141,6 +155,84 @@ func TestWhatWaitsForASessionGoesWithTheRunThatTakesItOver(t *testing.T) {
 	}
 	if got := afterRestart("ses_unkept"); len(got) != 1 || got[0].ID != unkept.ID {
 		t.Errorf("after a takeover whose session could not be saved and a restart the terminal was handed %+v, want its reply", got)
+	}
+
+	// Not taken over, when what was kept of the session could not be read.
+	h.Apply("opencode", "ses_unread", func(s *Session) { s.LastPrompt = "in a terminal" })
+	h.Rename("ses_unread", "Named by hand")
+	unread, err := h.Enqueue("ses_unread", "queued in ses_unread")
+	must(t, err)
+	h.Retire("opencode", -time.Second)
+	stored := func() sessionDoc {
+		t.Helper()
+		var d sessionDoc
+		if found, err := st.Get("session", "ses_unread", &d); err != nil || !found {
+			t.Fatalf("ses_unread is not saved: %v", err)
+		}
+		return d
+	}
+	before := stored()
+	if _, archived := h.archive["ses_unread"]; !archived || before.Given != "Named by hand" || len(before.Timeline) != 1 {
+		t.Fatalf("ses_unread is archived %v as %+v, want named with one moment", archived, before)
+	}
+	c.unreadable, c.batches = true, 0
+	if err := h.OpenManaged("opencode", "ses_unread", "job", "token-unread", nil); err == nil {
+		t.Fatal("a session whose record could not be read was taken over")
+	}
+	c.unreadable = false
+	if c.batches != 0 {
+		t.Errorf("taking over a session whose record could not be read wrote %d batches, want none", c.batches)
+	}
+	if _, release, err := h.BridgeLease(context.Background(), "token-unread", "opencode", "ses_unread", "", "/api/bridge/poll"); err == nil {
+		release()
+		t.Error("a run was opened though its session could not be read")
+	}
+	if _, archived := h.archive["ses_unread"]; !archived {
+		t.Error("a session whose record could not be read left the archive")
+	}
+	if after := stored(); !reflect.DeepEqual(after, before) {
+		t.Errorf("a session whose record could not be read is saved as %+v, want %+v", after, before)
+	}
+	if r := saved(unread.ID); r.Owner != OwnerBridge || r.State != Queued {
+		t.Errorf("a reply after a takeover whose session could not be read is saved as %+v, want still queued for the terminal", r)
+	}
+	must(t, h.OpenManaged("opencode", "ses_unread", "job", "token-unread", nil))
+	if s := h.sessions["ses_unread"]; s.given != "Named by hand" || len(s.Timeline) != 1 {
+		t.Errorf("taken over once it could be read, ses_unread is named %q with %d moments, want its name and moment", s.given, len(s.Timeline))
+	}
+	if after := stored(); after.Given != "Named by hand" || len(after.Timeline) != 1 {
+		t.Errorf("taken over once it could be read, ses_unread is saved as %+v, want its name and moment", after)
+	}
+}
+
+func TestASessionKeptUnreadablyIsNotTakenOver(t *testing.T) {
+	st := testdb.Open(t)
+	must(t, st.Put("session", "ses_garbled", "not a session"))
+	h := New(testdb.KB(t, st), st)
+	if err := h.OpenManaged("opencode", "ses_garbled", "job", "token", nil); err == nil {
+		t.Fatal("a session kept as something that is not one was taken over")
+	}
+	var kept string
+	if found, err := st.Get("session", "ses_garbled", &kept); err != nil || !found || kept != "not a session" {
+		t.Errorf("a session that could not be decoded is saved as %q, %v, %v; want left as it was", kept, found, err)
+	}
+}
+
+func TestATakeoverIsWrittenOnce(t *testing.T) {
+	st := testdb.Open(t)
+	c := &faultyReplies{Store: st}
+	h := New(testdb.KB(t, st), c)
+	must(t, h.OpenManaged("opencode", "ses_new", "job", "token", nil))
+	if c.batches != 1 || c.sessionPuts != 0 {
+		t.Errorf("taking a new session over wrote %d batches and put the session %d times, want one batch alone", c.batches, c.sessionPuts)
+	}
+	h.mu.Lock()
+	h.sessions["ses_new"].Title = "Retitled"
+	h.changed()
+	h.mu.Unlock()
+	var d sessionDoc
+	if found, err := st.Get("session", "ses_new", &d); err != nil || !found || d.Title != "Retitled" || c.sessionPuts != 1 {
+		t.Errorf("after a change the session is saved as %+v (put %d times), %v; want retitled once", d, c.sessionPuts, err)
 	}
 }
 
