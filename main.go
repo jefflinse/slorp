@@ -133,6 +133,9 @@ func run() (exe string, restart bool) {
 		started.URLGiven = started.URLGiven || f.Name == "llm"
 		started.ModelGiven = started.ModelGiven || f.Name == "model"
 	})
+	if started, err = started.Checked(); err != nil {
+		log.Fatalf("-llm: %v", err)
+	}
 	summarizer := &enrich.Enricher{Hub: h, Resolve: started.Config, Offer: tools.Offer}
 	go summarizer.Run(ctx)
 

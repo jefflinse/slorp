@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -92,6 +93,36 @@ type Config struct {
 type Startup struct {
 	URL, Model           string
 	URLGiven, ModelGiven bool
+}
+
+// ServerURL returns the address of a model server as the user wrote it, in
+// the form Slorp keeps: with a scheme, and without the /v1 its API paths
+// begin with. Empty stays empty. It reports false for anything that is not
+// an http or https address.
+func ServerURL(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", true
+	}
+	if !strings.Contains(s, "://") {
+		s = "http://" + s
+	}
+	u, err := url.Parse(s)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
+		return "", false
+	}
+	return u.Scheme + "://" + u.Host + strings.TrimSuffix(strings.TrimRight(u.Path, "/"), "/v1"), true
+}
+
+// Checked returns s with its server address in the form ServerURL gives,
+// or an error naming the address when it is not one Settings would take.
+func (s Startup) Checked() (Startup, error) {
+	u, ok := ServerURL(s.URL)
+	if !ok {
+		return s, fmt.Errorf("the model server's address must be an http or https one, not %q", s.URL)
+	}
+	s.URL = u
+	return s, nil
 }
 
 // Config returns what to use under the user's settings m. What was given
@@ -721,8 +752,14 @@ type message struct {
 // chat sends one chat completion request to the server at base and returns
 // the model's message.
 func (e *Enricher) chat(ctx context.Context, base string, request map[string]any) (message, error) {
-	body, _ := json.Marshal(request)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/chat/completions", bytes.NewReader(body))
+	body, err := json.Marshal(request)
+	if err != nil {
+		return message{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return message{}, err
+	}
 	req.Header.Set("Content-Type", "application/json")
 	res, err := e.http().Do(req)
 	if err != nil {
@@ -745,7 +782,10 @@ func (e *Enricher) chat(ctx context.Context, base string, request map[string]any
 }
 
 func (e *Enricher) get(ctx context.Context, base, path string, v any) error {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
+	if err != nil {
+		return err
+	}
 	res, err := e.http().Do(req)
 	if err != nil {
 		return err

@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -179,25 +178,6 @@ type Prober interface {
 	// Probe tries the server and model in use, or with m those m would
 	// have Slorp use.
 	Probe(ctx context.Context, m *hub.ModelSettings) hub.ModelCheck
-}
-
-// modelURL returns the address of a model server as the user wrote it, in
-// the form Slorp keeps: with a scheme, and without the /v1 its API paths
-// begin with. Empty stays empty. It reports false for anything that is not
-// an http or https address.
-func modelURL(s string) (string, bool) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return "", true
-	}
-	if !strings.Contains(s, "://") {
-		s = "http://" + s
-	}
-	u, err := url.Parse(s)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
-		return "", false
-	}
-	return u.Scheme + "://" + u.Host + strings.TrimSuffix(strings.TrimRight(u.Path, "/"), "/v1"), true
 }
 
 // prompts returns what the user has the local model told, in the form Slorp
@@ -1440,7 +1420,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 				return errors.New("bad request body")
 			}
 			var ok bool
-			if in.Model.URL, ok = modelURL(in.Model.URL); !ok {
+			if in.Model.URL, ok = enrich.ServerURL(in.Model.URL); !ok {
 				return errors.New("the model server's address must be an http or https one")
 			}
 			in.Model.Name = strings.TrimSpace(in.Model.Name)
@@ -1504,7 +1484,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		}
 		if in.Model != nil {
 			var ok bool
-			if in.Model.URL, ok = modelURL(in.Model.URL); !ok {
+			if in.Model.URL, ok = enrich.ServerURL(in.Model.URL); !ok {
 				http.Error(w, "the model server's address must be an http or https one", http.StatusBadRequest)
 				return
 			}

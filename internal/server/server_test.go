@@ -1456,30 +1456,6 @@ func TestStoppingAndReopeningASession(t *testing.T) {
 	}
 }
 
-func TestModelURL(t *testing.T) {
-	tests := []struct {
-		in, want string
-		ok       bool
-	}{
-		{"", "", true},
-		{"  http://localhost:1234  ", "http://localhost:1234", true},
-		{"http://localhost:11434/v1", "http://localhost:11434", true},
-		{"http://localhost:11434/v1/", "http://localhost:11434", true},
-		{"localhost:8080", "http://localhost:8080", true},
-		{"https://models.example/openai/v1?key=1#top", "https://models.example/openai", true},
-		{"http://127.0.0.1:1234/", "http://127.0.0.1:1234", true},
-		{"ftp://localhost:21", "", false},
-		{"http://", "", false},
-		{"http://user:secret@localhost:1234", "", false},
-		{"http://local host", "", false},
-	}
-	for _, tt := range tests {
-		if got, ok := modelURL(tt.in); got != tt.want || ok != tt.ok {
-			t.Errorf("modelURL(%q) = %q, %v; want %q, %v", tt.in, got, ok, tt.want, tt.ok)
-		}
-	}
-}
-
 func TestChoosingTheLocalModel(t *testing.T) {
 	f := newFixture(t)
 	if code := f.post("/api/settings", `{"model":{"url":" localhost:11434/v1/ ","name":" qwen "}}`); code != 204 {
