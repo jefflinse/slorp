@@ -769,7 +769,17 @@ type Reply struct {
 	Text      string     `json:"text"`
 	State     ReplyState `json:"state"`
 	CreatedAt time.Time  `json:"createdAt"`
+	// Owner is what ran the session when the reply was queued: OwnerRun for
+	// a run Slorp started, which ends with Slorp, and OwnerBridge for one run
+	// elsewhere. It is empty for a reply queued before Slorp kept it.
+	Owner string `json:"owner,omitempty"`
 }
+
+// What ran a session when a reply was queued for it, as a Reply's Owner.
+const (
+	OwnerRun    = "run"
+	OwnerBridge = "bridge"
+)
 
 type Hub struct {
 	mu                  sync.Mutex
@@ -887,14 +897,11 @@ func New(k *kb.Store, c Cache) *Hub {
 			h.replies = append(h.replies, &r)
 		}
 	}))
-	for id, d := range h.unsettled {
-		if d.Managed {
-			h.dropReplies(id)
-		}
-	}
-	for id, d := range h.archive {
-		if d.Managed {
-			h.dropReplies(id)
+	for _, r := range h.replies {
+		managed := h.unsettled[r.SessionID].Managed || h.archive[r.SessionID].Managed
+		if (r.State == Queued || r.State == Claimed) && (r.Owner == OwnerRun || r.Owner == "" && managed) {
+			r.State = Dropped
+			h.warn(h.cache.Put("reply", r.ID, r))
 		}
 	}
 	_, err := c.Get("setting", "main", &h.settings)
@@ -2244,10 +2251,14 @@ var ErrNoSuchSession = errors.New("no such session")
 func (h *Hub) Enqueue(sessionID, text string) (Reply, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if _, ok := h.sessions[sessionID]; !ok {
+	s, ok := h.sessions[sessionID]
+	if !ok {
 		return Reply{}, ErrNoSuchSession
 	}
-	r := &Reply{ID: newID(), SessionID: sessionID, Text: text, State: Queued, CreatedAt: time.Now()}
+	r := &Reply{ID: newID(), SessionID: sessionID, Text: text, State: Queued, CreatedAt: time.Now(), Owner: OwnerBridge}
+	if s.run != "" {
+		r.Owner = OwnerRun
+	}
 	if err := h.saveReply(*r); err != nil {
 		return Reply{}, err
 	}
@@ -2256,10 +2267,11 @@ func (h *Hub) Enqueue(sessionID, text string) (Reply, error) {
 	return *r, nil
 }
 
-// Claim hands a session's queued replies to its bridge, in order and each
-// exactly once. Each is saved as claimed before it is handed out. Claim stops
-// at the first that could not be saved, which stays queued with those after
-// it, and returns the replies claimed before it with an error wrapping
+// Claim hands a session's queued replies to its bridge, in order, and claims
+// each at most once: a reply is saved as claimed before it is handed out,
+// and is not handed out again, whether or not the bridge received it. Claim
+// stops at the first that could not be saved, which stays queued with those
+// after it, and returns the replies claimed before it with an error wrapping
 // ErrNotSaved.
 func (h *Hub) Claim(sessionID string) ([]Reply, error) {
 	h.mu.Lock()

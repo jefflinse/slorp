@@ -1,8 +1,10 @@
 package hub
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/jefflinse/slorp/internal/store"
 	"github.com/jefflinse/slorp/internal/testdb"
@@ -119,6 +121,71 @@ func TestRepliesAreSavedBeforeTheyMove(t *testing.T) {
 	if len(handed) != 2 {
 		t.Errorf("%d replies were handed out, want both", len(handed))
 	}
+}
+
+func TestARestartKeepsWhatWasQueuedForASessionRunElsewhere(t *testing.T) {
+	h, k, cache := newHub(t)
+	must(t, h.OpenManaged("opencode", "ses_root", "job", "token", nil))
+	_, err := h.Enqueue("ses_root", "for the run")
+	must(t, err)
+	h.CloseManaged("token")
+
+	// The same conversation, opened again in a terminal of the user's own.
+	h.Apply("opencode", "ses_root", func(s *Session) { s.LastPrompt = "reopened" })
+	kept, err := h.Enqueue("ses_root", "for the terminal")
+	must(t, err)
+	// A reply from before Slorp kept who it was queued for.
+	must(t, cache.Put("reply", "legacy", Reply{ID: "legacy", SessionID: "ses_root", Text: "from before", State: Queued, CreatedAt: time.Now()}))
+
+	restarted := New(k, cache)
+	restarted.Apply("opencode", "ses_root", func(s *Session) { s.LastPrompt = "reopened again" })
+	states := map[string]ReplyState{}
+	for _, r := range session(t, restarted, "ses_root").Replies {
+		states[r.Text] = r.State
+	}
+	if states["for the run"] != Dropped || states["from before"] != Dropped || states["for the terminal"] != Queued {
+		t.Errorf("after a restart, replies are %v; want the run's and the one from before dropped, and the terminal's queued", states)
+	}
+	if got, err := restarted.Claim("ses_root"); err != nil || len(got) != 1 || got[0].ID != kept.ID {
+		t.Errorf("the next poll after a restart handed out %+v, %v; want the reply queued for the terminal", got, err)
+	}
+}
+
+func TestOnlyTheRunThatClaimedAReplyAcknowledgesItAgain(t *testing.T) {
+	st := testdb.Open(t)
+	c := &faultyReplies{Store: st}
+	k := testdb.KB(t, st)
+	h := New(k, c)
+	must(t, h.OpenManaged("opencode", "one", "job-one", "token-one", nil))
+	must(t, h.OpenManaged("opencode", "two", "job-two", "token-two", nil))
+	r, err := h.Enqueue("one", "queued")
+	must(t, err)
+	_, err = h.Claim("one")
+	must(t, err)
+
+	c.failing(always)
+	if err := h.Ack(r.ID, Delivered); !errors.Is(err, ErrNotSaved) {
+		t.Fatalf("acknowledging when it cannot be saved = %v, want ErrNotSaved", err)
+	}
+	c.failing(nil)
+	for _, token := range []string{"", "token-two"} {
+		if _, release, err := h.BridgeLease(context.Background(), token, "", "", r.ID, "/api/bridge/ack"); err == nil {
+			release()
+			t.Errorf("a caller with token %q may acknowledge another run's reply", token)
+		}
+	}
+	_, release, err := h.BridgeLease(context.Background(), "token-one", "", "", r.ID, "/api/bridge/ack")
+	if err != nil {
+		t.Fatalf("the run that claimed the reply may not acknowledge it again: %v", err)
+	}
+	must(t, h.Ack(r.ID, Delivered))
+	release()
+	var saved Reply
+	if found, err := st.Get("reply", r.ID, &saved); err != nil || !found || saved.State != Delivered {
+		t.Errorf("saved reply %+v, %v, %v; want it delivered", saved, found, err)
+	}
+	h.CloseManaged("token-one")
+	h.CloseManaged("token-two")
 }
 
 func TestRepliesAreNotHandedOutPastOneThatCouldNotBeClaimed(t *testing.T) {
