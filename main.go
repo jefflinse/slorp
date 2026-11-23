@@ -6,7 +6,9 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -54,6 +56,27 @@ func importJSON(st *store.Store, path string) {
 		return
 	}
 	log.Printf("knowledge base: imported %s", path)
+}
+
+// holdData keeps dir for this process alone until it closes the file
+// returned or ends, however it ends, and fails at once when another process
+// has it.
+func holdData(dir string) (*os.File, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "slorp.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, fmt.Errorf("another Slorp is already using %s", dir)
+		}
+		return nil, err
+	}
+	return f, nil
 }
 
 func main() {
@@ -111,6 +134,11 @@ func run() (exe string, restart bool) {
 			log.Fatalf("-plugin: %v", err)
 		}
 	}
+	held, err := holdData(*data)
+	if err != nil {
+		log.Fatalf("data: %v", err)
+	}
+	defer held.Close()
 	st, err := store.Open(filepath.Join(*data, "slorp.db"))
 	if err != nil {
 		log.Fatalf("database: %v", err)

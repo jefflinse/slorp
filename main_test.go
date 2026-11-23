@@ -5,10 +5,74 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
+
+// slorp is Slorp started as its own process on data, with nothing to watch
+// and no model.
+func slorp(ctx context.Context, data, home string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, os.Args[0], "-data", data, "-addr", "127.0.0.1:0", "-go", "", "-llm", "",
+		"-claude", "/usr/bin/false", "-opencode", "/usr/bin/false")
+	cmd.Env = append(os.Environ(), "SLORP_TEST_MAIN=1", "HOME="+home)
+	return cmd
+}
+
+// heldElsewhere waits until another process holds data, and reports whether
+// one did within a few seconds.
+func heldElsewhere(t *testing.T, data string) bool {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		f, err := os.Open(filepath.Join(data, "slorp.lock"))
+		if err != nil {
+			continue
+		}
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestOneSlorpAtATimeUsesItsData(t *testing.T) {
+	data, home := t.TempDir(), t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	first := slorp(ctx, data, home)
+	if err := first.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { first.Process.Kill(); first.Wait() })
+	if !heldElsewhere(t, data) {
+		t.Fatal("the first Slorp never held its data")
+	}
+
+	out, err := slorp(ctx, data, home).CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() == 0 || !strings.Contains(string(out), "another Slorp is already using "+data) {
+		t.Errorf("a second Slorp on the same data = %v, %q; want it refused, saying why", err, out)
+	}
+
+	// Killed rather than stopped, as when it crashes.
+	if err := first.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	first.Wait()
+	third := slorp(ctx, data, home)
+	if err := third.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { third.Process.Kill(); third.Wait() })
+	if !heldElsewhere(t, data) {
+		t.Error("a Slorp started after the first was killed never held the data")
+	}
+}
 
 // TestMain runs Slorp itself when SLORP_TEST_MAIN is set, so a test can start
 // it as its own process.
