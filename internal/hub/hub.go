@@ -1368,11 +1368,11 @@ func (h *Hub) SetSettings(s Settings) ([]string, error) {
 func (h *Hub) UpdateSettings(change func(*Settings) error) ([]string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	s := h.settings.clone()
-	if err := change(&s); err != nil {
+	said := h.settings.clone()
+	if err := change(&said); err != nil {
 		return nil, err
 	}
-	kept := h.settings.clone()
+	s, kept := said.clone(), h.settings.clone()
 	s.Integrations, s.IntegrationsRevision, s.Rewritten = kept.Integrations, kept.IntegrationsRevision, kept.Rewritten
 	s.Prompts.Tasks = maps.Clone(s.Prompts.Tasks)
 	if s.Prompts.Tasks == nil {
