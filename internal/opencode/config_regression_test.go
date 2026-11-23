@@ -118,6 +118,34 @@ func TestConfigResolvedTemplatesAndRemoteOrigin(t *testing.T) {
 	}
 }
 
+func TestRuntimeConfigNeverUnloadsAnIdleDirectory(t *testing.T) {
+	a := fixture(t)
+	t.Setenv("OPENCODE_TEST_HOME", "")
+	for name, config := range map[string]map[string]any{
+		"unset":  {},
+		"chosen": {"experimental": map[string]any{"location_idle_timeout": "5 minutes", "subagent_depth": 2}},
+	} {
+		r := &runtime{private: t.TempDir(), dir: a.Home, cmd: a.command(context.Background())}
+		if err := a.runtimeConfig(r, config); err != nil {
+			t.Fatal(name, err)
+		}
+		data, err := os.ReadFile(filepath.Join(r.private, "opencode.json"))
+		if err != nil {
+			t.Fatal(name, err)
+		}
+		var got struct{ Experimental map[string]any }
+		if err := json.Unmarshal(data, &got); err != nil {
+			t.Fatal(name, err)
+		}
+		if timeout, ok := got.Experimental["location_idle_timeout"]; !ok || timeout != false {
+			t.Errorf("%s: idle timeout is %v, want false", name, timeout)
+		}
+		if name == "chosen" && got.Experimental["subagent_depth"] != float64(2) {
+			t.Errorf("another experimental setting was lost: %v", got.Experimental)
+		}
+	}
+}
+
 func TestConfigPreservesPackageExportOrder(t *testing.T) {
 	original := json.RawMessage(`{"exports":{".":{"import":"./import.js","default":"./default.js"}}}`)
 	var config map[string]any
