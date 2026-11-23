@@ -2,6 +2,7 @@ package claude
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -341,6 +342,35 @@ func TestCheckPluginLooksForANewerVersion(t *testing.T) {
 	if !a.offer.again.IsZero() || asked(calls) != 0 {
 		t.Error("the marketplace was asked about a plugin handed over from a directory")
 	}
+}
+
+// TestThisMarketplaceOffersThisPlugin reads this repository's marketplace as
+// an install of 0.1.5 would: it offers the plugin as its manifest has it.
+func TestThisMarketplaceOffersThisPlugin(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "integrations", "claude-code", ".claude-plugin", "plugin.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct{ Version string }
+	if err := json.Unmarshal(b, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	listing, err := os.ReadFile(filepath.Join("..", "..", ".claude-plugin", "marketplace.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin, _ := pluginClaude(t, `[{"id":"slorp@slorp","version":"0.1.5","enabled":true}]`)
+	market := filepath.Join(filepath.Dir(bin), "market", ".claude-plugin")
+	if err := os.MkdirAll(market, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(market, "marketplace.json"), listing, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st := testdb.Open(t)
+	h := hub.New(testdb.KB(t, st), st)
+	(&Adapter{Hub: h, Bin: bin, Updates: time.Hour}).checkPlugin(context.Background())
+	eventually(t, "an install of 0.1.5 offered "+manifest.Version, func() bool { return h.State().Plugins[Agent].Latest == manifest.Version })
 }
 
 func TestCheckPluginAsksAgainSoonerAfterAFailure(t *testing.T) {

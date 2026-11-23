@@ -9,6 +9,8 @@ const INPUT_LIMIT = 8000
 const ANSWER_MAX_MS = 60 * 60_000
 /** How much of a subagent's account of what it is doing is passed on. */
 const DOING_LIMIT = 300
+/** Refusals after which Slorp may yet take the same request. */
+const REFUSED_FOR_NOW = new Set([408, 429])
 /** Tools whose prompt only the terminal's own dialog can answer. */
 const NEEDS_PERSON = new Set(['ExitPlanMode'])
 
@@ -63,7 +65,7 @@ async function deliver($: EngineInterface, reply: Reply) {
 /**
  * Tells Slorp how each submitted reply went, oldest first, stopping at one
  * Slorp could not take; that one and those after it are told again on the
- * next poll. One Slorp refuses outright is not told again.
+ * next poll. One Slorp refuses for good is not told again.
  */
 async function acknowledge($: EngineInterface) {
   if (isAcknowledging) return
@@ -71,7 +73,8 @@ async function acknowledge($: EngineInterface) {
   try {
     for (const [id, state] of acknowledgements) {
       const res = await send($, '/api/bridge/ack', { id, state })
-      if (!res.ok && (res.status < 400 || res.status >= 500)) return
+      const refused = res.status >= 400 && res.status < 500 && !REFUSED_FOR_NOW.has(res.status)
+      if (!res.ok && !refused) return
       acknowledgements.delete(id)
     }
   } catch {

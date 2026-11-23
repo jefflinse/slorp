@@ -30,14 +30,18 @@ function slorp(on: On, queued: { id: string; text: string }[], answer: (n: numbe
   return { acks, tried }
 }
 
+const notTaken: [string, () => number][] = [
+  ['never arrived', () => { throw new Error('connection refused') }],
+  ['timed out', () => 408],
+  ['too many', () => 429],
+  ['failed', () => 503],
+]
+
 describe('acknowledging a reply', () => {
-  test('one Slorp could not take is told again on the next poll, and the reply is not submitted again', async ($, on) => {
+  for (const [why, first] of notTaken) test(`one Slorp did not take (${why}) is told again on the next poll, and the reply is not submitted again`, async ($, on) => {
     const clock = mock.clock(on)
     mock.env(on, {})
-    const { acks, tried } = slorp(on, [{ id: 'r1', text: 'carry on' }], n => {
-      if (n === 0) throw new Error('connection refused')
-      return 204
-    })
+    const { acks, tried } = slorp(on, [{ id: 'r1', text: 'carry on' }], n => (n === 0 ? first() : 204))
     const submitted: string[] = []
     on('prompt.submit', ($, e) => {
       submitted.push(e.text)
