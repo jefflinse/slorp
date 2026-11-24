@@ -38,11 +38,14 @@ func (h *Hub) OpenManaged(agent, id, job, token string, update func(*Session)) e
 	}
 	now := time.Now()
 	s := &Session{ID: id, Agent: agent, Kind: "background", Status: Idle, StartedAt: now, ActiveAt: now, managed: true}
-	if _, err := h.recall(s); err != nil {
+	found, err := h.recall(s)
+	if err != nil {
 		return fmt.Errorf("managed session %s could not be read: %w", id, err)
 	}
-	if err := h.completeReplies(); err != nil {
-		return fmt.Errorf("managed session %s %w: %w", id, ErrNotSaved, err)
+	if found {
+		if err := h.completeReplies(); err != nil {
+			return fmt.Errorf("managed session %s %w: %w", id, ErrNotSaved, err)
+		}
 	}
 	s.managed, s.run, s.Job, s.CanStop = true, token, job, true
 	if update != nil {

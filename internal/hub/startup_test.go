@@ -236,6 +236,11 @@ func TestWhatWaitsOnWhatCouldNotBeReadGoesOnOnceItCan(t *testing.T) {
 			t.Errorf("the run claimed %+v, %v; want the reply waiting for a, as the run's", got, err)
 		}
 	})
+	t.Run("a session first run by Slorp", func(t *testing.T) {
+		st := testdb.Open(t)
+		h := New(testdb.KB(t, st), &unlisted{Store: st, kind: "reply"})
+		must(t, h.OpenManaged(agent, "fresh", "job", "token", nil))
+	})
 }
 
 func TestASubagentHandedOverAgainIsAsLastSeen(t *testing.T) {
