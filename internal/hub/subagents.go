@@ -48,18 +48,18 @@ func (h *Hub) readSubagents() (map[string]map[string]subagentRecord, error) {
 	err := h.cache.Each("subagent", func(key string, body []byte) {
 		var r subagentRecord
 		if err := json.Unmarshal(body, &r); err != nil {
-			bad = fmt.Errorf("decoding retained subagent: %w", err)
+			bad = fmt.Errorf("decoding retained subagent %s: %w", key, err)
 			return
 		}
 		if err := validateSubagent(r.Agent, r.SessionID, r.Revision, r.Subagent, r.Report); err != nil || key != subagentKey(r.SessionID, r.Subagent.ID) {
-			bad = errors.New("invalid stored subagent record")
+			bad = fmt.Errorf("invalid stored subagent record %s", key)
 			return
 		}
 		if retained[r.SessionID] == nil {
 			retained[r.SessionID] = map[string]subagentRecord{}
 		}
 		if !r.Handed && own(retained[r.SessionID]) >= retainedSubagentLimit {
-			bad = errors.New("stored subagent count exceeds limit")
+			bad = fmt.Errorf("stored subagent count exceeds limit at %s", key)
 			return
 		}
 		r.Subagent.ReportRevision = r.Revision

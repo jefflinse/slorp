@@ -229,4 +229,12 @@ func TestAFilingOfAClosedSessionIsMadeOnceItIsKept(t *testing.T) {
 	if found, err := st.Get("session", "a", &kept); err != nil || !found {
 		t.Errorf("a filed closed session is kept: %v, %v; want it saved", found, err)
 	}
+	for when, h := range map[string]*hub.Hub{"at once": h, "after a restart": hub.New(k, st)} {
+		if a, ok := h.Archive("a"); !ok || a.Effort != e.ID {
+			t.Errorf("%s the closed session is %+v, %v; want it under %q", when, a, ok, e.ID)
+		}
+		if past, ok := h.Past(e.ID); !ok || past.ClosedCount != 1 {
+			t.Errorf("%s the effort's history holds %d closed sessions, %v; want a", when, past.ClosedCount, ok)
+		}
+	}
 }

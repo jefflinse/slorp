@@ -943,11 +943,12 @@ func New(k *kb.Store, c Cache) *Hub {
 func (h *Hub) readSessions() error {
 	var bad error
 	err := h.cache.Each("session", func(id string, body []byte) {
-		var d sessionDoc
-		if err := json.Unmarshal(body, &d); err != nil {
-			bad = fmt.Errorf("decoding session %s: %w", id, err)
+		var kept *sessionDoc
+		if err := json.Unmarshal(body, &kept); err != nil || kept == nil {
+			bad = fmt.Errorf("decoding session %s: %w", id, cmp.Or(err, errNull))
 			return
 		}
+		d := *kept
 		switch {
 		case !d.Ended.IsZero():
 			if h.worthKeeping(id, d) {
@@ -963,17 +964,20 @@ func (h *Hub) readSessions() error {
 	return bad
 }
 
+// errNull is why a kept document that is null is not one.
+var errNull = errors.New("null")
+
 // readOrigins reads what each session kept continues, and says why when what
 // it read is not all of it.
 func (h *Hub) readOrigins() error {
 	var bad error
 	err := h.cache.Each("origin", func(id string, body []byte) {
-		var from string
-		if err := json.Unmarshal(body, &from); err != nil {
-			bad = fmt.Errorf("decoding the origin of %s: %w", id, err)
+		var from *string
+		if err := json.Unmarshal(body, &from); err != nil || from == nil {
+			bad = fmt.Errorf("decoding the origin of %s: %w", id, cmp.Or(err, errNull))
 			return
 		}
-		h.origins[id] = from
+		h.origins[id] = *from
 	})
 	if err != nil {
 		return fmt.Errorf("loading origins: %w", err)
@@ -1870,8 +1874,8 @@ func (h *Hub) efforts(sessions []Session) []Effort {
 			active[effort] = at
 		}
 	}
-	for _, d := range h.archive {
-		latest(d.Effort, d.Ended)
+	for id, d := range h.archive {
+		latest(h.closedEffort(id, d), d.Ended)
 	}
 	for _, s := range sessions {
 		latest(s.Effort, s.ActiveAt)
@@ -1942,7 +1946,7 @@ func (h *Hub) readReplies() ([]*Reply, error) {
 			bad = fmt.Errorf("decoding reply %s: %w", id, err)
 			return
 		}
-		if r.ID != id || r.SessionID == "" {
+		if r.ID != id || r.SessionID == "" || !slices.Contains([]ReplyState{Queued, Claimed, Delivered, Dropped}, r.State) {
 			bad = fmt.Errorf("invalid stored reply %s", id)
 			return
 		}

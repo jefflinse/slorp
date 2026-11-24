@@ -1,8 +1,10 @@
 package hub
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,7 +51,7 @@ func (c *partial) Delete(kind, id string) error {
 }
 
 func TestSlorpStartsOnlyFromAllThatIsKept(t *testing.T) {
-	bad := map[string]any{"not a record": []int{1}}
+	bad := map[string]any{"not a record": []int{1}, "null": json.RawMessage("null")}
 	for _, kind := range []string{"session", "origin", "reply", "subagent"} {
 		cases := map[string]any{"listed in part": nil}
 		for name, v := range bad {
@@ -58,6 +60,8 @@ func TestSlorpStartsOnlyFromAllThatIsKept(t *testing.T) {
 		if kind == "reply" {
 			cases["empty"] = map[string]any{}
 			cases["misfiled"] = Reply{ID: "elsewhere", SessionID: "old", Text: "and washers", State: Queued}
+			cases["stateless"] = Reply{ID: "bad", SessionID: "old", Text: "and washers", Owner: OwnerBridge}
+			cases["in an unknown state"] = Reply{ID: "bad", SessionID: "old", Text: "and washers", State: "lost", Owner: OwnerBridge}
 		}
 		for name, row := range cases {
 			t.Run(fmt.Sprintf("%s %s", kind, name), func(t *testing.T) {
@@ -81,8 +85,12 @@ func TestSlorpStartsOnlyFromAllThatIsKept(t *testing.T) {
 				} else {
 					must(t, st.Put(kind, "bad", row))
 				}
-				if _, err := Open(k, c); err == nil {
+				_, err = Open(k, c)
+				if err == nil {
 					t.Fatal("Slorp started from part of what was kept")
+				}
+				if row != nil && !strings.Contains(err.Error(), "bad") {
+					t.Errorf("Slorp would not start, saying %q; want the row that stopped it named", err)
 				}
 				if c.wrote != 0 {
 					t.Errorf("Slorp wrote %d times while starting from part of what was kept, want none", c.wrote)

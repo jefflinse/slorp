@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/jefflinse/slorp/internal/kb"
 )
 
 // archiveShown is how many closed sessions, the latest to close, are listed.
@@ -92,7 +94,7 @@ func (h *Hub) Past(effortID string) (Past, bool) {
 		}
 	}
 	for id, d := range h.archive {
-		if d.Effort != effortID {
+		if h.closedEffort(id, d) != effortID {
 			continue
 		}
 		p.Closed = append(p.Closed, h.archived(id, d))
@@ -130,11 +132,20 @@ func (h *Hub) archives() []Archived {
 	return out[:min(len(out), archiveShown)]
 }
 
+// closedEffort is the effort a closed session is under: the one the user
+// filed it under, or else the one it was under as it closed.
+func (h *Hub) closedEffort(id string, d sessionDoc) string {
+	if effort, via, ok := h.kb.Resolve(id, d.Cwd); ok && via == kb.ViaUser {
+		return effort
+	}
+	return d.Effort
+}
+
 func (h *Hub) archived(id string, d sessionDoc) Archived {
 	a := Archived{ID: id, Agent: d.Agent, Label: cmp.Or(d.Label, id[:min(8, len(id))]), Cwd: d.Cwd, Branch: d.Branch,
 		StartedAt: d.StartedAt, EndedAt: d.Ended, Moments: len(d.Timeline), Used: d.Used, CostUSD: d.CostUSD}
-	if h.kb.Has(d.Effort) {
-		a.Effort = d.Effort
+	if effort := h.closedEffort(id, d); h.kb.Has(effort) {
+		a.Effort = effort
 	}
 	if d.Insight != nil {
 		a.Title, a.Summary = d.Insight.Title, d.Insight.Summary

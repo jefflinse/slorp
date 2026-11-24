@@ -254,7 +254,7 @@ func (h *Hub) dayLog(start time.Time) DayLog {
 		if _, open := h.sessions[id]; open || json.Unmarshal(body, &d) != nil {
 			return
 		}
-		if !h.kb.Has(d.Effort) {
+		if d.Effort = h.closedEffort(id, d); !h.kb.Has(d.Effort) {
 			d.Effort = ""
 		}
 		add(d.Effort, id, cmp.Or(d.Label, id[:min(8, len(id))]), d.Cwd, d.Branch, d.Timeline)
