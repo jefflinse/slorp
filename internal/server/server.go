@@ -830,6 +830,10 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		if !readJSON(w, r, &in) {
 			return
 		}
+		if err := h.Keep(r.PathValue("id")); err != nil {
+			http.Error(w, err.Error(), editFailed(err))
+			return
+		}
 		edited(w, k.Assign(r.PathValue("id"), in.Effort))
 	})
 
@@ -1076,6 +1080,10 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			Role string `json:"role"`
 		}
 		if !readJSON(w, r, &in) {
+			return
+		}
+		if err := h.Keep(r.PathValue("id")); err != nil {
+			http.Error(w, err.Error(), editFailed(err))
 			return
 		}
 		edited(w, k.SetRole(r.PathValue("id"), in.Role))

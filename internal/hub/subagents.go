@@ -41,34 +41,42 @@ func subagentKey(root, child string) string {
 }
 
 func (h *Hub) loadSubagents() {
-	h.retained = map[string]map[string]subagentRecord{}
+	h.retained, h.retainedErr = h.readSubagents()
+	h.warn(h.retainedErr)
+}
+
+// readSubagents reads the retained subagents kept, and says why when what it
+// read is not all of them.
+func (h *Hub) readSubagents() (map[string]map[string]subagentRecord, error) {
+	retained := map[string]map[string]subagentRecord{}
+	var bad error
 	err := h.cache.Each("subagent", func(key string, body []byte) {
 		var r subagentRecord
 		if err := json.Unmarshal(body, &r); err != nil {
-			h.retainedErr = fmt.Errorf("decoding retained subagent: %w", err)
+			bad = fmt.Errorf("decoding retained subagent: %w", err)
 			return
 		}
 		if err := validateSubagent(r.Agent, r.SessionID, r.Revision, r.Subagent, r.Report); err != nil || key != subagentKey(r.SessionID, r.Subagent.ID) {
-			h.retainedErr = errors.New("invalid stored subagent record")
+			bad = errors.New("invalid stored subagent record")
 			return
 		}
-		if h.retained[r.SessionID] == nil {
-			h.retained[r.SessionID] = map[string]subagentRecord{}
+		if retained[r.SessionID] == nil {
+			retained[r.SessionID] = map[string]subagentRecord{}
 		}
-		if !r.Handed && own(h.retained[r.SessionID]) >= retainedSubagentLimit {
-			h.retainedErr = errors.New("stored subagent count exceeds limit")
+		if !r.Handed && own(retained[r.SessionID]) >= retainedSubagentLimit {
+			bad = errors.New("stored subagent count exceeds limit")
 			return
 		}
 		r.Subagent.ReportRevision = r.Revision
 		r.Subagent.Done = r.Subagent.Done || ended(r.Subagent.Status)
 		// A restart does not establish that a child is still running.
 		r.ReceivedAt = time.Time{}
-		h.retained[r.SessionID][r.Subagent.ID] = r
+		retained[r.SessionID][r.Subagent.ID] = r
 	})
 	if err != nil {
-		h.retainedErr = fmt.Errorf("loading retained subagents: %w", err)
+		bad = fmt.Errorf("loading retained subagents: %w", err)
 	}
-	h.warn(h.retainedErr)
+	return retained, bad
 }
 
 // UpsertSubagent durably replaces one child of an open, matching session. Equal

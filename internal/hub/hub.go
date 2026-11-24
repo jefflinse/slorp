@@ -852,6 +852,9 @@ type Hub struct {
 	// retained holds durable child records by root and child ID.
 	retained    map[string]map[string]subagentRecord
 	retainedErr error
+	// repliesErr says why the replies read when Slorp started are not all
+	// of those kept, until they are read again.
+	repliesErr error
 }
 
 // unreadReport is which agent last reported a session whose kept record
@@ -881,12 +884,8 @@ func New(k *kb.Store, c Cache) *Hub {
 			h.discussed[id] = &d
 		}
 	}))
-	h.warn(c.Each("reply", func(id string, body []byte) {
-		var r Reply
-		if json.Unmarshal(body, &r) == nil {
-			h.replies = append(h.replies, &r)
-		}
-	}))
+	h.replies, h.repliesErr = h.readReplies()
+	h.warn(h.repliesErr)
 	h.warn(c.Each("session", func(id string, body []byte) {
 		var d sessionDoc
 		switch {
@@ -918,11 +917,7 @@ func New(k *kb.Store, c Cache) *Hub {
 		}
 	}))
 	for _, r := range h.replies {
-		managed := h.unsettled[r.SessionID].Managed || h.archive[r.SessionID].Managed
-		if (r.State == Queued || r.State == Claimed) && (r.Owner == OwnerRun || r.Owner == "" && managed) {
-			r.State = Dropped
-			h.warn(h.cache.Put("reply", r.ID, r))
-		}
+		h.settleStale(r)
 	}
 	_, err := c.Get("setting", "main", &h.settings)
 	h.warn(err)
@@ -1886,6 +1881,68 @@ func (h *Hub) MergeEfforts(from, into string) error {
 	delete(h.notes, from)
 	h.warn(h.cache.Delete("note", from))
 	h.changed()
+	return nil
+}
+
+// readReplies reads the replies kept, and says why when what it read is not
+// all of them.
+func (h *Hub) readReplies() ([]*Reply, error) {
+	var out []*Reply
+	err := h.cache.Each("reply", func(id string, body []byte) {
+		var r Reply
+		if json.Unmarshal(body, &r) == nil {
+			out = append(out, &r)
+		}
+	})
+	return out, err
+}
+
+// settleStale drops a reply kept from before Slorp started that waited for
+// a run, which ended with it.
+func (h *Hub) settleStale(r *Reply) {
+	s := h.sessions[r.SessionID]
+	managed := h.unsettled[r.SessionID].Managed || h.archive[r.SessionID].Managed || s != nil && s.managed
+	if (r.State == Queued || r.State == Claimed) && (r.Owner == OwnerRun || r.Owner == "" && managed) {
+		r.State = Dropped
+		h.warn(h.cache.Put("reply", r.ID, r))
+	}
+}
+
+// complete reads again what could not all be read when Slorp started,
+// replies and retained subagents, and says why when it still cannot.
+func (h *Hub) complete() error {
+	if h.repliesErr != nil {
+		if read, err := h.readReplies(); err == nil {
+			for _, r := range read {
+				if !slices.ContainsFunc(h.replies, func(known *Reply) bool { return known.ID == r.ID }) {
+					h.settleStale(r)
+					h.replies = append(h.replies, r)
+				}
+			}
+			h.repliesErr = nil
+		}
+	}
+	if h.retainedErr != nil {
+		if read, err := h.readSubagents(); err == nil {
+			h.retained, h.retainedErr = read, nil
+		}
+	}
+	return errors.Join(h.repliesErr, h.retainedErr)
+}
+
+// Keep saves an open session as it stands, so that what is said of it next
+// outlives it; when that cannot be saved, the error wraps ErrNotSaved. It
+// does nothing for a session not open.
+func (h *Hub) Keep(sessionID string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	s := h.sessions[sessionID]
+	if s == nil {
+		return nil
+	}
+	if err := h.checkpoint(s); err != nil {
+		return fmt.Errorf("session %s %w: %w", sessionID, ErrNotSaved, err)
+	}
 	return nil
 }
 

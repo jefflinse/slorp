@@ -142,6 +142,9 @@ func (h *Hub) fold(agent string) {
 // closed one's filing and the replies waiting for it, and its going are
 // saved in one write: it is taken up whole or, with an error, not at all.
 func (h *Hub) inherit(s *Session, id string, d sessionDoc) error {
+	if err := h.complete(); err != nil {
+		return fmt.Errorf("continuing %s in %s: %w", id, s.ID, err)
+	}
 	next := *s
 	next.Timeline = join(d.Timeline, s.Timeline)
 	if next.given == "" {
@@ -171,7 +174,9 @@ func (h *Hub) inherit(s *Session, id string, d sessionDoc) error {
 		}
 		next.took[i].Children = slices.Clone(next.took[i].Children)
 		for _, a := range t.Children {
-			if !slices.ContainsFunc(next.took[i].Children, func(o Subagent) bool { return o.ID == a.ID }) {
+			if j := slices.IndexFunc(next.took[i].Children, func(o Subagent) bool { return o.ID == a.ID }); j >= 0 {
+				next.took[i].Children[j] = a
+			} else {
 				next.took[i].Children = append(next.took[i].Children, a)
 			}
 		}
