@@ -29,6 +29,10 @@ type subagentRecord struct {
 	Subagent   Subagent        `json:"subagent"`
 	Report     *SubagentReport `json:"report,omitempty"`
 	ReceivedAt time.Time       `json:"receivedAt"`
+	// Handed is set on a record a session was handed as it took up the
+	// one the subagent was started under; it does not count toward the
+	// session's limit.
+	Handed bool `json:"handed,omitempty"`
 }
 
 func subagentKey(root, child string) string {
@@ -51,7 +55,7 @@ func (h *Hub) loadSubagents() {
 		if h.retained[r.SessionID] == nil {
 			h.retained[r.SessionID] = map[string]subagentRecord{}
 		}
-		if len(h.retained[r.SessionID]) >= retainedSubagentLimit {
+		if !r.Handed && own(h.retained[r.SessionID]) >= retainedSubagentLimit {
 			h.retainedErr = errors.New("stored subagent count exceeds limit")
 			return
 		}
@@ -95,7 +99,7 @@ func (h *Hub) UpsertSubagent(agent, sessionID string, revision int64, a Subagent
 	if exists && revision <= old.Revision {
 		return nil
 	}
-	if !exists && len(h.retained[sessionID]) >= retainedSubagentLimit {
+	if !exists && own(h.retained[sessionID]) >= retainedSubagentLimit {
 		return ErrSubagentLimit
 	}
 	a.ReportRevision = revision
@@ -107,7 +111,7 @@ func (h *Hub) UpsertSubagent(agent, sessionID string, revision int64, a Subagent
 		copy := *report
 		report = &copy
 	}
-	r := subagentRecord{Agent: agent, SessionID: sessionID, Revision: revision, Subagent: a, Report: report, ReceivedAt: time.Now()}
+	r := subagentRecord{Agent: agent, SessionID: sessionID, Revision: revision, Subagent: a, Report: report, ReceivedAt: time.Now(), Handed: old.Handed}
 	// Persist the root first so a child-only session is discoverable after a crash.
 	// A failed child write can leave a harmless root document, never a partial child.
 	if err := h.cache.Put("session", sessionID, h.doc(s)); err != nil {
@@ -135,26 +139,41 @@ func (h *Hub) RetainedSubagentReport(agent, sessionID, childID string) (Subagent
 }
 
 // childRecord is the retained record a session's subagent is listed and
-// reported by: the latest revision among the session's own and those of
-// the sessions it took up that handed that subagent over.
+// reported by, its own or one it was handed.
 func (h *Hub) childRecord(root, child string) (subagentRecord, bool) {
-	best, ok := h.retained[root][child]
-	for _, t := range h.tookOf(root) {
-		if !slices.ContainsFunc(t.Children, func(a Subagent) bool { return a.ID == child }) {
-			continue
-		}
-		if r, found := h.retained[t.ID][child]; found && (!ok || r.Revision > best.Revision) {
-			best, ok = r, true
+	r, ok := h.retained[root][child]
+	return r, ok
+}
+
+// own counts the retained records started under a session itself.
+func own(records map[string]subagentRecord) int {
+	n := 0
+	for _, r := range records {
+		if !r.Handed {
+			n++
 		}
 	}
-	return best, ok
+	return n
+}
+
+// childKey is which subagents a list holds, and which of them are done.
+func childKey(children []Subagent) string {
+	var b strings.Builder
+	for _, a := range children {
+		b.WriteString(a.ID)
+		if a.Done {
+			b.WriteString("+")
+		}
+		b.WriteString(",")
+	}
+	return b.String()
 }
 
 // childIndex is what is kept of subagents to list them by once they are
 // no longer there to ask.
 func childIndex(children []Subagent) []Subagent {
-	out := make([]Subagent, 0, min(len(children), retainedSubagentLimit))
-	for _, a := range children[:min(len(children), retainedSubagentLimit)] {
+	out := make([]Subagent, 0, len(children))
+	for _, a := range children {
 		a.ReportRevision, a.Doing, a.Samples, a.ActiveAt, a.Tools, a.Used, a.CostUSD = 0, "", nil, time.Time{}, 0, Tokens{}, 0
 		if !ended(a.Status) {
 			a.Status = ""

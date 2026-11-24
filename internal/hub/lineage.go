@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/jefflinse/slorp/internal/kb"
 	"github.com/jefflinse/slorp/internal/store"
@@ -96,11 +97,15 @@ func (h *Hub) fold(agent string) {
 	})
 	// One that could not be taken up keeps those closed before it from
 	// being heeded first.
-	stuck := map[*Session]bool{}
+	stuck, current := map[*Session]bool{}, map[*Session]bool{}
 	for _, id := range closed {
 		heir := heirs[h.root(id)]
 		if stuck[heir] {
 			continue
+		}
+		if !current[heir] {
+			h.track(heir, time.Now())
+			current[heir] = true
 		}
 		if err := h.inherit(heir, id, h.archive[id]); err != nil {
 			h.warn(err)
@@ -156,9 +161,30 @@ func (h *Hub) inherit(s *Session, id string, d sessionDoc) error {
 	}
 	next.took = slices.Clone(next.took)
 	for _, t := range append([]Taken{h.handed(id, d)}, d.Took...) {
-		if t.ID != s.ID && !slices.ContainsFunc(next.took, func(o Taken) bool { return o.ID == t.ID }) {
-			next.took = append(next.took, t)
+		if t.ID == s.ID {
+			continue
 		}
+		i := slices.IndexFunc(next.took, func(o Taken) bool { return o.ID == t.ID })
+		if i < 0 {
+			next.took = append(next.took, t)
+			continue
+		}
+		next.took[i].Children = slices.Clone(next.took[i].Children)
+		for _, a := range t.Children {
+			if !slices.ContainsFunc(next.took[i].Children, func(o Subagent) bool { return o.ID == a.ID }) {
+				next.took[i].Children = append(next.took[i].Children, a)
+			}
+		}
+	}
+	// The retained subagents handed over become the open one's own, as
+	// they stand.
+	var copied []subagentRecord
+	for child, r := range h.retained[id] {
+		if own, ok := h.retained[s.ID][child]; ok && own.Revision >= r.Revision {
+			continue
+		}
+		r.SessionID, r.Handed = s.ID, true
+		copied = append(copied, r)
 	}
 	var waiting []*Reply
 	err := h.kb.Carrying(id, s.ID, func(kind, kbID string, kbDoc any, then kb.Staged) error {
@@ -175,10 +201,13 @@ func (h *Hub) inherit(s *Session, id string, d sessionDoc) error {
 				docs, waiting = append(docs, store.Doc{Kind: "reply", ID: r.ID, Value: moved}), append(waiting, r)
 			}
 		}
+		for _, r := range copied {
+			docs = append(docs, store.Doc{Kind: "subagent", ID: subagentKey(s.ID, r.Subagent.ID), Value: r})
+		}
 		if err := h.cache.PutAll(docs...); err != nil {
 			return err
 		}
-		next.persisted = kept
+		next.persisted, next.indexed = kept, childKey(doc.Children)
 		return nil
 	})
 	if err != nil {
@@ -187,6 +216,12 @@ func (h *Hub) inherit(s *Session, id string, d sessionDoc) error {
 	*s = next
 	for _, r := range waiting {
 		r.SessionID = s.ID
+	}
+	for _, r := range copied {
+		if h.retained[s.ID] == nil {
+			h.retained[s.ID] = map[string]subagentRecord{}
+		}
+		h.retained[s.ID][r.Subagent.ID] = r
 	}
 	delete(h.archive, id)
 	h.last = ""

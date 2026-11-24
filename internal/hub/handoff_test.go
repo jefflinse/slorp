@@ -70,8 +70,8 @@ func TestATakeUpStoppedPartWayIsWholeWithoutTheSessionSeenAgain(t *testing.T) {
 				return
 			}
 			a, ok := h.Archive("new")
-			if !ok || a.Label != "Flange work" || a.Effort != e || !slices.ContainsFunc(a.Timeline, func(m Moment) bool { return m.Prompt == "add flanges" }) {
-				t.Errorf("taken up, new is kept %v as %q under %q with %+v; want old's name, filing and turn", ok, a.Label, a.Effort, a.Timeline)
+			if !ok || a.Label != "Flange work" || a.Effort != e || prompts(Session{Timeline: a.Timeline}) != "add flanges | now add washers" {
+				t.Errorf("taken up, new is kept %v as %q under %q with %q; want old's name and filing, and both turns", ok, a.Label, a.Effort, prompts(Session{Timeline: a.Timeline}))
 			}
 			if got, _, _ := k.Resolve("new", ""); got != e {
 				t.Errorf("taken up, new is filed under %q, want %q", got, e)
@@ -115,6 +115,9 @@ func reopened(t *testing.T, continued bool) {
 	h.SetRoster(agent, []Session{a, b})
 	must(t, k.Assign("branch-a", after))
 	must(t, h.UpsertSubagent(agent, "branch-a", 1, Subagent{ID: "since", Status: "completed"}, &SubagentReport{Report: "made since"}))
+	must(t, h.UpsertSubagent(agent, "branch-a", 2, Subagent{ID: "handed", Status: "completed"}, &SubagentReport{Report: "changed under branch-a"}))
+	queued, err := h.Enqueue("branch-a", "for branch-a")
+	must(t, err)
 	h.SetRoster(agent, []Session{a, b})
 
 	check := func(h *Hub, when string) {
@@ -136,11 +139,40 @@ func reopened(t *testing.T, continued bool) {
 		}
 	}
 	check(h, "while both are open")
-	k, err := kb.Open(st)
+	k, err = kb.Open(st)
 	must(t, err)
 	h = New(k, st)
 	h.SetRoster(agent, []Session{a, b})
 	check(h, "after a restart")
+
+	// Closed again, it is handed over again: what it gained since with it.
+	a.Subagents = []Subagent{{ID: "listed", Type: "explore"}}
+	h.SetRoster(agent, []Session{a, b})
+	h.SetRoster(agent, []Session{b})
+	again := func(h *Hub, when string) {
+		t.Helper()
+		s := session(t, h, "branch-b")
+		for _, child := range []string{"handed", "since", "listed"} {
+			if !slices.ContainsFunc(s.Subagents, func(a Subagent) bool { return a.ID == child }) {
+				t.Errorf("%s: branch-b lists %+v, want %s, handed over", when, s.Subagents, child)
+			}
+		}
+		if got := h.SubagentSessions("branch-b", "listed"); !slices.Equal(got, []string{"branch-b", "branch-a"}) {
+			t.Errorf("%s: the listed subagent is looked for under %v, want branch-b then branch-a", when, got)
+		}
+		for child, want := range map[string]string{"handed": "changed under branch-a", "since": "made since"} {
+			if report, ok := h.RetainedSubagentReport(agent, "branch-b", child); !ok || report.Report != want {
+				t.Errorf("%s: branch-b's report of %s = %+v, %v; want %q", when, child, report, ok, want)
+			}
+		}
+	}
+	again(h, "handed over again")
+	if got, err := h.Claim("branch-b"); err != nil || len(got) != 1 || got[0].ID != queued.ID {
+		t.Errorf("branch-b claimed %+v, %v; want the reply queued for branch-a once reopened", got, err)
+	}
+	h = New(k, st)
+	h.SetRoster(agent, []Session{b})
+	again(h, "handed over again, after a restart")
 }
 
 func TestAReplyWaitsForASessionNeverSeenToClose(t *testing.T) {

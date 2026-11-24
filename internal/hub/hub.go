@@ -62,6 +62,8 @@ type Session struct {
 	managed   bool
 	run       string
 	persisted [sha256.Size]byte
+	// indexed is which of its subagents its stored record lists.
+	indexed string
 	// Name and Title are what the session's agent calls it, and Named what
 	// the user called it there, if they did.
 	Name  string `json:"name"`
@@ -1009,12 +1011,13 @@ func (h *Hub) checkpoint(s *Session) error {
 		return err
 	}
 	if s.persisted == fingerprint {
+		s.indexed = childKey(doc.Children)
 		return nil
 	}
 	if err := h.cache.Put("session", s.ID, doc); err != nil {
 		return err
 	}
-	s.persisted = fingerprint
+	s.persisted, s.indexed = fingerprint, childKey(doc.Children)
 	return nil
 }
 
@@ -1091,6 +1094,7 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 			s.guess, s.guessKey, s.insightAt = old.guess, old.guessKey, old.insightAt
 			s.roleGuess, s.roleKey = old.roleGuess, old.roleKey
 			s.given, s.pinned, s.took, s.Timeline = old.given, old.pinned, old.took, old.Timeline
+			s.persisted, s.indexed = old.persisted, old.indexed
 			s.ContextWindow, s.CostUSD = old.ContextWindow, old.CostUSD
 			// The roster stops saying "waiting" once the terminal's dialog is
 			// answered. A request it has not caught up with yet is kept.
@@ -1885,12 +1889,13 @@ func (h *Hub) MergeEfforts(from, into string) error {
 	return nil
 }
 
-// Touch republishes state after the knowledge base changed.
+// Touch republishes state after the knowledge base changed, saving each
+// open session the user filed or gave a role as it now stands.
 func (h *Hub) Touch() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, s := range h.sessions {
-		if s.managed {
+		if s.managed || h.kb.Said(s.ID) {
 			h.remember(s)
 		}
 	}
@@ -2453,7 +2458,7 @@ func (h *Hub) changed() {
 			s.key, s.keySince = k, now
 		}
 		h.track(s, now)
-		if s.run != "" {
+		if s.run != "" || s.indexed != childKey(childIndex(s.Subagents)) {
 			h.remember(s)
 		}
 	}
