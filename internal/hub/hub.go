@@ -1946,7 +1946,7 @@ func (h *Hub) readReplies() ([]*Reply, error) {
 			bad = fmt.Errorf("decoding reply %s: %w", id, err)
 			return
 		}
-		if r.ID != id || r.SessionID == "" || !slices.Contains([]ReplyState{Queued, Claimed, Delivered, Dropped}, r.State) {
+		if r.ID != id || r.SessionID == "" || !slices.Contains([]ReplyState{Queued, Claimed, Delivered, Dropped}, r.State) || !slices.Contains([]string{OwnerRun, OwnerBridge, ""}, r.Owner) {
 			bad = fmt.Errorf("invalid stored reply %s", id)
 			return
 		}
@@ -1964,7 +1964,9 @@ func (h *Hub) readReplies() ([]*Reply, error) {
 // not kept, the error wraps ErrNotSaved and edit is not made. A session
 // Slorp does not know, such as one another has taken up, is refused with
 // ErrNoSuchSession. Nothing takes the session up meanwhile, so the change
-// goes with it when something does. edit must not call the Hub.
+// goes with it when something does. Once it is made, the next publish goes
+// to subscribers whether or not the state it compares has changed. edit must
+// not call the Hub.
 func (h *Hub) File(sessionID string, edit func() error) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -1981,7 +1983,11 @@ func (h *Hub) File(sessionID string, edit func() error) error {
 	if err != nil {
 		return fmt.Errorf("session %s %w: %w", sessionID, ErrNotSaved, err)
 	}
-	return edit()
+	if err := edit(); err != nil {
+		return err
+	}
+	h.last = ""
+	return nil
 }
 
 // Touch republishes state after the knowledge base changed, saving each

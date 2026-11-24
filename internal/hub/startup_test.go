@@ -62,6 +62,7 @@ func TestSlorpStartsOnlyFromAllThatIsKept(t *testing.T) {
 			cases["misfiled"] = Reply{ID: "elsewhere", SessionID: "old", Text: "and washers", State: Queued}
 			cases["stateless"] = Reply{ID: "bad", SessionID: "old", Text: "and washers", Owner: OwnerBridge}
 			cases["in an unknown state"] = Reply{ID: "bad", SessionID: "old", Text: "and washers", State: "lost", Owner: OwnerBridge}
+			cases["owned by no known runner"] = Reply{ID: "bad", SessionID: "old", Text: "and washers", State: Queued, Owner: "not-an-owner"}
 		}
 		for name, row := range cases {
 			t.Run(fmt.Sprintf("%s %s", kind, name), func(t *testing.T) {
@@ -126,6 +127,55 @@ func TestAFilingIsMadeWithTheHubHeld(t *testing.T) {
 		}
 		return nil
 	}))
+}
+
+func TestRepliesKeptAreSettledByWhoOwnedThem(t *testing.T) {
+	h, k, st := newHub(t)
+	must(t, h.OpenManaged(agent, "run", "job", "token", nil))
+	_, err := h.Enqueue("run", "for the run")
+	must(t, err)
+	h.SetRoster(agent, []Session{idle("bridged", "/w", "")})
+	_, err = h.Enqueue("bridged", "for the bridge")
+	must(t, err)
+	h.SetRoster(agent, []Session{idle("legacy", "/w", "")})
+	legacy, err := h.Enqueue("legacy", "from before owners")
+	must(t, err)
+	legacy.Owner = ""
+	must(t, st.Put("reply", legacy.ID, legacy))
+
+	h = New(k, st)
+	h.SetRoster(agent, []Session{idle("run", "/w", ""), idle("bridged", "/w", ""), idle("legacy", "/w", "")})
+	for id, want := range map[string]int{"run": 0, "bridged": 1, "legacy": 1} {
+		if got, err := h.Claim(id); err != nil || len(got) != want {
+			t.Errorf("%s claimed %+v, %v after a restart; want %d", id, got, err, want)
+		}
+	}
+}
+
+func TestAClosedSessionFiledAgainIsPublished(t *testing.T) {
+	h, k, _ := newHub(t)
+	one, two := effort(t, k, "One"), effort(t, k, "Two")
+	at := time.Now().Add(-time.Hour)
+	for _, id := range []string{"a", "b", "c"} {
+		h.SetRoster(agent, []Session{said(id, "work on "+id, at)})
+		h.SetRoster(agent, nil)
+	}
+	must(t, k.Assign("b", one))
+	must(t, k.Assign("c", two))
+	must(t, h.File("a", func() error { return k.Assign("a", one) }))
+	h.Touch()
+	ch, cancel := h.Subscribe()
+	defer cancel()
+	must(t, h.File("a", func() error { return k.Assign("a", two) }))
+	h.Touch()
+	select {
+	case <-ch:
+	default:
+		t.Error("filing a closed session again was not published")
+	}
+	if a, _ := h.Archive("a"); a.Effort != two {
+		t.Errorf("a is under %q, want %q", a.Effort, two)
+	}
 }
 
 func TestASubagentHandedOverAgainIsAsLastSeen(t *testing.T) {
