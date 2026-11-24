@@ -63,8 +63,14 @@ func TestSlorpStartsOnlyFromAllThatIsKept(t *testing.T) {
 			cases["stateless"] = Reply{ID: "bad", SessionID: "old", Text: "and washers", Owner: OwnerBridge}
 			cases["in an unknown state"] = Reply{ID: "bad", SessionID: "old", Text: "and washers", State: "lost", Owner: OwnerBridge}
 			cases["owned by no known runner"] = Reply{ID: "bad", SessionID: "old", Text: "and washers", State: Queued, Owner: "not-an-owner"}
-			cases["owned by null"] = json.RawMessage(`{"id":"bad","sessionId":"old","text":"and washers","state":"queued","createdAt":"2026-11-24T00:00:00Z","owner":null}`)
-			cases["of null text"] = json.RawMessage(`{"id":"bad","sessionId":"old","text":null,"state":"queued","createdAt":"2026-11-24T00:00:00Z","owner":"bridge"}`)
+			for _, field := range []string{"id", "sessionId", "text", "state", "createdAt", "owner"} {
+				reply := map[string]any{"id": "bad", "sessionId": "old", "text": "and washers", "state": "queued", "createdAt": "2026-11-24T00:00:00Z", "owner": "bridge"}
+				reply[field] = nil
+				cases["with "+field+" null"] = reply
+			}
+			cases["without text"] = map[string]any{"id": "bad", "sessionId": "old", "state": "queued", "createdAt": "2026-11-24T00:00:00Z", "owner": "bridge"}
+			cases["of empty text"] = Reply{ID: "bad", SessionID: "old", State: Queued, Owner: OwnerBridge}
+			cases["of blank text"] = Reply{ID: "bad", SessionID: "old", Text: " \n\t", State: Queued, Owner: OwnerBridge}
 		}
 		for name, row := range cases {
 			t.Run(fmt.Sprintf("%s %s", kind, name), func(t *testing.T) {
@@ -94,6 +100,9 @@ func TestSlorpStartsOnlyFromAllThatIsKept(t *testing.T) {
 				}
 				if row != nil && !strings.Contains(err.Error(), "bad") {
 					t.Errorf("Slorp would not start, saying %q; want the row that stopped it named", err)
+				}
+				if field, null := strings.CutPrefix(name, "with "); null && !strings.Contains(err.Error(), strings.TrimSuffix(field, " null")+" is null") {
+					t.Errorf("Slorp would not start, saying %q; want the null field named", err)
 				}
 				if c.wrote != 0 {
 					t.Errorf("Slorp wrote %d times while starting from part of what was kept, want none", c.wrote)

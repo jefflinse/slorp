@@ -1946,10 +1946,6 @@ func (h *Hub) readReplies() ([]*Reply, error) {
 			bad = fmt.Errorf("decoding reply %s: %w", id, err)
 			return
 		}
-		if r.ID != id || r.SessionID == "" || !slices.Contains([]ReplyState{Queued, Claimed, Delivered, Dropped}, r.State) || !slices.Contains([]string{OwnerRun, OwnerBridge, ""}, r.Owner) {
-			bad = fmt.Errorf("invalid stored reply %s", id)
-			return
-		}
 		var fields map[string]json.RawMessage
 		if err := json.Unmarshal(body, &fields); err != nil {
 			bad = fmt.Errorf("decoding reply %s: %w", id, err)
@@ -1960,6 +1956,10 @@ func (h *Hub) readReplies() ([]*Reply, error) {
 				bad = fmt.Errorf("invalid stored reply %s: %s is null", id, name)
 				return
 			}
+		}
+		if r.ID != id || r.SessionID == "" || strings.TrimSpace(r.Text) == "" || !slices.Contains([]ReplyState{Queued, Claimed, Delivered, Dropped}, r.State) || !slices.Contains([]string{OwnerRun, OwnerBridge, ""}, r.Owner) {
+			bad = fmt.Errorf("invalid stored reply %s", id)
+			return
 		}
 		out = append(out, &r)
 	})
