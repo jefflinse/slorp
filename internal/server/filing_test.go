@@ -191,3 +191,42 @@ func TestAFilingOfASessionThatCannotBeReadIsRefused(t *testing.T) {
 		t.Errorf("a filed session is kept: %v, %v; want it saved", found, err)
 	}
 }
+
+func TestAFilingOfAClosedSessionIsMadeOnceItIsKept(t *testing.T) {
+	st := testdb.Open(t)
+	k := testdb.KB(t, st)
+	e, err := k.Create("Widgets", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &unsavedSessions{Store: st, fail: true}
+	h := hub.New(k, c)
+	srv := httptest.NewServer(New(h, k, integrations.NewManager(func() map[string]bool { return nil }), &asked{}, nil, nil, nil, nil, nil, nil, nil, Page(nil, "")))
+	t.Cleanup(srv.Close)
+	at := time.Now().Add(-time.Hour)
+	h.SetRoster("claude", []hub.Session{{ID: "a", Agent: "claude", Cwd: "/w", StartedAt: at, LastPrompt: "add flanges", PromptAt: at}})
+	h.SetRoster("claude", nil)
+	if archived := h.State().Archive; len(archived) != 1 {
+		t.Fatalf("archive = %+v, want a", archived)
+	}
+	for _, fail := range []bool{true, false} {
+		c.fail = fail
+		res, err := srv.Client().Post(srv.URL+"/api/sessions/a/effort", "application/json", strings.NewReader(`{"effort":"`+e.ID+`"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := res.Body.Close(); err != nil {
+			t.Fatal(err)
+		}
+		filed, _, _ := k.Resolve("a", "")
+		if want := map[bool]int{true: 500, false: 204}[fail]; res.StatusCode != want || (filed != "") == fail {
+			t.Errorf("filing a closed session with saving failing %v = %d, filed under %q; want %d", fail, res.StatusCode, filed, want)
+		}
+	}
+	var kept struct {
+		Agent string `json:"agent"`
+	}
+	if found, err := st.Get("session", "a", &kept); err != nil || !found {
+		t.Errorf("a filed closed session is kept: %v, %v; want it saved", found, err)
+	}
+}
