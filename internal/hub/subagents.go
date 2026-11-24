@@ -128,20 +128,69 @@ func (h *Hub) UpsertSubagent(agent, sessionID string, revision int64, a Subagent
 func (h *Hub) RetainedSubagentReport(agent, sessionID, childID string) (SubagentReport, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for _, id := range h.owned(sessionID) {
-		if r, ok := h.retained[id][childID]; ok && r.Agent == agent && r.Report != nil {
-			return *r.Report, true
-		}
+	if r, ok := h.childRecord(sessionID, childID); ok && r.Agent == agent && r.Report != nil {
+		return *r.Report, true
 	}
 	return SubagentReport{}, false
 }
 
+// childRecord is the retained record a session's subagent is listed and
+// reported by: the latest revision among the session's own and those of
+// the sessions it took up that handed that subagent over.
+func (h *Hub) childRecord(root, child string) (subagentRecord, bool) {
+	best, ok := h.retained[root][child]
+	for _, t := range h.tookOf(root) {
+		if !slices.ContainsFunc(t.Children, func(a Subagent) bool { return a.ID == child }) {
+			continue
+		}
+		if r, found := h.retained[t.ID][child]; found && (!ok || r.Revision > best.Revision) {
+			best, ok = r, true
+		}
+	}
+	return best, ok
+}
+
+// childIndex is what is kept of subagents to list them by once they are
+// no longer there to ask.
+func childIndex(children []Subagent) []Subagent {
+	out := make([]Subagent, 0, min(len(children), retainedSubagentLimit))
+	for _, a := range children[:min(len(children), retainedSubagentLimit)] {
+		a.ReportRevision, a.Doing, a.Samples, a.ActiveAt, a.Tools, a.Used, a.CostUSD = 0, "", nil, time.Time{}, 0, Tokens{}, 0
+		if !ended(a.Status) {
+			a.Status = ""
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
 func (h *Hub) mergeSubagents(root, agent string, source []Subagent, connected bool) []Subagent {
 	out := cloneSubagents(source)
+	var handed []Subagent
+	for _, t := range h.tookOf(root) {
+		handed = append(handed, t.Children...)
+	}
+	var children []string
+	for child := range h.retained[root] {
+		children = append(children, child)
+	}
+	for _, a := range handed {
+		children = append(children, a.ID)
+	}
 	var retained []subagentRecord
-	for _, id := range h.owned(root) {
-		for _, r := range h.retained[id] {
+	seen := map[string]bool{}
+	for _, child := range children {
+		if seen[child] {
+			continue
+		}
+		seen[child] = true
+		if r, ok := h.childRecord(root, child); ok {
 			retained = append(retained, r)
+		}
+	}
+	for _, a := range handed {
+		if !slices.ContainsFunc(out, func(s Subagent) bool { return s.ID == a.ID }) && !slices.ContainsFunc(retained, func(r subagentRecord) bool { return r.Subagent.ID == a.ID }) {
+			out = append(out, a)
 		}
 	}
 	for _, r := range retained {
@@ -166,7 +215,7 @@ func (h *Hub) mergeSubagents(root, agent string, source []Subagent, connected bo
 		}
 		out = append(out, a)
 	}
-	if len(retained) > 0 {
+	if len(retained) > 0 || len(handed) > 0 {
 		slices.SortStableFunc(out, func(a, b Subagent) int {
 			return cmp.Or(a.StartedAt.Compare(b.StartedAt), cmp.Compare(a.ID, b.ID))
 		})

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/jefflinse/slorp/internal/kb"
 	"github.com/jefflinse/slorp/internal/store"
 )
 
@@ -118,10 +119,12 @@ func (h *Hub) fold(agent string) {
 			if id = h.origins[id]; id == "" {
 				break
 			}
-			h.warn(h.kb.Carry(id, s.ID))
-		}
-		for _, taken := range s.took {
-			h.warn(h.kb.Carry(taken, s.ID))
+			_, open := h.sessions[id]
+			_, closed := h.archive[id]
+			_, held := h.unread[id]
+			if !open && !closed && !held {
+				h.warn(h.kb.Carry(id, s.ID))
+			}
 		}
 		if now, _ := h.filed(s); now != filed {
 			h.remember(s)
@@ -131,9 +134,8 @@ func (h *Hub) fold(agent string) {
 
 // inherit gives an open session what a closed one held, where it has none
 // of its own, and forgets the closed one. The open one as it then is, the
-// replies waiting for the closed one, and the closed one's going are saved
-// in one write: it is taken up whole or, with an error, not at all. Its
-// filing follows after.
+// closed one's filing and the replies waiting for it, and its going are
+// saved in one write: it is taken up whole or, with an error, not at all.
 func (h *Hub) inherit(s *Session, id string, d sessionDoc) error {
 	next := *s
 	next.Timeline = join(d.Timeline, s.Timeline)
@@ -153,58 +155,77 @@ func (h *Hub) inherit(s *Session, id string, d sessionDoc) error {
 		next.roleGuess, next.roleKey = d.RoleGuess, d.RoleKey
 	}
 	next.took = slices.Clone(next.took)
-	for _, taken := range append([]string{id}, d.Took...) {
-		if taken != s.ID && !slices.Contains(next.took, taken) {
-			next.took = append(next.took, taken)
+	for _, t := range append([]Taken{h.handed(id, d)}, d.Took...) {
+		if t.ID != s.ID && !slices.ContainsFunc(next.took, func(o Taken) bool { return o.ID == t.ID }) {
+			next.took = append(next.took, t)
 		}
 	}
-	doc := h.doc(&next)
-	kept, err := fingerprint(doc)
+	var waiting []*Reply
+	err := h.kb.Carrying(id, s.ID, func(kind, kbID string, kbDoc any, then kb.Staged) error {
+		doc := docIn(then, &next)
+		kept, err := fingerprint(doc)
+		if err != nil {
+			return err
+		}
+		docs := []store.Doc{{Kind: kind, ID: kbID, Value: kbDoc}, {Kind: "session", ID: s.ID, Value: doc}, {Kind: "session", ID: id, Delete: true}}
+		for _, r := range h.replies {
+			if r.SessionID == id {
+				moved := *r
+				moved.SessionID = s.ID
+				docs, waiting = append(docs, store.Doc{Kind: "reply", ID: r.ID, Value: moved}), append(waiting, r)
+			}
+		}
+		if err := h.cache.PutAll(docs...); err != nil {
+			return err
+		}
+		next.persisted = kept
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("continuing %s in %s: %w", id, s.ID, err)
 	}
-	docs := []store.Doc{{Kind: "session", ID: s.ID, Value: doc}, {Kind: "session", ID: id, Delete: true}}
-	var waiting []*Reply
-	for _, r := range h.replies {
-		if r.SessionID == id {
-			moved := *r
-			moved.SessionID = s.ID
-			docs, waiting = append(docs, store.Doc{Kind: "reply", ID: r.ID, Value: moved}), append(waiting, r)
-		}
-	}
-	if err := h.cache.PutAll(docs...); err != nil {
-		return fmt.Errorf("continuing %s in %s: %w", id, s.ID, err)
-	}
-	next.persisted = kept
 	*s = next
 	for _, r := range waiting {
 		r.SessionID = s.ID
 	}
 	delete(h.archive, id)
 	h.last = ""
-	h.warn(h.kb.Carry(id, s.ID))
-	h.remember(s)
 	return nil
 }
 
-// owned lists a session and those it has taken up, whose subagents are its
-// own.
-func (h *Hub) owned(id string) []string {
-	if s := h.sessions[id]; s != nil {
-		return append([]string{id}, s.took...)
+// handed is what a closed session hands over as it is taken up: its own
+// subagents, as last seen and as retained.
+func (h *Hub) handed(id string, d sessionDoc) Taken {
+	t := Taken{ID: id, Children: slices.Clone(d.Children)}
+	for _, r := range h.retained[id] {
+		if !slices.ContainsFunc(t.Children, func(a Subagent) bool { return a.ID == r.Subagent.ID }) {
+			t.Children = append(t.Children, childIndex([]Subagent{r.Subagent})...)
+		}
 	}
-	if d, ok := h.archive[id]; ok {
-		return append([]string{id}, d.Took...)
-	}
-	return []string{id}
+	return t
 }
 
-// SubagentSessions lists the session ids under which the subagents of a
-// session were started: its own and those of the sessions it has taken up.
-func (h *Hub) SubagentSessions(id string) []string {
+// took is what a session, open or closed, was handed of those it took up.
+func (h *Hub) tookOf(id string) []Taken {
+	if s := h.sessions[id]; s != nil {
+		return s.took
+	}
+	return h.archive[id].Took
+}
+
+// SubagentSessions lists the session ids under which a subagent of a
+// session may have been started: its own, then each it took up that handed
+// that subagent over.
+func (h *Hub) SubagentSessions(id, child string) []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.owned(id)
+	out := []string{id}
+	for _, t := range h.tookOf(id) {
+		if slices.ContainsFunc(t.Children, func(a Subagent) bool { return a.ID == child }) {
+			out = append(out, t.ID)
+		}
+	}
+	return out
 }
 
 // join is two timelines as one, oldest first, cut to the latest moments a

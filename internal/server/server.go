@@ -978,11 +978,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			return
 		}
 		if d := delegates[a.Agent]; d != nil {
-			var source []hub.Subagent
-			for _, id := range h.SubagentSessions(a.ID) {
-				source = append(source, d.Subagents(id)...)
-			}
-			a.Subagents = archiveSubagents(source, a.Subagents)
+			a.Subagents = archiveSubagents(d.Subagents(a.ID), a.Subagents)
 		}
 		writeJSON(w, http.StatusOK, a)
 	})
@@ -1007,7 +1003,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 			http.Error(w, "no such session with subagents Slorp can read", http.StatusNotFound)
 			return
 		}
-		for _, under := range h.SubagentSessions(id) {
+		for _, under := range h.SubagentSessions(id, r.PathValue("sub")) {
 			if report, ok := d.Report(under, r.PathValue("sub")); ok {
 				writeJSON(w, http.StatusOK, report)
 				return

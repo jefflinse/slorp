@@ -140,8 +140,8 @@ type Session struct {
 	roleKey    string
 	given      string
 	pinned     string
-	// took lists the sessions this one has taken up, whose subagents are its own.
-	took []string
+	// took is what this session was handed of each session it took up.
+	took []Taken
 	// attention is what the session's role lets through, when the user chose it.
 	attention string
 }
@@ -743,8 +743,10 @@ type sessionDoc struct {
 	RoleKey    string    `json:"roleKey"`
 	Given      string    `json:"given"`
 	Pinned     string    `json:"pinned"`
-	Took       []string  `json:"took,omitempty"`
-	Timeline   []Moment  `json:"timeline,omitempty"`
+	Took       []Taken   `json:"took,omitempty"`
+	// Children lists the session's own subagents as last seen.
+	Children []Subagent `json:"children,omitempty"`
+	Timeline []Moment   `json:"timeline,omitempty"`
 	// The rest is the session as it was when last stored, for when it is
 	// no longer open to ask. Ended is zero while it is open.
 	Label     string    `json:"label,omitempty"`
@@ -1025,11 +1027,27 @@ func fingerprint(d sessionDoc) ([sha256.Size]byte, error) {
 	return sha256.Sum256(b), nil
 }
 
+// Taken is a session another took up: its id, and the subagents it handed
+// over, which the one that took it up lists and reports as its own.
+type Taken struct {
+	ID       string     `json:"id"`
+	Children []Subagent `json:"children,omitempty"`
+}
+
+// filing is the knowledge base as a session's filing is read from it.
+type filing interface {
+	Resolve(sessionID, cwd string) (effortID, via string, ok bool)
+	Active(id string) bool
+}
+
 // doc is what is stored of a session while it is open.
-func (h *Hub) doc(s *Session) sessionDoc {
+func (h *Hub) doc(s *Session) sessionDoc { return docIn(h.kb, s) }
+
+// docIn is what is stored of a session, filed as k has it.
+func docIn(k filing, s *Session) sessionDoc {
 	label, _ := s.label()
-	effort, _ := h.filed(s)
-	return sessionDoc{Managed: s.managed, Title: s.Title, Model: s.Model, Reasoning: s.Reasoning, ActiveAt: s.ActiveAt,
+	effort, _ := filedIn(k, s)
+	return sessionDoc{Children: childIndex(s.Subagents), Managed: s.managed, Title: s.Title, Model: s.Model, Reasoning: s.Reasoning, ActiveAt: s.ActiveAt,
 		LastPrompt: s.LastPrompt, LastReply: s.LastReply, PromptAt: s.PromptAt,
 		Insight: s.Insight, InsightKey: s.insightKey, Guess: s.guess, GuessKey: s.guessKey, InsightAt: s.insightAt,
 		RoleGuess: s.roleGuess, RoleKey: s.roleKey, Given: s.given, Pinned: s.pinned, Took: s.took, Timeline: s.Timeline, Label: label, Effort: effort,
@@ -1038,12 +1056,15 @@ func (h *Hub) doc(s *Session) sessionDoc {
 
 // filed returns the effort a session is filed under and how it came to be,
 // or "" when it is unsorted.
-func (h *Hub) filed(s *Session) (effort, via string) {
-	if id, via, ok := h.kb.Resolve(s.ID, s.Cwd); ok {
+func (h *Hub) filed(s *Session) (effort, via string) { return filedIn(h.kb, s) }
+
+// filedIn is filed, as k has it.
+func filedIn(k filing, s *Session) (effort, via string) {
+	if id, via, ok := k.Resolve(s.ID, s.Cwd); ok {
 		return id, via
 	}
 	// A guess made on older content stands until a newer one replaces it.
-	if h.kb.Active(s.guess) {
+	if k.Active(s.guess) {
 		return s.guess, ViaGuess
 	}
 	return "", ""
@@ -2324,7 +2345,19 @@ func (h *Hub) Enqueue(sessionID, text string) (Reply, error) {
 	if s.run != "" {
 		r.Owner = OwnerRun
 	}
-	if err := h.saveReply(*r); err != nil {
+	doc := h.doc(s)
+	kept, err := fingerprint(doc)
+	if err != nil {
+		return Reply{}, fmt.Errorf("the reply %w: %w", ErrNotSaved, err)
+	}
+	if kept == s.persisted {
+		err = h.saveReply(*r)
+	} else if err = h.cache.PutAll(store.Doc{Kind: "session", ID: s.ID, Value: doc}, store.Doc{Kind: "reply", ID: r.ID, Value: *r}); err != nil {
+		err = fmt.Errorf("the reply %w: %w", ErrNotSaved, err)
+	} else {
+		s.persisted = kept
+	}
+	if err != nil {
 		return Reply{}, err
 	}
 	h.replies = append(h.replies, r)

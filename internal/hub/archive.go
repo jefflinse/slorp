@@ -164,7 +164,7 @@ func (h *Hub) shelve(id string, d sessionDoc) {
 }
 
 func (h *Hub) worthKeeping(id string, d sessionDoc) bool {
-	if d.Managed || d.Insight != nil || len(d.Timeline) > 0 || d.Given != "" || d.Pinned != "" || len(d.Took) > 0 {
+	if d.Managed || d.Insight != nil || len(d.Timeline) > 0 || d.Given != "" || d.Pinned != "" || len(d.Took) > 0 || len(d.Children) > 0 || h.kb.Said(id) {
 		return true
 	}
 	for _, r := range h.replies {

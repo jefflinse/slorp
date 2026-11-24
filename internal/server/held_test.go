@@ -32,12 +32,15 @@ func TestASubagentIsReadUnderTheSessionThatTookItsSessionUp(t *testing.T) {
 	f := newFixture(t)
 	f.record.subagents = map[string][]hub.Subagent{"old": {{ID: "child", Status: "completed"}}}
 	f.record.reports = map[string]hub.SubagentReport{"old/child": {Report: "flanges fitted"}}
-	f.hub.SetRoster("claude", []hub.Session{{ID: "old", Agent: "claude", Cwd: "/w", LastPrompt: "add flanges", PromptAt: time.Now().Add(-time.Hour)}})
+	f.hub.SetRoster("claude", []hub.Session{{ID: "old", Agent: "claude", Cwd: "/w", LastPrompt: "add flanges", PromptAt: time.Now().Add(-time.Hour), Subagents: f.record.subagents["old"]}})
 	f.hub.SetRoster("claude", nil)
 	f.hub.Link("new", "old")
 	f.hub.SetRoster("claude", []hub.Session{{ID: "new", Agent: "claude", Cwd: "/w"}})
 	if code, body := f.do("GET", "/api/sessions/new/subagents/child", "", nil); code != 200 || !strings.Contains(body, "flanges fitted") {
 		t.Errorf("the report under the session that took its session up = %d %s, want it", code, body)
+	}
+	if s := f.state().Sessions; len(s) != 1 || len(s[0].Subagents) != 1 || s[0].Subagents[0].ID != "child" {
+		t.Errorf("open, the session that took it up lists %+v, want its subagent", s)
 	}
 	f.hub.SetRoster("claude", nil)
 	if code, body := f.do("GET", "/api/archive/new", "", nil); code != 200 || !strings.Contains(body, `"id":"child"`) {

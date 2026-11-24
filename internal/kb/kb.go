@@ -242,8 +242,12 @@ func (s *Store) Shelve(id string, shelved bool) error {
 func (s *Store) Active(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	i := s.f.index(id)
-	return i >= 0 && !s.f.Efforts[i].Shelved
+	return s.f.active(id)
+}
+
+func (f *file) active(id string) bool {
+	i := f.index(id)
+	return i >= 0 && !f.Efforts[i].Shelved
 }
 
 // Move puts an effort just ahead of the effort named by before, or last when
@@ -430,11 +434,15 @@ func (s *Store) RemoveDir(effortID, dir string) error {
 func (s *Store) Resolve(sessionID, cwd string) (effortID, via string, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if id, found := s.f.Assignments[sessionID]; found && (id == "" || s.f.index(id) >= 0) {
+	return s.f.resolve(sessionID, cwd)
+}
+
+func (f *file) resolve(sessionID, cwd string) (effortID, via string, ok bool) {
+	if id, found := f.Assignments[sessionID]; found && (id == "" || f.index(id) >= 0) {
 		return id, ViaUser, true
 	}
 	best := ""
-	for _, e := range s.f.Efforts {
+	for _, e := range f.Efforts {
 		for _, d := range e.Dirs {
 			if (cwd == d || strings.HasPrefix(cwd, d+string(filepath.Separator))) && len(d) > len(best) {
 				best, effortID = d, e.ID

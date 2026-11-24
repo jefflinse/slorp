@@ -185,24 +185,72 @@ func (s *Store) RoleOf(sessionID string) (role Role, ok bool) {
 func (s *Store) Carry(from, to string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, filed := s.f.Assignments[from]
-	_, given := s.f.SessionRoles[from]
-	if !filed && !given {
+	if !s.f.said(from) {
 		return nil
 	}
 	return s.update(func(f *file) error {
-		for _, said := range []map[string]string{f.Assignments, f.SessionRoles} {
-			v, ok := said[from]
-			if !ok {
-				continue
-			}
-			if _, has := said[to]; !has {
-				said[to] = v
-			}
-			delete(said, from)
-		}
+		f.carry(from, to)
 		return nil
 	})
+}
+
+// Said reports whether the user filed a session or gave it a role.
+func (s *Store) Said(sessionID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.f.said(sessionID)
+}
+
+func (f *file) said(sessionID string) bool {
+	_, filed := f.Assignments[sessionID]
+	_, given := f.SessionRoles[sessionID]
+	return filed || given
+}
+
+func (f *file) carry(from, to string) {
+	for _, said := range []map[string]string{f.Assignments, f.SessionRoles} {
+		v, ok := said[from]
+		if !ok {
+			continue
+		}
+		if _, has := said[to]; !has {
+			said[to] = v
+		}
+		delete(said, from)
+	}
+}
+
+// Staged is the knowledge base as a change to it would leave it, read
+// before the change is saved.
+type Staged struct{ f *file }
+
+// Resolve is Store.Resolve as the change would leave it.
+func (v Staged) Resolve(sessionID, cwd string) (effortID, via string, ok bool) {
+	return v.f.resolve(sessionID, cwd)
+}
+
+// Active is Store.Active as the change would leave it.
+func (v Staged) Active(id string) bool { return v.f.active(id) }
+
+// Carrying carries what the user said of from to to, as Carry does, saved
+// only by save: it is handed the kind, id and value of the knowledge base's
+// document as the carry leaves it, and the knowledge base as it would then
+// read, and saves that document with whatever else it writes. Nothing else
+// changes the knowledge base meanwhile, and nothing changes unless save
+// succeeds. save must not call the Store.
+func (s *Store) Carrying(from, to string, save func(kind, id string, doc any, then Staged) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next, err := s.f.clone()
+	if err != nil {
+		return err
+	}
+	next.carry(from, to)
+	if err := save(docKind, docID, next, Staged{&next}); err != nil {
+		return err
+	}
+	s.f = next
+	return nil
 }
 
 // HasRole reports whether a role with that ID exists.

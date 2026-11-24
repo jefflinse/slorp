@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jefflinse/slorp/internal/kb"
 	"github.com/jefflinse/slorp/internal/testdb"
 )
 
@@ -174,28 +173,6 @@ func TestAFailedTakeUpLeavesTheLatestToCloseHeededFirst(t *testing.T) {
 	}
 }
 
-func TestAFilingThatCouldNotFollowIsCarriedLater(t *testing.T) {
-	st := testdb.Open(t)
-	c := &stopping{Store: st}
-	k, err := kb.Open(c)
-	must(t, err)
-	h := New(k, c)
-	e := effort(t, k, "Widgets")
-	at := time.Now().Add(-3 * time.Hour).Truncate(time.Second)
-	h.Link("branch-a", "root")
-	h.Link("branch-b", "root")
-	h.SetRoster(agent, []Session{said("branch-a", "one", at)})
-	must(t, k.Assign("branch-a", e))
-	h.SetRoster(agent, nil)
-
-	b := []Session{said("branch-b", "two", at.Add(time.Hour))}
-	c.armed, c.once, c.left = true, true, 1
-	h.SetRoster(agent, b)
-	if s := session(t, h, "branch-b"); !c.stopped || prompts(s) != "one | two" || s.Effort != e {
-		t.Errorf("branch-b has %q under %q (failed %v), want branch-a taken up with its filing", prompts(s), s.Effort, c.stopped)
-	}
-}
-
 func TestATakenUpFilingIsKeptAsTheSessionCloses(t *testing.T) {
 	h, k, st := newHub(t)
 	e := effort(t, k, "Widgets")
@@ -227,7 +204,7 @@ func TestSessionsThatContinueEachOtherAreListed(t *testing.T) {
 		h.SetRoster(agent, []Session{said("x", "one", at), said("y", "two", at)})
 		h.Sessions()
 		h.RetainedSubagentReport(agent, "x", "child")
-		h.SubagentSessions("y")
+		h.SubagentSessions("y", "child")
 	}()
 	select {
 	case <-done:

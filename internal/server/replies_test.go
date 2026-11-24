@@ -15,8 +15,9 @@ import (
 	"github.com/jefflinse/slorp/internal/testdb"
 )
 
-// unsavedReplies keeps the hub in a store, failing each write of a reply for
-// which fail, given its number counted from when fail was set, says so.
+// unsavedReplies keeps the hub in a store, failing each write of a reply, or
+// of a batch with one, for which fail, given its number counted from when fail
+// was set, says so.
 type unsavedReplies struct {
 	*store.Store
 	fail func(n int) bool
@@ -31,6 +32,19 @@ func (c *unsavedReplies) Put(kind, id string, v any) error {
 		}
 	}
 	return c.Store.Put(kind, id, v)
+}
+
+func (c *unsavedReplies) PutAll(docs ...store.Doc) error {
+	for _, d := range docs {
+		if d.Kind == "reply" && c.fail != nil {
+			c.n++
+			if c.fail(c.n) {
+				return errors.New("disk full")
+			}
+			break
+		}
+	}
+	return c.Store.PutAll(docs...)
 }
 
 func (c *unsavedReplies) failing(fail func(n int) bool) { c.n, c.fail = 0, fail }
