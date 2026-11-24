@@ -63,6 +63,8 @@ func TestSlorpStartsOnlyFromAllThatIsKept(t *testing.T) {
 			cases["stateless"] = Reply{ID: "bad", SessionID: "old", Text: "and washers", Owner: OwnerBridge}
 			cases["in an unknown state"] = Reply{ID: "bad", SessionID: "old", Text: "and washers", State: "lost", Owner: OwnerBridge}
 			cases["owned by no known runner"] = Reply{ID: "bad", SessionID: "old", Text: "and washers", State: Queued, Owner: "not-an-owner"}
+			cases["owned by null"] = json.RawMessage(`{"id":"bad","sessionId":"old","text":"and washers","state":"queued","createdAt":"2026-11-24T00:00:00Z","owner":null}`)
+			cases["of null text"] = json.RawMessage(`{"id":"bad","sessionId":"old","text":null,"state":"queued","createdAt":"2026-11-24T00:00:00Z","owner":"bridge"}`)
 		}
 		for name, row := range cases {
 			t.Run(fmt.Sprintf("%s %s", kind, name), func(t *testing.T) {
@@ -142,10 +144,14 @@ func TestRepliesKeptAreSettledByWhoOwnedThem(t *testing.T) {
 	must(t, err)
 	legacy.Owner = ""
 	must(t, st.Put("reply", legacy.ID, legacy))
+	h.SetRoster(agent, []Session{idle("unowned", "/w", "")})
+	unowned, err := h.Enqueue("unowned", "from before owners, said so")
+	must(t, err)
+	must(t, st.Put("reply", unowned.ID, json.RawMessage(`{"id":"`+unowned.ID+`","sessionId":"unowned","text":"from before owners, said so","state":"queued","createdAt":"2026-11-24T00:00:00Z","owner":""}`)))
 
 	h = New(k, st)
-	h.SetRoster(agent, []Session{idle("run", "/w", ""), idle("bridged", "/w", ""), idle("legacy", "/w", "")})
-	for id, want := range map[string]int{"run": 0, "bridged": 1, "legacy": 1} {
+	h.SetRoster(agent, []Session{idle("run", "/w", ""), idle("bridged", "/w", ""), idle("legacy", "/w", ""), idle("unowned", "/w", "")})
+	for id, want := range map[string]int{"run": 0, "bridged": 1, "legacy": 1, "unowned": 1} {
 		if got, err := h.Claim(id); err != nil || len(got) != want {
 			t.Errorf("%s claimed %+v, %v after a restart; want %d", id, got, err, want)
 		}

@@ -1950,6 +1950,17 @@ func (h *Hub) readReplies() ([]*Reply, error) {
 			bad = fmt.Errorf("invalid stored reply %s", id)
 			return
 		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(body, &fields); err != nil {
+			bad = fmt.Errorf("decoding reply %s: %w", id, err)
+			return
+		}
+		for name, v := range fields {
+			if string(v) == "null" {
+				bad = fmt.Errorf("invalid stored reply %s: %s is null", id, name)
+				return
+			}
+		}
 		out = append(out, &r)
 	})
 	if err != nil {
