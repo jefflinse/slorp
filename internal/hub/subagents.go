@@ -97,8 +97,8 @@ func (h *Hub) UpsertSubagent(agent, sessionID string, revision int64, a Subagent
 	if s.Agent != agent {
 		return ErrSubagentConflict
 	}
-	if h.retainedErr != nil {
-		return fmt.Errorf("retained subagents unavailable: %w", h.retainedErr)
+	if err := h.completeSubagents(); err != nil {
+		return fmt.Errorf("retained subagents unavailable: %w", err)
 	}
 	old, exists := h.retained[sessionID][a.ID]
 	if exists && old.Agent != agent {

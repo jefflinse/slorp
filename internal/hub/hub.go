@@ -891,7 +891,7 @@ func New(k *kb.Store, c Cache) *Hub {
 		switch {
 		case json.Unmarshal(body, &d) != nil:
 		case !d.Ended.IsZero():
-			if h.worthKeeping(id, d) {
+			if h.repliesErr != nil || h.retainedErr != nil || h.worthKeeping(id, d) {
 				h.archive[id] = d
 			}
 		case d.Agent != "":
@@ -1888,13 +1888,23 @@ func (h *Hub) MergeEfforts(from, into string) error {
 // all of them.
 func (h *Hub) readReplies() ([]*Reply, error) {
 	var out []*Reply
+	var bad error
 	err := h.cache.Each("reply", func(id string, body []byte) {
 		var r Reply
-		if json.Unmarshal(body, &r) == nil {
-			out = append(out, &r)
+		if err := json.Unmarshal(body, &r); err != nil {
+			bad = fmt.Errorf("decoding reply %s: %w", id, err)
+			return
 		}
+		if r.ID != id || r.SessionID == "" {
+			bad = fmt.Errorf("invalid stored reply %s", id)
+			return
+		}
+		out = append(out, &r)
 	})
-	return out, err
+	if err != nil {
+		bad = fmt.Errorf("loading replies: %w", err)
+	}
+	return out, bad
 }
 
 // settleStale drops a reply kept from before Slorp started that waited for
@@ -1911,39 +1921,80 @@ func (h *Hub) settleStale(r *Reply) {
 // complete reads again what could not all be read when Slorp started,
 // replies and retained subagents, and says why when it still cannot.
 func (h *Hub) complete() error {
-	if h.repliesErr != nil {
-		if read, err := h.readReplies(); err == nil {
-			for _, r := range read {
-				if !slices.ContainsFunc(h.replies, func(known *Reply) bool { return known.ID == r.ID }) {
-					h.settleStale(r)
-					h.replies = append(h.replies, r)
-				}
-			}
-			h.repliesErr = nil
-		}
-	}
-	if h.retainedErr != nil {
-		if read, err := h.readSubagents(); err == nil {
-			h.retained, h.retainedErr = read, nil
-		}
-	}
-	return errors.Join(h.repliesErr, h.retainedErr)
+	return errors.Join(h.completeReplies(), h.completeSubagents())
 }
 
-// Keep saves an open session as it stands, so that what is said of it next
-// outlives it; when that cannot be saved, the error wraps ErrNotSaved. It
-// does nothing for a session not open.
-func (h *Hub) Keep(sessionID string) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	s := h.sessions[sessionID]
-	if s == nil {
+// completeReplies reads the replies again while those read when Slorp
+// started are not all of those kept, and says why when they still are not.
+// They are then in the order they were kept, each known one as it stands.
+func (h *Hub) completeReplies() error {
+	if h.repliesErr == nil {
 		return nil
 	}
-	if err := h.checkpoint(s); err != nil {
-		return fmt.Errorf("session %s %w: %w", sessionID, ErrNotSaved, err)
+	read, err := h.readReplies()
+	if err != nil {
+		return err
 	}
+	known := map[string]*Reply{}
+	for _, r := range h.replies {
+		known[r.ID] = r
+	}
+	all := make([]*Reply, 0, len(read))
+	for _, r := range read {
+		if k := known[r.ID]; k != nil {
+			r = k
+			delete(known, r.ID)
+		} else {
+			h.settleStale(r)
+		}
+		all = append(all, r)
+	}
+	for _, r := range h.replies {
+		if known[r.ID] != nil {
+			all = append(all, r)
+		}
+	}
+	h.replies, h.repliesErr = all, nil
 	return nil
+}
+
+// completeSubagents reads the retained subagents again while those read when
+// Slorp started are not all of those kept, and says why when they still are
+// not.
+func (h *Hub) completeSubagents() error {
+	if h.retainedErr == nil {
+		return nil
+	}
+	read, err := h.readSubagents()
+	if err != nil {
+		return err
+	}
+	h.retained, h.retainedErr = read, nil
+	return nil
+}
+
+// File makes a change to what the user said of a session, by edit, once the
+// session is kept: an open one is saved as it stands first, and when it
+// cannot be, the error wraps ErrNotSaved and edit is not made. A session
+// Slorp does not know, such as one another has taken up, is refused with
+// ErrNoSuchSession. Nothing takes the session up meanwhile, so the change
+// goes with it when something does. edit must not call the Hub.
+func (h *Hub) File(sessionID string, edit func() error) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if s := h.sessions[sessionID]; s != nil {
+		if err := h.checkpoint(s); err != nil {
+			return fmt.Errorf("session %s %w: %w", sessionID, ErrNotSaved, err)
+		}
+		return edit()
+	}
+	_, archived := h.archive[sessionID]
+	_, unsettled := h.unsettled[sessionID]
+	_, held := h.unread[sessionID]
+	if !archived && !unsettled && !held {
+		return fmt.Errorf("%w: %s", ErrNoSuchSession, sessionID)
+	}
+	return edit()
 }
 
 // Touch republishes state after the knowledge base changed, saving each
@@ -2436,6 +2487,9 @@ func (h *Hub) Enqueue(sessionID, text string) (Reply, error) {
 func (h *Hub) Claim(sessionID string) ([]Reply, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if err := h.completeReplies(); err != nil {
+		return nil, fmt.Errorf("the replies kept could not all be read: %w", err)
+	}
 	var out []Reply
 	var err error
 	for _, r := range h.replies {
@@ -2469,6 +2523,9 @@ func (h *Hub) Claim(sessionID string) ([]Reply, error) {
 func (h *Hub) Ack(replyID string, state ReplyState) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if err := h.completeReplies(); err != nil {
+		return fmt.Errorf("the reply %w: %w", ErrNotSaved, err)
+	}
 	for _, r := range h.replies {
 		if r.ID != replyID || r.State != Claimed {
 			continue

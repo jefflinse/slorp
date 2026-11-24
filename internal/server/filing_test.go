@@ -6,9 +6,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jefflinse/slorp/internal/hub"
 	"github.com/jefflinse/slorp/internal/integrations"
+	"github.com/jefflinse/slorp/internal/kb"
 	"github.com/jefflinse/slorp/internal/store"
 	"github.com/jefflinse/slorp/internal/testdb"
 )
@@ -71,5 +73,48 @@ func TestAFilingIsTakenOnlyOnceItsSessionIsKept(t *testing.T) {
 	sessions := h.Sessions()
 	if at := slices.IndexFunc(sessions, func(s hub.Session) bool { return s.ID == "b" }); at < 0 || sessions[at].Effort != id {
 		t.Errorf("after a restart the sessions are %+v, want b under %q, taken up from a", sessions, id)
+	}
+}
+
+func TestAFilingOfASessionTakenUpIsRefused(t *testing.T) {
+	st := testdb.Open(t)
+	k := testdb.KB(t, st)
+	e, err := k.Create("Widgets", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := k.Add(kb.SectionRoles, kb.Entry{Name: "Reviewer"}); err != nil {
+		t.Fatal(err)
+	}
+	role := k.Knowledge().Roles[0].ID
+	h := hub.New(k, st)
+	srv := httptest.NewServer(New(h, k, integrations.NewManager(func() map[string]bool { return nil }), &asked{}, nil, nil, nil, nil, nil, nil, nil, Page(nil, "")))
+	t.Cleanup(srv.Close)
+	at := time.Now().Add(-time.Hour)
+	h.Link("a", "root")
+	h.Link("b", "root")
+	h.SetRoster("claude", []hub.Session{{ID: "a", Agent: "claude", Cwd: "/w", StartedAt: at, LastPrompt: "add flanges", PromptAt: at}})
+	h.SetRoster("claude", []hub.Session{{ID: "b", Agent: "claude", Cwd: "/w", StartedAt: at.Add(time.Minute)}})
+	if archived := h.State().Archive; len(archived) != 0 {
+		t.Fatalf("archive = %+v, want a taken up by b", archived)
+	}
+
+	for path, body := range map[string]string{"effort": `{"effort":"` + e.ID + `"}`, "role": `{"role":"` + role + `"}`} {
+		res, err := srv.Client().Post(srv.URL+"/api/sessions/a/"+path, "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := res.Body.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if res.StatusCode != 404 {
+			t.Errorf("a %s for a session taken up = %d, want 404", path, res.StatusCode)
+		}
+	}
+	if got, _, _ := k.Resolve("a", ""); got != "" {
+		t.Errorf("a refused filing left a under %q", got)
+	}
+	if _, ok := k.RoleOf("a"); ok {
+		t.Error("a refused role was given to a")
 	}
 }

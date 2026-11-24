@@ -41,6 +41,9 @@ func (h *Hub) OpenManaged(agent, id, job, token string, update func(*Session)) e
 	if _, err := h.recall(s); err != nil {
 		return fmt.Errorf("managed session %s could not be read: %w", id, err)
 	}
+	if err := h.completeReplies(); err != nil {
+		return fmt.Errorf("managed session %s %w: %w", id, ErrNotSaved, err)
+	}
 	s.managed, s.run, s.Job, s.CanStop = true, token, job, true
 	if update != nil {
 		update(s)

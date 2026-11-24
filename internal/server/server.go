@@ -830,11 +830,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		if !readJSON(w, r, &in) {
 			return
 		}
-		if err := h.Keep(r.PathValue("id")); err != nil {
-			http.Error(w, err.Error(), editFailed(err))
-			return
-		}
-		edited(w, k.Assign(r.PathValue("id"), in.Effort))
+		edited(w, h.File(r.PathValue("id"), func() error { return k.Assign(r.PathValue("id"), in.Effort) }))
 	})
 
 	// recorded reads an open session's latest exchanges from its agent's own
@@ -1082,11 +1078,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 		if !readJSON(w, r, &in) {
 			return
 		}
-		if err := h.Keep(r.PathValue("id")); err != nil {
-			http.Error(w, err.Error(), editFailed(err))
-			return
-		}
-		edited(w, k.SetRole(r.PathValue("id"), in.Role))
+		edited(w, h.File(r.PathValue("id"), func() error { return k.SetRole(r.PathValue("id"), in.Role) }))
 	})
 
 	mux.HandleFunc("POST /api/roles/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -1577,6 +1569,9 @@ func replyCut(kept string) bool {
 func editFailed(err error) int {
 	if errors.Is(err, kb.ErrNotSaved) || errors.Is(err, hub.ErrNotSaved) {
 		return http.StatusInternalServerError
+	}
+	if errors.Is(err, hub.ErrNoSuchSession) {
+		return http.StatusNotFound
 	}
 	return http.StatusBadRequest
 }
