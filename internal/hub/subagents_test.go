@@ -160,10 +160,8 @@ func TestRetainedSubagentStorageFailureRetry(t *testing.T) {
 		t.Fatalf("retry or restored revision failed: %+v", got)
 	}
 	c.loadFailure = true
-	h = New(k, c)
-	h.Apply("opencode", "root", nil)
-	if err := h.UpsertSubagent("opencode", "root", 3, a, nil); err == nil {
-		t.Fatal("write allowed after failed index load")
+	if _, err := Open(k, c); err == nil {
+		t.Fatal("opened after failed index load")
 	}
 }
 

@@ -157,7 +157,7 @@ func (h *Hub) leave(s *Session) {
 
 func (h *Hub) shelve(id string, d sessionDoc) {
 	h.warn(h.cache.Put("session", id, d))
-	if h.complete() != nil || h.worthKeeping(id, d) {
+	if h.worthKeeping(id, d) {
 		h.archive[id] = d
 		h.last = ""
 	}

@@ -150,7 +150,10 @@ func run() (exe string, restart bool) {
 		log.Fatalf("knowledge base: %v", err)
 	}
 
-	h := hub.New(k, st)
+	h, err := hub.Open(k, st)
+	if err != nil {
+		log.Fatalf("sessions: %v", err)
+	}
 	h.Rostered(claude.Agent)
 	tools := integrations.NewManager(func() map[string]bool { return h.Settings().Integrations }, integrations.GitHub(integrations.Exec))
 	transcripts := &claude.Adapter{Hub: h, Bin: *claudeBin, Home: home, Interval: 5 * time.Second, Plugin: *plugin, URL: "http://" + *addr, Updates: 24 * time.Hour}

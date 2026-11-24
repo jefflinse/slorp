@@ -850,11 +850,7 @@ type Hub struct {
 	// it continues, empty for one that continues none.
 	origins map[string]string
 	// retained holds durable child records by root and child ID.
-	retained    map[string]map[string]subagentRecord
-	retainedErr error
-	// repliesErr says why the replies read when Slorp started are not all
-	// of those kept, until they are read again.
-	repliesErr error
+	retained map[string]map[string]subagentRecord
 }
 
 // unreadReport is which agent last reported a session whose kept record
@@ -869,39 +865,33 @@ type note struct {
 	Note
 }
 
-// New returns a hub restored from what c holds.
-func New(k *kb.Store, c Cache) *Hub {
+// Open returns a hub restored from what c holds. When the sessions, what
+// each continues, the replies or the retained subagents kept cannot all be
+// read, it returns an error, having changed nothing, and no hub.
+func Open(k *kb.Store, c Cache) (*Hub, error) {
 	h := &Hub{sessions: map[string]*Session{}, subs: map[chan struct{}]struct{}{}, kb: k, notes: map[string]note{},
 		cache: c, settings: Settings{AnswerPermissions: true}, waiters: map[string]chan Decision{}, feeds: map[string]*feed{}, wrapups: map[string]Wrapup{},
 		archive: map[string]sessionDoc{}, unsettled: map[string]sessionDoc{}, unread: map[string]unreadReport{}, started: time.Now(), origins: map[string]string{}, plugins: map[string]Plugin{},
 		discussed: map[string]*pullDoc{}, discussFailed: map[string]time.Time{}}
-	h.loadSubagents()
+	var err error
+	if h.retained, err = h.readSubagents(); err != nil {
+		return nil, err
+	}
+	if h.replies, err = h.readReplies(); err != nil {
+		return nil, err
+	}
+	if err := h.readSessions(); err != nil {
+		return nil, err
+	}
+	if err := h.readOrigins(); err != nil {
+		return nil, err
+	}
 	h.loadLifecycle()
 	h.loadActions()
 	h.warn(c.Each("pull", func(id string, body []byte) {
 		var d pullDoc
 		if json.Unmarshal(body, &d) == nil {
 			h.discussed[id] = &d
-		}
-	}))
-	h.replies, h.repliesErr = h.readReplies()
-	h.warn(h.repliesErr)
-	h.warn(c.Each("session", func(id string, body []byte) {
-		var d sessionDoc
-		switch {
-		case json.Unmarshal(body, &d) != nil:
-		case !d.Ended.IsZero():
-			if h.repliesErr != nil || h.retainedErr != nil || h.worthKeeping(id, d) {
-				h.archive[id] = d
-			}
-		case d.Agent != "":
-			h.unsettled[id] = d
-		}
-	}))
-	h.warn(c.Each("origin", func(id string, body []byte) {
-		var from string
-		if json.Unmarshal(body, &from) == nil {
-			h.origins[id] = from
 		}
 	}))
 	h.warn(c.Each("wrapup", func(day string, body []byte) {
@@ -917,9 +907,13 @@ func New(k *kb.Store, c Cache) *Hub {
 		}
 	}))
 	for _, r := range h.replies {
-		h.settleStale(r)
+		managed := h.unsettled[r.SessionID].Managed || h.archive[r.SessionID].Managed
+		if (r.State == Queued || r.State == Claimed) && (r.Owner == OwnerRun || r.Owner == "" && managed) {
+			r.State = Dropped
+			h.warn(h.cache.Put("reply", r.ID, r))
+		}
 	}
-	_, err := c.Get("setting", "main", &h.settings)
+	_, err = c.Get("setting", "main", &h.settings)
 	h.warn(err)
 	if h.settings.Integrations == nil {
 		h.settings.Integrations = map[string]bool{}
@@ -931,7 +925,60 @@ func New(k *kb.Store, c Cache) *Hub {
 		h.settings.Rewritten = map[string]int{}
 	}
 	h.settings.Prompts.Rewrite = cmp.Or(h.settings.Prompts.Rewrite, RewriteAsk)
+	return h, nil
+}
+
+// New is Open for what is known to be readable: it panics where Open fails.
+func New(k *kb.Store, c Cache) *Hub {
+	h, err := Open(k, c)
+	if err != nil {
+		panic(err)
+	}
 	return h
+}
+
+// readSessions reads the sessions kept, those ended into the archive and
+// those that were open into the unsettled, and says why when what it read is
+// not all of them.
+func (h *Hub) readSessions() error {
+	var bad error
+	err := h.cache.Each("session", func(id string, body []byte) {
+		var d sessionDoc
+		if err := json.Unmarshal(body, &d); err != nil {
+			bad = fmt.Errorf("decoding session %s: %w", id, err)
+			return
+		}
+		switch {
+		case !d.Ended.IsZero():
+			if h.worthKeeping(id, d) {
+				h.archive[id] = d
+			}
+		case d.Agent != "":
+			h.unsettled[id] = d
+		}
+	})
+	if err != nil {
+		return fmt.Errorf("loading sessions: %w", err)
+	}
+	return bad
+}
+
+// readOrigins reads what each session kept continues, and says why when what
+// it read is not all of it.
+func (h *Hub) readOrigins() error {
+	var bad error
+	err := h.cache.Each("origin", func(id string, body []byte) {
+		var from string
+		if err := json.Unmarshal(body, &from); err != nil {
+			bad = fmt.Errorf("decoding the origin of %s: %w", id, err)
+			return
+		}
+		h.origins[id] = from
+	})
+	if err != nil {
+		return fmt.Errorf("loading origins: %w", err)
+	}
+	return bad
 }
 
 func (h *Hub) warn(err error) {
@@ -1907,92 +1954,28 @@ func (h *Hub) readReplies() ([]*Reply, error) {
 	return out, bad
 }
 
-// settleStale drops a reply kept from before Slorp started that waited for
-// a run, which ended with it.
-func (h *Hub) settleStale(r *Reply) {
-	s := h.sessions[r.SessionID]
-	managed := h.unsettled[r.SessionID].Managed || h.archive[r.SessionID].Managed || s != nil && s.managed
-	if (r.State == Queued || r.State == Claimed) && (r.Owner == OwnerRun || r.Owner == "" && managed) {
-		r.State = Dropped
-		h.warn(h.cache.Put("reply", r.ID, r))
-	}
-}
-
-// complete reads again what could not all be read when Slorp started,
-// replies and retained subagents, and says why when it still cannot.
-func (h *Hub) complete() error {
-	return errors.Join(h.completeReplies(), h.completeSubagents())
-}
-
-// completeReplies reads the replies again while those read when Slorp
-// started are not all of those kept, and says why when they still are not.
-// They are then in the order they were kept, each known one as it stands.
-func (h *Hub) completeReplies() error {
-	if h.repliesErr == nil {
-		return nil
-	}
-	read, err := h.readReplies()
-	if err != nil {
-		return err
-	}
-	known := map[string]*Reply{}
-	for _, r := range h.replies {
-		known[r.ID] = r
-	}
-	all := make([]*Reply, 0, len(read))
-	for _, r := range read {
-		if k := known[r.ID]; k != nil {
-			r = k
-			delete(known, r.ID)
-		} else {
-			h.settleStale(r)
-		}
-		all = append(all, r)
-	}
-	for _, r := range h.replies {
-		if known[r.ID] != nil {
-			all = append(all, r)
-		}
-	}
-	h.replies, h.repliesErr = all, nil
-	return nil
-}
-
-// completeSubagents reads the retained subagents again while those read when
-// Slorp started are not all of those kept, and says why when they still are
-// not.
-func (h *Hub) completeSubagents() error {
-	if h.retainedErr == nil {
-		return nil
-	}
-	read, err := h.readSubagents()
-	if err != nil {
-		return err
-	}
-	h.retained, h.retainedErr = read, nil
-	return nil
-}
-
 // File makes a change to what the user said of a session, by edit, once the
-// session is kept: an open one is saved as it stands first, and when it
-// cannot be, the error wraps ErrNotSaved and edit is not made. A session
+// session is kept: an open or closed one is saved as it stands first, and
+// one whose kept record could not be read is not kept; when the session is
+// not kept, the error wraps ErrNotSaved and edit is not made. A session
 // Slorp does not know, such as one another has taken up, is refused with
 // ErrNoSuchSession. Nothing takes the session up meanwhile, so the change
 // goes with it when something does. edit must not call the Hub.
 func (h *Hub) File(sessionID string, edit func() error) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	var err error
 	if s := h.sessions[sessionID]; s != nil {
-		if err := h.checkpoint(s); err != nil {
-			return fmt.Errorf("session %s %w: %w", sessionID, ErrNotSaved, err)
-		}
-		return edit()
-	}
-	_, archived := h.archive[sessionID]
-	_, unsettled := h.unsettled[sessionID]
-	_, held := h.unread[sessionID]
-	if !archived && !unsettled && !held {
+		err = h.checkpoint(s)
+	} else if _, held := h.unread[sessionID]; held {
+		err = errors.New("what is kept of it could not be read")
+	} else if d, archived := h.archive[sessionID]; archived {
+		err = h.cache.Put("session", sessionID, d)
+	} else if _, unsettled := h.unsettled[sessionID]; !unsettled {
 		return fmt.Errorf("%w: %s", ErrNoSuchSession, sessionID)
+	}
+	if err != nil {
+		return fmt.Errorf("session %s %w: %w", sessionID, ErrNotSaved, err)
 	}
 	return edit()
 }
@@ -2487,9 +2470,6 @@ func (h *Hub) Enqueue(sessionID, text string) (Reply, error) {
 func (h *Hub) Claim(sessionID string) ([]Reply, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if err := h.completeReplies(); err != nil {
-		return nil, fmt.Errorf("the replies kept could not all be read: %w", err)
-	}
 	var out []Reply
 	var err error
 	for _, r := range h.replies {
@@ -2523,9 +2503,6 @@ func (h *Hub) Claim(sessionID string) ([]Reply, error) {
 func (h *Hub) Ack(replyID string, state ReplyState) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if err := h.completeReplies(); err != nil {
-		return fmt.Errorf("the reply %w: %w", ErrNotSaved, err)
-	}
 	for _, r := range h.replies {
 		if r.ID != replyID || r.State != Claimed {
 			continue

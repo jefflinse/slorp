@@ -40,11 +40,6 @@ func subagentKey(root, child string) string {
 	return string(b)
 }
 
-func (h *Hub) loadSubagents() {
-	h.retained, h.retainedErr = h.readSubagents()
-	h.warn(h.retainedErr)
-}
-
 // readSubagents reads the retained subagents kept, and says why when what it
 // read is not all of them.
 func (h *Hub) readSubagents() (map[string]map[string]subagentRecord, error) {
@@ -96,9 +91,6 @@ func (h *Hub) UpsertSubagent(agent, sessionID string, revision int64, a Subagent
 	}
 	if s.Agent != agent {
 		return ErrSubagentConflict
-	}
-	if err := h.completeSubagents(); err != nil {
-		return fmt.Errorf("retained subagents unavailable: %w", err)
 	}
 	old, exists := h.retained[sessionID][a.ID]
 	if exists && old.Agent != agent {

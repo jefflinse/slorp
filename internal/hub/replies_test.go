@@ -209,8 +209,8 @@ func TestWhatWaitsForASessionGoesWithTheRunThatTakesItOver(t *testing.T) {
 
 func TestASessionKeptUnreadablyIsNotTakenOver(t *testing.T) {
 	st := testdb.Open(t)
-	must(t, st.Put("session", "ses_garbled", "not a session"))
 	h := New(testdb.KB(t, st), st)
+	must(t, st.Put("session", "ses_garbled", "not a session"))
 	if err := h.OpenManaged("opencode", "ses_garbled", "job", "token", nil); err == nil {
 		t.Fatal("a session kept as something that is not one was taken over")
 	}

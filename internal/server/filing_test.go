@@ -118,3 +118,76 @@ func TestAFilingOfASessionTakenUpIsRefused(t *testing.T) {
 		t.Error("a refused role was given to a")
 	}
 }
+
+// unreadSessions keeps the hub in a store, failing every read of a session
+// while fail is set.
+type unreadSessions struct {
+	*store.Store
+	fail bool
+}
+
+func (c *unreadSessions) Get(kind, id string, v any) (bool, error) {
+	if kind == "session" && c.fail {
+		return false, errors.New("disk unreadable")
+	}
+	return c.Store.Get(kind, id, v)
+}
+
+func TestAFilingOfASessionThatCannotBeReadIsRefused(t *testing.T) {
+	st := testdb.Open(t)
+	k := testdb.KB(t, st)
+	e, err := k.Create("Widgets", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := k.Add(kb.SectionRoles, kb.Entry{Name: "Reviewer"}); err != nil {
+		t.Fatal(err)
+	}
+	role := k.Knowledge().Roles[0].ID
+	c := &unreadSessions{Store: st, fail: true}
+	h := hub.New(k, c)
+	srv := httptest.NewServer(New(h, k, integrations.NewManager(func() map[string]bool { return nil }), &asked{}, nil, nil, nil, nil, nil, nil, nil, Page(nil, "")))
+	t.Cleanup(srv.Close)
+	edits := map[string]string{"effort": `{"effort":"` + e.ID + `"}`, "role": `{"role":"` + role + `"}`}
+	file := func(path string) int {
+		t.Helper()
+		res, err := srv.Client().Post(srv.URL+"/api/sessions/a/"+path, "application/json", strings.NewReader(edits[path]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := res.Body.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return res.StatusCode
+	}
+	a := []hub.Session{{ID: "a", Agent: "claude", Cwd: "/w"}}
+	h.SetRoster("claude", a)
+	if !h.HeldOpen("a") {
+		t.Fatal("a is not held while what is kept of it cannot be read")
+	}
+	for path := range edits {
+		if code := file(path); code != 500 {
+			t.Errorf("a %s for a session that cannot be read = %d, want 500", path, code)
+		}
+	}
+	if got, _, _ := k.Resolve("a", ""); got != "" {
+		t.Errorf("a refused filing left a under %q", got)
+	}
+	if _, ok := k.RoleOf("a"); ok {
+		t.Error("a refused role was given to a")
+	}
+
+	c.fail = false
+	h.SetRoster("claude", a)
+	for path := range edits {
+		if code := file(path); code != 204 {
+			t.Errorf("a %s for a session once it can be read = %d, want 204", path, code)
+		}
+	}
+	var kept struct {
+		Agent string `json:"agent"`
+	}
+	if found, err := st.Get("session", "a", &kept); err != nil || !found {
+		t.Errorf("a filed session is kept: %v, %v; want it saved", found, err)
+	}
+}
