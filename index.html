@@ -2863,7 +2863,7 @@ function detailTabs(s) {
     ${s.lastReply ? answered(s.lastReply) : '<div class="none">No response found for this session.</div>'}
     <div class="none mono" style="margin-top:12px">${esc(rawOf(s))}</div>${earlierBody(s)}`;
   return `<div class="tabs" role="tablist">${tab('source', 'Conversation')}${subs.length ? tab('subs', `Subagents<span class="n">${subs.length}</span>`) : ''}${tab('also', `Also In ${esc(effortById(effort).name)}<span class="n">${others.count}</span>`)}
-      ${on !== 'source' ? '' : `<span class="tools">${s.lastReply ? `<button class="btn" data-act="copyReply" data-id="${s.id}" title="Copy the response as it was written">Copy</button><button class="btn" data-act="handoffOpen" data-id="${s.id}" title="Send this response to another session, wrapped in a handoff of yours">Send To…</button>` : ''}
+      ${on !== 'source' ? '' : `<span class="tools">${s.lastReply ? `<button class="btn" data-act="copyReply" data-id="${s.id}" title="Copy the response as it was written" ${replyCopying.has(s.id) ? 'disabled' : ''}>${replyCopying.has(s.id) ? 'Copying…' : 'Copy'}</button><button class="btn" data-act="handoffOpen" data-id="${s.id}" title="Send this response to another session, wrapped in a handoff of yours">Send To…</button>` : ''}
         <span class="seg" role="group" aria-label="How the response is shown"><button class="${state.sourceRaw ? '' : 'on'}" data-act="sourceRaw" data-on="0">Rendered</button><button class="${state.sourceRaw ? 'on' : ''}" data-act="sourceRaw" data-on="1">Raw</button></span></span>`}</div>
     <div class="tabbody">${on === 'also' ? others.html : on === 'subs' ? subsBody(s.id, subs, false, s.used) : source()}</div>`;
 }
@@ -4055,15 +4055,36 @@ const HANDOFF_NEW = '__new';
 /* As much of a session's last message as the service keeps. One this long may be only the end of what was said,
    and all of it is then read from the session's own record. */
 const REPLY_KEPT = 30000;
+/* All of what a session last said, read from its own record: its text, whether that is whole and, where it is
+   not, why. The text is the end that is kept wherever the record could not give the rest. */
+const wholeReply = (id, kept) => fetch(`/api/sessions/${encodeURIComponent(id)}/response`)
+  .then(async res => { if (!res.ok) throw new Error((await res.text()).trim() || res.status); return res.json(); })
+  .then(data => ({ text: data.text, whole: !!data.whole, why: data.why || '' }))
+  .catch(err => ({ text: kept, whole: false, why: err instanceof TypeError ? 'the Slorp service could not be reached' : err.message }));
 /* Reads all of what the session a handoff is from last said, and draws the message from it. Where the record
    could not give it, the message is drawn from the end that is kept and the dialog says why. */
 function readWhole(h) {
   h.reading = true; h.whole = true; h.why = '';
-  fetch(`/api/sessions/${encodeURIComponent(h.from)}/response`)
-    .then(async res => { if (!res.ok) throw new Error((await res.text()).trim() || res.status); return res.json(); })
-    .then(data => { h.said = data.text; h.whole = !!data.whole; h.why = data.why || ''; })
-    .catch(err => { h.whole = false; h.why = err instanceof TypeError ? 'the Slorp service could not be reached' : err.message; })
-    .finally(() => { h.reading = false; if (handoff === h) { h.text = handoffDraft(); render(); } });
+  wholeReply(h.from, h.said).then(read => {
+    h.said = read.text; h.whole = read.whole; h.why = read.why; h.reading = false;
+    if (handoff === h) { h.text = handoffDraft(); render(); }
+  });
+}
+/* Copies what a session last said as it was written, all of it where the service keeps only its end. */
+const replyCopying = new Set();
+async function copyReply(id) {
+  const s = live.find(x => x.id === id);
+  if (!s?.lastReply || replyCopying.has(id)) return;
+  let read = { text: s.lastReply, whole: true };
+  try {
+    if (s.lastReply.length >= REPLY_KEPT) {
+      replyCopying.add(id); render();
+      read = await wholeReply(id, s.lastReply);
+    }
+    await navigator.clipboard.writeText(read.text);
+    toast(read.whole ? 'Copied' : `Copied. It was longer than Slorp keeps and the rest could not be read (${read.why}), so it starts part-way`);
+  } catch { toast('The browser would not let Slorp copy that'); }
+  finally { if (replyCopying.delete(id)) render(); }
 }
 /* The sessions a response can be sent on to: the open ones that can be replied to, those of its own effort first. */
 function handoffTargets(from) {
@@ -4662,13 +4683,7 @@ const actions = {
   detailTab: d => { state.detailTab = d.t; },
   effortTab: d => { state.effortTab = d.t; },
   sourceRaw: d => { state.sourceRaw = d.on === '1'; },
-  copyReply: d => {
-    const text = (live.find(x => x.id === d.id) || {}).lastReply || '';
-    Promise.resolve().then(() => navigator.clipboard.writeText(text))
-      .then(() => toast(text.startsWith('…') ? 'Copied. It was longer than Slorp keeps, so it starts part-way' : 'Copied'))
-      .catch(() => toast('The browser would not let Slorp copy that'));
-    return false;
-  },
+  copyReply: d => { copyReply(d.id); return false; },
   pullFilter: d => { state.pullFilter = d.f; },
   kbSel: d => { state.kbSel = d.s; },
   kbGo: d => { state.kbSel = d.s; go('knowledge'); },

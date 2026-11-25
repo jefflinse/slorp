@@ -55,6 +55,10 @@ async function world(t, { handoffs = [] } = {}) {
   const browser = await chromium.launch({ headless: true })
   t.after(() => browser.close())
   const page = await browser.newPage({ viewport: { width: 1500, height: 900 } })
+  await page.addInitScript(() => {
+    window.copied = []
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: async text => { window.copied.push(text) } } })
+  })
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
   t.after(() => assert.deepEqual(errors, []))
@@ -192,5 +196,36 @@ test('the dialog says when the rest of a response could not be read, or the sess
   await o.dialog.getByRole('button', { name: 'Read It Again' }).click()
   await o.page.waitForFunction(whole => document.querySelector('#modal textarea')?.value === whole, o.whole)
   assert.equal(await o.dialog.getByText('Only the end of the response').count(), 0)
+  assert.equal(o.reads, 2)
+})
+
+test('Copy takes a response longer than Slorp keeps whole from the session\'s record, and says when it could not', async t => {
+  const o = await world(t)
+  const copy = o.page.getByRole('button', { name: 'Copy', exact: true }), copied = () => o.page.evaluate(() => window.copied)
+  await o.page.evaluate(() => { state.actSel = 'ses_builder'; render() })
+  await copy.click()
+  await o.toast.getByText('Copied', { exact: true }).waitFor()
+  assert.deepEqual(await copied(), [o.builder.lastReply])
+  assert.equal(o.reads, 0)
+
+  o.whole = `It starts here. ${'y'.repeat(30000)}`
+  o.builder.lastReply = 'y'.repeat(30000)
+  o.hold = true
+  await o.page.evaluate(() => refresh(true))
+  await copy.click()
+  const copying = o.page.getByRole('button', { name: 'Copying…', exact: true })
+  await copying.waitFor()
+  assert.ok(await copying.isDisabled())
+  while (!o.release) await new Promise(resolve => setTimeout(resolve, 10))
+  o.release()
+  await copy.waitFor()
+  assert.deepEqual((await copied()).slice(1), [o.whole])
+  assert.equal(await o.toast.textContent(), 'Copied')
+
+  o.hold = false
+  o.why = 'no transcript was found'
+  await copy.click()
+  await o.toast.getByText('the rest could not be read (no transcript was found), so it starts part-way').waitFor()
+  assert.deepEqual((await copied()).slice(2), [o.builder.lastReply])
   assert.equal(o.reads, 2)
 })
