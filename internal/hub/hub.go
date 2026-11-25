@@ -83,6 +83,12 @@ type Session struct {
 	ActiveAt   time.Time `json:"activeAt"`
 	LastPrompt string    `json:"lastPrompt"`
 	LastReply  string    `json:"lastReply"`
+	// Said is what its agent has said in answer to LastPrompt so far, oldest
+	// first, where its agent tells of each; LastReply is the last of them
+	// once it has answered. SaidEarlier is how many more it said before
+	// those, which are not kept.
+	Said        []string `json:"said,omitempty"`
+	SaidEarlier int      `json:"saidEarlier,omitempty"`
 	// PromptAt is when the user said LastPrompt, zero when its agent did not say.
 	PromptAt time.Time `json:"-"`
 	// Compacted is the latest compaction its agent is known to have made,
@@ -1154,6 +1160,7 @@ func (h *Hub) SetRoster(agent string, live []Session) {
 			}
 			if s.LastPrompt == "" {
 				s.LastPrompt, s.PromptAt = old.LastPrompt, old.PromptAt
+				s.Said, s.SaidEarlier = old.Said, old.SaidEarlier
 			}
 		} else if !h.restore(agent, &s) {
 			continue

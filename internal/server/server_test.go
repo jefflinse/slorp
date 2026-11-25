@@ -602,7 +602,10 @@ func TestBridgeEventsDriveSessionState(t *testing.T) {
 			t.Fatalf("event %s = %d", body, code)
 		}
 	}
-	only := func() hub.Session { return f.state().Sessions[0] }
+	only := func() hub.Session {
+		sessions := f.state().Sessions
+		return sessions[slices.IndexFunc(sessions, func(s hub.Session) bool { return s.ID == "s1" })]
+	}
 
 	event(`{"sessionId":"s1","type":"turn.start","text":"fix the bug"}`)
 	if s := only(); s.Status != hub.Working || s.LastPrompt != "fix the bug" {
@@ -613,8 +616,28 @@ func TestBridgeEventsDriveSessionState(t *testing.T) {
 		t.Errorf("a continuation with no text erased the prompt: %q", s.LastPrompt)
 	}
 	event(`{"sessionId":"s1","type":"turn.complete","text":"fixed"}`)
-	if s := only(); s.Status != hub.Idle || s.LastReply != "fixed" {
+	if s := only(); s.Status != hub.Idle || s.LastReply != "fixed" || !slices.Equal(s.Said, []string{"fixed"}) {
 		t.Errorf("after turn.complete: %+v", s)
+	}
+	event(`{"sessionId":"s1","type":"turn.complete","text":" fixed "}`)
+	if s := only(); !slices.Equal(s.Said, []string{"fixed"}) {
+		t.Errorf("the same answer told twice was kept twice: %q", s.Said)
+	}
+	event(`{"sessionId":"s1","type":"turn.start","text":"and the other one"}`)
+	if s := only(); len(s.Said) != 0 || s.LastReply != "fixed" {
+		t.Errorf("after the next turn.start: said %q, last reply %q", s.Said, s.LastReply)
+	}
+	other := func() hub.Session {
+		sessions := f.state().Sessions
+		return sessions[slices.IndexFunc(sessions, func(s hub.Session) bool { return s.ID == "ses_1" })]
+	}
+	event(`{"agent":"opencode","sessionId":"ses_1","type":"snapshot","snapshot":{"status":"working","promptAt":1,"lastPrompt":"review it","lastReply":"Reading.","said":["Looking.","  ","Reading."],"saidEarlier":3}}`)
+	if s := other(); !slices.Equal(s.Said, []string{"Looking.", "Reading."}) || s.SaidEarlier != 3 {
+		t.Errorf("after a snapshot: said %q, %d earlier", s.Said, s.SaidEarlier)
+	}
+	event(`{"agent":"opencode","sessionId":"ses_1","type":"snapshot","snapshot":{"status":"working","promptAt":1,"lastPrompt":"review it"}}`)
+	if s := other(); len(s.Said) != 0 || s.SaidEarlier != 0 {
+		t.Errorf("a snapshot that tells of nothing said kept %q, %d earlier", s.Said, s.SaidEarlier)
 	}
 
 	f.post("/api/bridge/permission", `{"sessionId":"s1","tool":"Bash","summary":"ls","input":"ls","canAnswer":true}`)

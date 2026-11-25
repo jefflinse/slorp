@@ -333,7 +333,23 @@ h1 .pen:hover { color: var(--accent); background: var(--sel); }
 .said .tx { margin-top: 3px; color: var(--ink2); font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 .said.open .tx { display: block; }
 .said .link { margin-top: 4px; font-size: 12px; }
+.said.you { margin-bottom: 16px; padding: 10px 14px 11px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 4px 10px 10px 4px; background: var(--sel); }
+.said.you .label { color: var(--accent); }
+.said.you .tx { color: var(--ink); font-size: 14px; }
+.fold { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+.fold .n { font-weight: 500; letter-spacing: 0; }
+.fold:hover { color: var(--accent); }
 .tabbody { padding-top: 14px; }
+.out + .out { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+.atwork { position: relative; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; max-width: 760px; margin-top: 16px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); overflow: hidden; font-size: 13.5px; }
+.atwork .t { font-weight: 600; }
+.atwork .st { color: var(--ink3); overflow-wrap: anywhere; }
+.atwork .dot { margin: 0; }
+.atwork .wave { display: inline-flex; align-items: center; gap: 3px; height: 16px; }
+.atwork .wave i { width: 3px; height: 100%; border-radius: 2px; background: var(--k-local); transform: scaleY(0.6); animation: wave 1.2s ease-in-out infinite; animation-delay: calc(var(--at, 0ms) + var(--i) * 120ms); }
+.atwork:not(.held)::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--k-local), transparent) no-repeat; background-size: 40% 100%; animation: sweep 1.6s ease-in-out infinite; animation-delay: var(--at, 0ms); }
+@keyframes wave { 0%, 100% { transform: scaleY(0.3); } 50% { transform: scaleY(1); } }
+@keyframes sweep { from { background-position: -70% 0; } to { background-position: 170% 0; } }
 /* A conversation's earlier exchanges: a card each, which opens onto all that was said in it */
 .earlier { margin-top: 20px; }
 .earlier > .label { margin-bottom: 8px; }
@@ -2802,9 +2818,23 @@ function aboutSession(s) {
 
 /* What the user said in an exchange, cut short until asked for in full, and what the agent answered, rendered
    or as it was written. */
-const saidBlock = (key, text) => `<div class="said ${state.expanded['said:' + key] ? 'open' : ''}"><div class="label">You Said</div><div class="tx">${esc(text)}</div>
+const saidBlock = (key, text) => `<div class="said you ${state.expanded['said:' + key] ? 'open' : ''}"><div class="label">You Said</div><div class="tx">${esc(text)}</div>
     <button class="link" data-act="expand" data-id="said:${esc(key)}" hidden>${state.expanded['said:' + key] ? 'Show Less' : 'Show All of It'}</button></div>`;
 const answered = text => state.sourceRaw ? `<div class="rawblock"><div class="tx">${esc(text)}</div></div>` : md(text);
+/* Whether a session is part-way through answering what the user last said. */
+const inTurn = s => s.status === 'working' || s.status === 'waiting';
+/* What a session's agent has said in answer to what the user last said, oldest first. While it is still at
+   work on that, something it said before is an answer to something earlier and is left out. */
+const saidOf = s => s.said?.length ? s.said : inTurn(s) ? [] : s.lastReply ? [s.lastReply] : [];
+/* Says under what a session has said so far that more is coming, or that it has stopped for the user. The
+   animation is begun where it would have got to, so drawing the page again does not start it over. */
+function atWork(s) {
+  if (s.status === 'waiting') return `<div class="atwork held" role="status"><span class="dot waiting"></span><span class="t">Paused</span><span class="st">It is waiting for your answer below.</span></div>`;
+  const going = (s.subagents || []).filter(subRunning).length;
+  const more = [s.waitingFor, going ? `${plural(going, 'subagent')} running` : ''].filter(Boolean).join(' · ');
+  return `<div class="atwork" role="status" style="--at:-${Date.now() % 4800}ms"><span class="wave" aria-hidden="true">${[0, 1, 2, 3, 4].map(i => `<i style="--i:${i}"></i>`).join('')}</span>
+    <span class="t">Working</span>${more ? `<span class="st">${esc(more)}</span>` : ''}</div>`;
+}
 
 /* What was said in a session before its latest exchange, read from its agent's own record only when asked
    for, EARLIER_STEP exchanges at a time. By session: those read so far, the latest first, when the latest of
@@ -2859,11 +2889,15 @@ function detailTabs(s) {
   const effort = s.effort || 'unsorted', others = alsoRows(effort, s.id), subs = s.subagents || [];
   const on = ['also'].concat(subs.length ? 'subs' : []).includes(state.detailTab) ? state.detailTab : 'source';
   const tab = (key, name) => `<button class="label ${on === key ? 'on' : ''}" data-act="detailTab" data-t="${key}">${name}</button>`;
+  const outs = saidOf(s), turn = inTurn(s), fold = `outs:${s.id}:${lastSaid(s)}`, before = turn ? 0 : outs.length - 1, all = turn || !!state.expanded[fold];
   const source = () => `${s.lastPrompt ? saidBlock(s.id, s.lastPrompt) : ''}
-    ${s.lastReply ? answered(s.lastReply) : '<div class="none">No response found for this session.</div>'}
+    ${before > 0 ? `<button class="label fold" data-act="expand" data-id="${esc(fold)}" aria-expanded="${all}" title="What it said on the way to its answer"><span class="chev ${all ? '' : 'shut'}" aria-hidden="true">▼</span>Earlier in This Response<span class="n">${before}</span></button>` : ''}
+    ${all && s.saidEarlier && s.said?.length ? `<div class="none">This response began with ${plural(s.saidEarlier, 'earlier message')} that ${s.saidEarlier === 1 ? 'is' : 'are'} not kept here.</div>` : ''}
+    ${(all ? outs : outs.slice(-1)).map(text => `<div class="out">${answered(text)}</div>`).join('')}
+    ${turn ? atWork(s) : outs.length ? '' : '<div class="none">No response found for this session.</div>'}
     <div class="none mono" style="margin-top:12px">${esc(rawOf(s))}</div>${earlierBody(s)}`;
   return `<div class="tabs" role="tablist">${tab('source', 'Conversation')}${subs.length ? tab('subs', `Subagents<span class="n">${subs.length}</span>`) : ''}${tab('also', `Also In ${esc(effortById(effort).name)}<span class="n">${others.count}</span>`)}
-      ${on !== 'source' ? '' : `<span class="tools">${s.lastReply ? `<button class="btn" data-act="copyReply" data-id="${s.id}" title="Copy the response as it was written" ${replyCopying.has(s.id) ? 'disabled' : ''}>${replyCopying.has(s.id) ? 'Copying…' : 'Copy'}</button><button class="btn" data-act="handoffOpen" data-id="${s.id}" title="Send this response to another session, wrapped in a handoff of yours">Send To…</button>` : ''}
+      ${on !== 'source' ? '' : `<span class="tools">${s.lastReply && outs.length ? `<button class="btn" data-act="copyReply" data-id="${s.id}" title="Copy the ${outs.length > 1 ? 'last of the response' : 'response'} as it was written" ${replyCopying.has(s.id) ? 'disabled' : ''}>${replyCopying.has(s.id) ? 'Copying…' : 'Copy'}</button><button class="btn" data-act="handoffOpen" data-id="${s.id}" title="Send ${outs.length > 1 ? 'the last of this response' : 'this response'} to another session, wrapped in a handoff of yours">Send To…</button>` : ''}
         <span class="seg" role="group" aria-label="How the response is shown"><button class="${state.sourceRaw ? '' : 'on'}" data-act="sourceRaw" data-on="0">Rendered</button><button class="${state.sourceRaw ? 'on' : ''}" data-act="sourceRaw" data-on="1">Raw</button></span></span>`}</div>
     <div class="tabbody">${on === 'also' ? others.html : on === 'subs' ? subsBody(s.id, subs, false, s.used) : source()}</div>`;
 }

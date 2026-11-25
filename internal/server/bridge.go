@@ -97,6 +97,11 @@ type bridgeSnapshot struct {
 	Used          *hub.Tokens     `json:"used"`
 	CostUSD       *float64        `json:"costUsd"`
 	Compacted     *hub.Compaction `json:"compacted"`
+	// Said is what the agent has said in answer to LastPrompt, oldest first,
+	// and SaidEarlier how many more it said before those. A plugin that
+	// does not tell of them leaves both out.
+	Said        []string `json:"said"`
+	SaidEarlier int      `json:"saidEarlier"`
 }
 
 func (b *bridgeSnapshot) apply(s *hub.Session) {
@@ -119,6 +124,9 @@ func (b *bridgeSnapshot) apply(s *hub.Session) {
 		s.PromptAt, s.LastPrompt = time.UnixMilli(b.PromptAt), first(b.LastPrompt, 8000)
 	}
 	s.LastReply = claude.Tail(b.LastReply, claude.ReplyLimit)
+	var dropped int
+	s.Said, dropped = claude.Kept(b.Said)
+	s.SaidEarlier = max(0, b.SaidEarlier) + dropped
 	s.Model, s.Reasoning = first(b.Model, 200), first(b.Reasoning, nameLimit)
 	s.ContextTokens, s.ContextWindow = max(0, b.ContextTokens), max(0, b.ContextWindow)
 	if b.Used != nil {

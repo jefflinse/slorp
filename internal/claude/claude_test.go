@@ -3,9 +3,11 @@ package claude
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -849,5 +851,70 @@ func TestReplyIsReadWhole(t *testing.T) {
 		if _, err := a.Reply(id, kept); err == nil {
 			t.Errorf("Reply(%q) read a transcript there is none of", id)
 		}
+	}
+}
+
+func TestKept(t *testing.T) {
+	long := strings.Repeat("y", ReplyLimit+5)
+	half := strings.Repeat("h", ReplyLimit/2)
+	var many []string
+	for i := range SaidLimit + 3 {
+		many = append(many, fmt.Sprint("note ", i))
+	}
+	for name, c := range map[string]struct {
+		said    []string
+		want    []string
+		dropped int
+	}{
+		"nothing":                {nil, nil, 0},
+		"all of a few":           {[]string{" One. ", "", "Two."}, []string{"One.", "Two."}, 0},
+		"the last, however long": {[]string{"One.", long}, []string{"One.", Tail(long, ReplyLimit)}, 0},
+		"as many as are kept":    {many, many[3:], 3},
+		"as much as is kept":     {[]string{"First.", half, half, "x", "Last."}, []string{half, "x", "Last."}, 2},
+	} {
+		got, dropped := Kept(c.said)
+		if !slices.Equal(got, c.want) || dropped != c.dropped {
+			t.Errorf("%s: kept %d with %d dropped, want %d with %d", name, len(got), dropped, len(c.want), c.dropped)
+		}
+	}
+}
+
+func TestTailKeepsWhatWasSaidInAnswerToThePrompt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	side := assistant(text("a subagent talking"))
+	side["isSidechain"] = true
+	appendTo(t, path, strings.Join([]string{
+		line(t, user("build the thing")),
+		line(t, assistant(text("On it."))),
+		line(t, user("now test it")),
+		line(t, assistant(map[string]any{"type": "thinking", "thinking": "hm"})),
+		line(t, assistant(text("Running the tests."))),
+		line(t, assistant(map[string]any{"type": "tool_use", "name": "Bash"})),
+		line(t, user([]map[string]any{{"type": "tool_result", "content": "ok"}})),
+		line(t, side),
+	}, ""))
+	tl := &tail{path: path}
+	tl.read()
+	if !slices.Equal(tl.said, []string{"Running the tests."}) || tl.lastReply != "Running the tests." {
+		t.Fatalf("said %q, last reply %q; want only what was said since the prompt", tl.said, tl.lastReply)
+	}
+	appendTo(t, path, line(t, assistant(text("They pass."))))
+	tl.read()
+	if !slices.Equal(tl.said, []string{"Running the tests.", "They pass."}) || tl.saidEarlier != 0 {
+		t.Errorf("said %q with %d earlier; want what was said since joined to it", tl.said, tl.saidEarlier)
+	}
+	var more []string
+	for i := range SaidLimit {
+		more = append(more, line(t, assistant(text(fmt.Sprint("step ", i)))))
+	}
+	appendTo(t, path, strings.Join(more, ""))
+	tl.read()
+	if len(tl.said) != SaidLimit || tl.saidEarlier != 2 || tl.said[0] != "step 0" {
+		t.Errorf("%d said from %q with %d earlier; want the latest %d and the 2 before them counted", len(tl.said), tl.said[0], tl.saidEarlier, SaidLimit)
+	}
+	appendTo(t, path, line(t, user("ship it")))
+	tl.read()
+	if len(tl.said) != 0 || tl.saidEarlier != 0 {
+		t.Errorf("said %q with %d earlier after a new prompt", tl.said, tl.saidEarlier)
 	}
 }

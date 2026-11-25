@@ -35,6 +35,7 @@ The [OpenCode plugin](integrations/opencode/README.md) is bundled in the Slorp e
 ## Features
 
 - **Every session on one page.** Each open Claude Code and OpenCode session with what it is doing, what it last said, its model, how full its context is, and what it has used.
+- **A turn as it happens.** A session's page shows what you last said to it as soon as it is taken up, then each thing its agent says on the way to its answer, and that it is still working until the answer is in. What it said along the way stays above the answer.
 - **Attention.** The sessions that need you, whether for a question, a permission prompt or finished work to look at, each summarized by a local model.
 - **Answer from the page.** Reply to a session, or allow or deny a permission prompt, without finding its terminal.
 - **Send to another session.** **Send To**, beside a session's latest response, sends it on to another open session as your next message there, or to a new session as its first prompt. A handoff, written under **Settings → Handoffs**, wraps it in words of yours, with `{{response}}` where what the session said goes; `{{prompt}}`, `{{session}}`, `{{directory}}` and `{{branch}}` are filled in the same way. A response longer than Slorp keeps is read in full from the session's own record. The message is shown first and can be changed, and nothing goes until you press Send.

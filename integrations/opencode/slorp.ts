@@ -15,6 +15,10 @@ const REQUEST_MS = 5000
 const DISCOVERY_CONCURRENCY = 4
 const CONTROL_LIMIT = 1024
 const SUMMARY_LIMIT = 400
+/** How much of what a session last said is passed on, in characters. */
+const REPLY_LIMIT = 30000
+/** How many of the things said in answer to one prompt are passed on. */
+const SAID_LIMIT = 40
 /** Inputs longer than this are too much to judge in Slorp; the terminal asks. */
 const INPUT_LIMIT = 8000
 /** How long Slorp may answer a prompt before only the terminal can. */
@@ -55,6 +59,8 @@ type Known = {
   promptAt?: number
   promptID?: string
   replyID?: string
+  /** What has been said in answer to the prompt, by message, oldest first. */
+  said?: Map<string, string>
   contextWindow?: number
   contextTokens?: number
   contextClearedAt?: number
@@ -132,6 +138,21 @@ function textOf(parts: readonly Part[]) {
     .filter(p => p.type === 'text' && !p.synthetic && !p.ignored && p.text?.trim())
     .map(p => p.text!.trim())
     .join('\n\n')
+}
+
+/**
+ * The latest of what was said in answer to one prompt, oldest first: at most
+ * SAID_LIMIT of them and, the last aside, at most REPLY_LIMIT characters of
+ * them. saidEarlier is how many earlier ones are left out.
+ */
+function kept(said: readonly string[]) {
+  let from = said.length - 1
+  for (let room = REPLY_LIMIT; from > 0 && said.length - from < SAID_LIMIT; from--) {
+    room -= Math.min(said[from - 1]?.length ?? 0, REPLY_LIMIT)
+    if (room < 0) break
+  }
+  from = Math.max(from, 0)
+  return { said: said.slice(from).map(text => text.slice(-REPLY_LIMIT)), saidEarlier: from }
 }
 
 function runes(text: string, limit: number) {
@@ -830,6 +851,7 @@ export async function Slorp(ctx: Plugin.Context, options = ctx.options) {
         }
         if (s.promptID === promptBefore) {
           s.promptID = undefined; s.promptAt = undefined; s.prompt = ''; s.reply = ''; s.replyID = undefined
+          s.said = undefined
         }
       }
       const messages = history(id, records).sort((a, b) => (a.info.time?.created ?? 0) - (b.info.time?.created ?? 0))
@@ -859,11 +881,13 @@ export async function Slorp(ctx: Plugin.Context, options = ctx.options) {
               s.selectionRevision = ++selectionRevision
             }
             s.reply = ''
+            s.said = undefined
           }
         }
         if (info.role === 'assistant' && !info.summary && at >= (s.promptAt ?? 0) && textOf(m.parts)) {
           s.reply = textOf(m.parts)
           s.replyID = info.id
+          if (info.id) (s.said ??= new Map()).set(info.id, s.reply)
         }
       }
       s.hydrated = true
@@ -876,7 +900,7 @@ export async function Slorp(ctx: Plugin.Context, options = ctx.options) {
     return {
       status: s.status ?? (s.isBusy ? 'working' : 'idle'), waitingFor: s.waitingFor ?? '',
       startedAt: s.startedAt, activeAt: s.activeAt, promptAt: s.promptAt,
-      lastPrompt: s.prompt.slice(0, 8000), lastReply: s.reply.slice(-30000),
+      lastPrompt: s.prompt.slice(0, 8000), lastReply: s.reply.slice(-REPLY_LIMIT), ...kept([...(s.said?.values() ?? [])]),
       model: s.model ? `${s.model.providerID}/${s.model.modelID}` : '', reasoning: s.variant ?? '',
       contextWindow: s.contextWindow ?? 0, contextTokens: s.contextTokens ?? 0,
       ...(s.hydrated && s.treeReady && children.every(child => child.hydrated) ? totals([s, ...children]) : {}), compacted: s.compacted,
@@ -909,6 +933,7 @@ export async function Slorp(ctx: Plugin.Context, options = ctx.options) {
     if (!openRoot(id) || s.isBusy || s.promptAt !== at) return
     s.reply = answer.text
     s.replyID = answer.id
+    if (answer.id && answer.text) (s.said ??= new Map()).set(answer.id, answer.text)
     s.needsAnswer = false
   }
 
@@ -1213,6 +1238,7 @@ export async function Slorp(ctx: Plugin.Context, options = ctx.options) {
       s.selectionRevision = ++selectionRevision
       s.activeAt = s.promptAt
       s.reply = ''
+      s.said = undefined
       s.needsAnswer = false
       report(id, 'turn.start', s.prompt, s.promptAt)
     },
@@ -1482,7 +1508,7 @@ export async function Slorp(ctx: Plugin.Context, options = ctx.options) {
           s.tasks?.clear()
           s.notifications?.clear()
           s.prompt = ''; s.reply = ''; s.promptAt = undefined
-          s.promptID = undefined; s.replyID = undefined
+          s.promptID = undefined; s.replyID = undefined; s.said = undefined
           s.contextTokens = 0; s.measuredAt = undefined; s.contextClearedAt = undefined
           s.compacted = undefined; s.compacting = undefined
           await hydrate(sessionID, s, undefined, true)

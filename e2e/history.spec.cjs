@@ -158,3 +158,65 @@ test('without a local model the history action explains why it is disabled', asy
   assert.match(await o.button().first().getAttribute('title'), /No local model/)
   assert.equal(o.calls(), 0)
 })
+
+test('a session at work shows what was just said to it, each thing it has said since, and that more is coming; an idle one folds all but its answer', async t => {
+  const o = await world(t), page = o.page
+  const body = page.locator('.tabbody'), outs = body.locator('.out'), working = body.locator('.atwork')
+  const show = async more => { Object.assign(o.session, more); await page.evaluate(() => refresh(true)) }
+  const tools = name => page.locator('.tabs .tools').getByRole('button', { name, exact: true })
+  const fold = body.getByRole('button', { name: /^Earlier in This Response/ })
+
+  await show({ lastPrompt: 'Fix the cache', lastReply: 'The cache is fixed.', said: ['Reading the cache code.', 'The cache is fixed.'] })
+  await fold.waitFor()
+  assert.match(await fold.innerText(), /1$/)
+  assert.equal(await fold.getAttribute('aria-expanded'), 'false')
+  assert.deepEqual(await outs.allInnerTexts(), ['The cache is fixed.'])
+  await fold.click()
+  await outs.nth(1).waitFor()
+  assert.deepEqual(await outs.allInnerTexts(), ['Reading the cache code.', 'The cache is fixed.'])
+  assert.equal(await fold.getAttribute('aria-expanded'), 'true')
+  await fold.click()
+  await page.waitForFunction(() => document.querySelectorAll('.tabbody .out').length === 1)
+  assert.equal(await working.count(), 0)
+  assert.equal(await tools('Copy').count(), 1)
+
+  /* What it said to the prompt before is not shown under the new one. */
+  await show({ status: 'working', lastPrompt: 'Now add a test', said: undefined })
+  await working.waitFor()
+  assert.match(await body.locator('.said').innerText(), /Now add a test/)
+  assert.equal(await outs.count(), 0)
+  assert.equal(await fold.count(), 0)
+  assert.equal(await body.getByText('No response found').count(), 0)
+  assert.match(await working.innerText(), /^Working$/)
+  assert.equal(await tools('Copy').count(), 0)
+  assert.equal(await tools('Send To…').count(), 0)
+
+  await show({ lastReply: 'Writing the test.', said: ['Looking at the existing tests.', 'Writing the **test**.'], saidEarlier: 2,
+    subagents: [{ id: 'a1', type: 'Explore', description: 'Find the tests', status: 'running' }] })
+  await outs.nth(1).waitFor()
+  assert.deepEqual(await outs.allInnerTexts(), ['Looking at the existing tests.', 'Writing the test.'])
+  assert.equal(await outs.nth(1).locator('b').innerText(), 'test')
+  await body.getByText('This response began with two earlier messages that are not kept here.').waitFor()
+  assert.match(await working.innerText(), /Working\s+one subagent running/)
+  assert.ok(await page.evaluate(() => document.querySelector('.atwork').compareDocumentPosition([...document.querySelectorAll('.tabbody .out')].at(-1)) & Node.DOCUMENT_POSITION_PRECEDING))
+
+  await show({ status: 'waiting' })
+  await body.getByText('It is waiting for your answer below.').waitFor()
+  assert.equal(await working.locator('.wave').count(), 0)
+
+  await show({ status: 'idle', lastReply: 'The test is in.', said: ['Looking at the existing tests.', 'Writing the test.', 'The test is in.'], subagents: [] })
+  await fold.waitFor()
+  assert.match(await fold.innerText(), /2$/)
+  assert.deepEqual(await outs.allInnerTexts(), ['The test is in.'])
+  assert.equal(await body.getByText('not kept here').count(), 0)
+  await fold.click()
+  await body.getByText('This response began with two earlier messages that are not kept here.').waitFor()
+  assert.equal(await outs.count(), 3)
+  assert.equal(await working.count(), 0)
+  assert.equal(await tools('Copy').count(), 1)
+
+  /* A session whose agent tells only of the last thing it said shows that, once it has stopped. */
+  await show({ said: undefined })
+  await page.waitForFunction(() => document.querySelectorAll('.tabbody .out').length === 1)
+  assert.deepEqual(await outs.allInnerTexts(), ['The test is in.'])
+})

@@ -16,9 +16,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jefflinse/slorp/internal/hub"
 )
@@ -31,6 +33,9 @@ const (
 
 	// ReplyLimit is how much of a session's last message is kept, in runes.
 	ReplyLimit = 30000
+	// SaidLimit is how many of the things an agent said in answer to one
+	// prompt are kept.
+	SaidLimit = 40
 
 	maxFirstRead = 64 << 20
 	// originRead is how much of a transcript is read for where it began.
@@ -148,6 +153,7 @@ func (a *Adapter) poll(ctx context.Context) error {
 		if t := a.tail(r.SessionID); t != nil {
 			t.read()
 			s.Title, s.Branch, s.LastPrompt, s.LastReply, s.PromptAt, s.Compacted = t.title, t.branch, t.lastPrompt, t.lastReply, t.promptAt, t.compacted
+			s.Said, s.SaidEarlier = slices.Clone(t.said), t.saidEarlier
 			s.Model, s.Reasoning, s.ContextTokens, s.Used, s.Named = t.model, t.reasoning, t.contextTokens, t.used, t.named
 			if !t.modTime.IsZero() {
 				s.ActiveAt = t.modTime
@@ -254,6 +260,10 @@ type tail struct {
 	modTime time.Time
 
 	title, branch, lastPrompt, lastReply string
+	// said is what the agent has said since lastPrompt, as Kept keeps it,
+	// and saidEarlier how many more it said before those.
+	said        []string
+	saidEarlier int
 	// origin is the session the transcript's first entry was written by,
 	// which is another session when this one continues it.
 	origin string
@@ -395,10 +405,14 @@ func (t *tail) apply(line []byte) {
 		if text := e.said(); text != "" {
 			t.lastPrompt = head(text, promptLimit)
 			t.promptAt, _ = time.Parse(time.RFC3339, e.Timestamp)
+			t.said, t.saidEarlier = nil, 0
 		}
 	case "assistant":
 		if text := assistantText(e.Message.Content); text != "" {
 			t.lastReply = Tail(text, ReplyLimit)
+			var dropped int
+			t.said, dropped = Kept(append(t.said, text))
+			t.saidEarlier += dropped
 		}
 		// A notice the harness wrote in the model's place reports no tokens.
 		if u := e.Message.Usage; u.Input+u.CacheWrite+u.CacheRead > 0 {
@@ -583,6 +597,26 @@ func head(s string, n int) string {
 		return string(r)
 	}
 	return string(r[:n]) + "…"
+}
+
+// Kept returns the latest of what an agent said in answer to one prompt,
+// oldest first and each cut as Tail cuts a reply: at most SaidLimit of them
+// and, the last aside, at most ReplyLimit runes of them. dropped is how many
+// earlier ones are left out; one that says nothing is neither.
+func Kept(said []string) (kept []string, dropped int) {
+	var all []string
+	for _, text := range said {
+		if text = Tail(text, ReplyLimit); text != "" {
+			all = append(all, text)
+		}
+	}
+	from, room := len(all)-1, ReplyLimit
+	for ; from > 0 && len(all)-from < SaidLimit; from-- {
+		if room -= utf8.RuneCountInString(all[from-1]); room < 0 {
+			break
+		}
+	}
+	return slices.Clone(all[max(from, 0):]), max(from, 0)
 }
 
 // Tail returns the last n runes of s, marked when it was cut.

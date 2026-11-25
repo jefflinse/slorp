@@ -183,6 +183,7 @@ test('the dialog says when the rest of a response could not be read, or the sess
   await o.dialog.getByRole('button', { name: 'Cancel' }).click()
 
   o.builder.lastReply = `…${'y'.repeat(30000)}`
+  o.builder.said = [o.builder.lastReply]
   o.builder.status = 'working'
   o.why = 'no transcript was found'
   await o.page.evaluate(() => refresh(true))

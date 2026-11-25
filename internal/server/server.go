@@ -1291,6 +1291,7 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 				s.Status, s.WaitingFor, s.Pending, s.ActiveAt = hub.Working, "", nil, now
 				if in.Text != "" {
 					s.LastPrompt, s.PromptAt = in.Text, now
+					s.Said, s.SaidEarlier = nil, 0
 					if in.At > 0 {
 						s.PromptAt = time.UnixMilli(in.At)
 					}
@@ -1299,6 +1300,11 @@ func New(h *hub.Hub, k *kb.Store, m *integrations.Manager, feeds Feeds, history 
 				s.Status, s.WaitingFor, s.Pending, s.ActiveAt = hub.Idle, "", nil, now
 				if in.Text != "" {
 					s.LastReply = claude.Tail(in.Text, claude.ReplyLimit)
+					if len(s.Said) == 0 || s.Said[len(s.Said)-1] != s.LastReply {
+						var dropped int
+						s.Said, dropped = claude.Kept(append(slices.Clone(s.Said), s.LastReply))
+						s.SaidEarlier += dropped
+					}
 				}
 			case "tool.done":
 				if s.Pending != nil {

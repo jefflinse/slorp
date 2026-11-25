@@ -1850,3 +1850,21 @@ func TestBridgeSaysHowSubagentsStand(t *testing.T) {
 		t.Errorf("subagents = %+v with the bridge gone quiet, want nothing of what it last said", got)
 	}
 }
+
+func TestRosterKeepsWhatWasSaidOnlyWithThePromptItAnswers(t *testing.T) {
+	h, _, _ := newHub(t)
+	const agent = "claude"
+	said := func() ([]string, int) {
+		s := h.Sessions()[0]
+		return s.Said, s.SaidEarlier
+	}
+	h.SetRoster(agent, []Session{{ID: "s", Agent: agent, Status: Working, LastPrompt: "build it", Said: []string{"On it.", "Half way."}, SaidEarlier: 2}})
+	h.SetRoster(agent, []Session{{ID: "s", Agent: agent, Status: Working}})
+	if got, earlier := said(); !slices.Equal(got, []string{"On it.", "Half way."}) || earlier != 2 {
+		t.Errorf("a roster with no prompt of its own left %q with %d earlier", got, earlier)
+	}
+	h.SetRoster(agent, []Session{{ID: "s", Agent: agent, Status: Working, LastPrompt: "now test it"}})
+	if got, earlier := said(); len(got) != 0 || earlier != 0 {
+		t.Errorf("a new prompt kept %q with %d earlier, said in answer to the one before", got, earlier)
+	}
+}
