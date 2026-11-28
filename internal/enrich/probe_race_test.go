@@ -72,7 +72,7 @@ func TestAProbeFinishesWithTheServerItBeganWith(t *testing.T) {
 	}
 	b := hub.ModelSettings{URL: serving(t, "b"), Name: "b"}
 	choose(hub.ModelSettings{URL: a.URL, Name: "a"})
-	e := &Enricher{Hub: h, Resolve: Startup{}.Config, failed: map[string]time.Time{}}
+	e := &Enricher{Hub: h, Resolve: Startup{}.Config}
 	e.step(context.Background())
 
 	armed.Store(true)
@@ -112,7 +112,7 @@ func TestAProbeUsesOneServerAndItsModelWhileTheWorkerChangesThem(t *testing.T) {
 		}
 	}
 	choose(pairs[0])
-	e := &Enricher{Hub: h, Resolve: Startup{}.Config, failed: map[string]time.Time{}}
+	e := &Enricher{Hub: h, Resolve: Startup{}.Config}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
