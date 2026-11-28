@@ -1,6 +1,6 @@
 # slorp - organize your slop
 
-Slorp helps make sense of the dozens of agent sessions running on your machine.
+Slorp helps make sense of the dozens of agent sessions running on your machine. Try the demo at [slorp.dev](https://slorp.dev).
 
 ![Slorp's Attention view: the sessions that need you on the left, one of them open with its question, suggested replies and timeline](docs/slorp-screenshot.png)
 
